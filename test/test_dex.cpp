@@ -45,14 +45,14 @@ TEST(dex, los_nombres_traducidos_tambien_son_ascii) {
   }
 }
 
-// the info card header is char[26] with "%s%s Lv.%u": no name in any language
-// may overflow it (the name would be cut off on screen)
+// the main screen header is char[28] with "%s%s" (shiny mark + name): no name
+// in any language may overflow it (the name would be cut off on screen)
 TEST(dex, ningun_nombre_desborda_la_cabecera) {
-  char head[26];
+  char head[28];
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     gLang = (Lang)lang;
     for (int d = 1; d <= N; d++) {
-      int need = snprintf(head, sizeof(head), T(S_NAME_FMT), "*", dexName(d), 255);
+      int need = snprintf(head, sizeof(head), "%s%s", "*", dexName(d));
       CHECK_MSG(need >= 0 && need < (int)sizeof(head),
                 std::string("cabecera cortada: ") + dexName(d));
     }

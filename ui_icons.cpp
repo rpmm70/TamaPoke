@@ -125,6 +125,23 @@ void drawPencilIcon(Arduino_GFX *canvas, int16_t left, int16_t top, int16_t size
 }
 #pragma endregion
 
+#pragma region Hamburger icon
+void drawHamburgerIcon(Arduino_GFX *canvas, int16_t left, int16_t top, int16_t width, int16_t height, uint16_t color) {
+  #pragma region Bar geometry
+  // three bars, the two gaps share what is left of the height
+  int16_t barThickness = strokeThicknessForExtent(height, 5);
+  int16_t barSpacing = (height - barThickness) / 2;  // distance between the tops of neighboring bars
+  int16_t cornerRadius = barThickness / 2;
+  #pragma endregion
+
+  #pragma region Draw the three bars
+  for (int16_t barIndex = 0; barIndex < 3; barIndex++) {
+    canvas->fillRoundRect(left, top + barIndex * barSpacing, width, barThickness, cornerRadius, color);
+  }
+  #pragma endregion
+}
+#pragma endregion
+
 #pragma region Page arrow
 void drawPageArrow(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int16_t size, int8_t direction, uint16_t color) {
   int16_t halfSize = size / 2;

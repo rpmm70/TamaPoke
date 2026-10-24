@@ -48,8 +48,29 @@
   #define HDR_MSG_Y 90
   #define BAT_X (CX - 14)
   #define BAT_Y 12
-  #define STREAK_X 26
-  #define STREAK_Y 16
+  //#region Main screen header: hamburger (top left), clock (top right), streak badge under the clock, level row
+  // Everything stays inside the bezel circle (r 233): the farthest corners, the
+  // hamburger's top-left (68, 96) and the streak's top-right (398, 96), are 214 px from the center.
+  // The streak badge is right-justified on STREAK_RIGHT, mirroring the hamburger.
+  #define STREAK_RIGHT 398
+  #define STREAK_Y 96
+  #define HAMBURGER_X 68
+  #define HAMBURGER_Y 96
+  #define HAMBURGER_W 30
+  #define HAMBURGER_H 20
+  #define HAMBURGER_HIT_R 32
+  #define HDR_NAME_MAX_W (LCD_WIDTH - 80)
+  // clock: digits at size 3 (y 26..50, just above the name), AM/PM at size 2;
+  // its top-right corner (330, 26) is 229 px from the center
+  #define HDR_TIME_RIGHT 330
+  #define HDR_TIME_Y 26
+  #define HDR_TIME_SIZE 3
+  #define HDR_TIME_MERIDIEM_GAP 4
+  #define HDR_LVL_BAR_W 120
+  #define HDR_LVL_BAR_H 12
+  #define HDR_LVL_GAP 10
+  #define HDR_LVL_TEXT_SIZE 1  // "Lv.N" next to the level bar
+  //#endregion
   // starter choice
   #define STARTER_TITLE_Y 68
   #define STARTER_ROW_X 70
@@ -110,12 +131,13 @@
   #define SETTINGS_TITLE_Y 44
   #define SETTINGS_TITLE_MAX_W 260
   //#endregion
-  //#region Settings menu: three rows (y 126..352, inside the circle) and the version line
+  //#region Settings menu: four rows (y 126..380, inside the circle) and the version line
+  // Row 0 starts below the close button's hit circle (ends at y 122).
   #define SETTINGS_MENU_ROW_X 73
   #define SETTINGS_MENU_ROW_W 320
   #define SETTINGS_MENU_ROW_Y 126
-  #define SETTINGS_MENU_ROW_H 66
-  #define SETTINGS_MENU_ROW_GAP 14
+  #define SETTINGS_MENU_ROW_H 56
+  #define SETTINGS_MENU_ROW_GAP 10
   #define SETTINGS_MENU_ROW_R 14
   #define SETTINGS_MENU_ARROW_INSET 22
   #define SETTINGS_MENU_ARROW_SIZE 16
@@ -158,15 +180,14 @@
   #define CLK_GLYPH_DX 17
   #define CLK_GLYPH_DY 15
   #define CLK_LBL_Y 256
-  #define CLK_HLBL_X 120
-  #define CLK_MLBL_X 276
-  //#region Time setting: 12h/24h switch (left) and AM/PM toggle (right), two segments each
+  #define CLK_PAIR_W (CLK_HP_X + CLK_BTN - CLK_HM_X)  // one -/+ pair, edge to edge (HOUR/MIN center under it)
+  //#region Time setting: 12h/24h toggle under the hour pair, AM/PM toggle under the minute pair
   #define CLK_MODE_Y 290
   #define CLK_MODE_H 44
   #define CLK_MODE_R 12
-  #define CLK_MODE_SEG_W 80
-  #define CLK_FORMAT_X 63
-  #define CLK_AMPM_X 243
+  #define CLK_MODE_W CLK_PAIR_W
+  #define CLK_FORMAT_X CLK_HM_X
+  #define CLK_AMPM_X CLK_MM_X
   //#endregion
   #define CLK_OK_X 133
   #define CLK_OK_Y 352
@@ -210,16 +231,22 @@
   #define HDR_NAME_HIT_PAD 12
   //#endregion
   //#region Info card page 0: portrait column (left) and five stat rows (right)
-  // Portrait box x 56..196, y 140..344: clear of the left arrow hit box (x < 56)
-  // and its corners at <= 209 px from the center, inside the 233 px bezel.
-  #define CARD_PROFILE_PORTRAIT_X 56
-  #define CARD_PROFILE_PORTRAIT_Y 140
-  #define CARD_PROFILE_PORTRAIT_W 140
-  #define CARD_PROFILE_PORTRAIT_H 204
+  // Portrait box x 50..194, y 130..320, nudged 9 px left of the centre (x 131) of the
+  // free space between the left arrow hit box (x < 56) and the stat rows (x >= 206);
+  // its top-left corner is 210 px from the center, inside the 233 px bezel.
+  #define CARD_PROFILE_PORTRAIT_X 50
+  #define CARD_PROFILE_PORTRAIT_Y 130
+  #define CARD_PROFILE_PORTRAIT_W 144
+  #define CARD_PROFILE_PORTRAIT_H 190
   #define CARD_PROFILE_PORTRAIT_MAX_SCALE 4
-  // Rows x 206..404 (right arrow hit box starts at 410), y 124..368: the close
-  // button's hit circle ends at y 122, the farthest corner (404, 368) sits 218 px
-  // from the center, and the page dots are at y 428.
+  // Status message under the portrait: up to two lines of this text size from
+  // y 328 (the farthest corner, (50, 362), sits 224 px from the center)
+  #define CARD_PROFILE_STATUS_Y 328
+  #define CARD_PROFILE_STATUS_SIZE 2
+  // Rows x 206..404 (right arrow hit box starts at 410), y 104..370: the close
+  // button's hit circle ends at y 122 but only over x 328..392, where the first
+  // row holds a short right-justified value (y >= 130); the farthest corner
+  // (404, 370) sits 219 px from the center, and the page dots are at y 428.
   #define CARD_PROFILE_STATS_LEFT 206
   #define CARD_PROFILE_STATS_RIGHT 404
   #define CARD_PROFILE_ROW_Y0 124
@@ -229,6 +256,26 @@
   #define CARD_PROFILE_VALUE_GAP 4
   #define CARD_PROFILE_BAR_H 12
   #define CARD_PROFILE_BAR_GAP 8
+  //#endregion
+  //#region Info card page 3 (progress): vertical rhythm, tops of each text line / the bar
+  // Spread evenly from the title (y 58) to the last line (ends y 395), above the page dots (y 428)
+  #define CARD_PROGRESS_TITLE_Y 58
+  #define CARD_PROGRESS_TITLE_MAXW 300
+  #define CARD_PROGRESS_LEVEL_Y 112
+  #define CARD_PROGRESS_BAR_Y 187
+  #define CARD_PROGRESS_NEXT_GAP 32
+  #define CARD_PROGRESS_EVO_LABEL_Y 286
+  #define CARD_PROGRESS_EVO_VALUE_Y 312
+  #define CARD_PROGRESS_MISTAKES_Y 379
+  //#endregion
+  //#region Pokedex gallery: 4x4 grid below the close button's hit circle (y <= 122), detail header width
+  // Grid x 105..361, y 124..380; thumbnails (40 px) are drawn at 3/2 scale (60 px)
+  #define GALLERY_CELL 64
+  #define GALLERY_GRID_Y 124
+  #define GALLERY_THUMB_SCALE_NUM 3
+  #define GALLERY_THUMB_SCALE_DEN 2
+  // Detail header ends left of the close button (x 340)
+  #define GALLERY_DETAIL_HEADER_MAXW 190
   //#endregion
   #define MED_X0 28
   #define MED_COLSTEP 206
@@ -258,9 +305,21 @@
   #define KB_OK_DX 15
   // minigames / misc
   #define POOP_S 2
-  #define POOP_X0 36
-  #define POOP_DX 46
+  #define POOP_X0 34
+  #define POOP_DX 48
   #define POOP_Y 244
+  //#region Main screen needs bars (4 bars, 2 columns x 2 rows, bottom panel y 312..466)
+  // Round: bottom row ends at y 361, inside the circle (chord x 38..428 at y 360);
+  // the right bar ends at x 422. The action buttons start at y 364.
+  #define NEEDS_LEFT_X 60
+  #define NEEDS_RIGHT_X 262
+  #define NEEDS_ROW1_Y 317
+  #define NEEDS_ROW2_Y 343
+  #define NEEDS_BAR_H 18
+  #define NEEDS_BAR_W_MAX 112
+  #define NEEDS_BAR_W_MIN 40
+  #define NEEDS_COLUMN_SPACING 42
+  //#endregion
   #define LIFE_X0 180
   #define LIFE_DX 28
   #define LIFE_Y 104
@@ -268,15 +327,36 @@
   #define BALL_S 3
   #define BALL_OFF 24
   #define GAME_PET_Y 394
+  #define PET_HEART_SCALE 2  // "likes it" heart over the creature (32 px bitmap)
 #else
   // 320x240: text 7->5, 6/5/4->3, 3->2, rest unchanged
   #define TS(n) ((n) >= 7 ? 5 : (n) >= 4 ? 3 : (n) == 3 ? 2 : (n))
   #define HDR_NAME_Y 6
   #define HDR_MSG_Y 26
+  //#region Main screen header: hamburger (top left), clock (top right), streak badge under the clock, level row
+  // The battery (usually absent on the CYD) sits under the clock at the top right,
+  // and the streak badge under both, right-justified on STREAK_RIGHT.
   #define BAT_X (LCD_WIDTH - 36)
-  #define BAT_Y 4
-  #define STREAK_X 4
-  #define STREAK_Y 44
+  #define BAT_Y 23
+  #define STREAK_RIGHT (LCD_WIDTH - 4)
+  #define STREAK_Y 38
+  #define HAMBURGER_X 6
+  #define HAMBURGER_Y 5
+  #define HAMBURGER_W 24
+  #define HAMBURGER_H 17
+  #define HAMBURGER_HIT_R 26
+  // name x 82..238, so it clears the widest clock ("12:59 PM": x 240..316)
+  #define HDR_NAME_MAX_W 156
+  // clock: digits at size 2 (y 4..20), AM/PM at size 1
+  #define HDR_TIME_RIGHT (LCD_WIDTH - 4)
+  #define HDR_TIME_Y 4
+  #define HDR_TIME_SIZE 2
+  #define HDR_TIME_MERIDIEM_GAP 2
+  #define HDR_LVL_BAR_W 100
+  #define HDR_LVL_BAR_H 10
+  #define HDR_LVL_GAP 8
+  #define HDR_LVL_TEXT_SIZE 1  // "Lv.N" next to the level bar
+  //#endregion
   #define STARTER_TITLE_Y 10
   #define STARTER_ROW_X 20
   #define STARTER_ROW_W 280
@@ -332,12 +412,13 @@
   #define SETTINGS_TITLE_Y 8
   #define SETTINGS_TITLE_MAX_W 240
   //#endregion
-  //#region Settings menu: three rows (y 36..208) and the version line
+  //#region Settings menu: four rows (y 42..212) and the version line
+  // Row 0 starts below the close button's hit circle (ends at y 38).
   #define SETTINGS_MENU_ROW_X 30
   #define SETTINGS_MENU_ROW_W 260
-  #define SETTINGS_MENU_ROW_Y 36
-  #define SETTINGS_MENU_ROW_H 52
-  #define SETTINGS_MENU_ROW_GAP 8
+  #define SETTINGS_MENU_ROW_Y 42
+  #define SETTINGS_MENU_ROW_H 38
+  #define SETTINGS_MENU_ROW_GAP 6
   #define SETTINGS_MENU_ROW_R 10
   #define SETTINGS_MENU_ARROW_INSET 16
   #define SETTINGS_MENU_ARROW_SIZE 10
@@ -380,15 +461,14 @@
   #define CLK_GLYPH_DX 13
   #define CLK_GLYPH_DY 10
   #define CLK_LBL_Y 126
-  #define CLK_HLBL_X 40
-  #define CLK_MLBL_X 192
-  //#region Time setting: 12h/24h switch (left) and AM/PM toggle (right), two segments each
+  #define CLK_PAIR_W (CLK_HP_X + CLK_BTN - CLK_HM_X)  // one -/+ pair, edge to edge (HOUR/MIN center under it)
+  //#region Time setting: 12h/24h toggle under the hour pair, AM/PM toggle under the minute pair
   #define CLK_MODE_Y 150
   #define CLK_MODE_H 30
   #define CLK_MODE_R 8
-  #define CLK_MODE_SEG_W 65
-  #define CLK_FORMAT_X 20
-  #define CLK_AMPM_X 170
+  #define CLK_MODE_W CLK_PAIR_W
+  #define CLK_FORMAT_X CLK_HM_X
+  #define CLK_AMPM_X CLK_MM_X
   //#endregion
   #define CLK_OK_X 90
   #define CLK_OK_Y 192
@@ -430,15 +510,19 @@
   #define HDR_NAME_HIT_PAD 6
   //#endregion
   //#region Info card page 0: portrait column (left) and five stat rows (right)
-  // Portrait box x 36..128, y 56..216: clear of the left arrow hit box (x < 36).
-  #define CARD_PROFILE_PORTRAIT_X 36
+  // Portrait box x 33..125, y 56..192, nudged 6 px left of the centre (x 85) of the
+  // free space between the left arrow hit box (x < 36) and the stat rows (x >= 134).
+  #define CARD_PROFILE_PORTRAIT_X 33
   #define CARD_PROFILE_PORTRAIT_Y 56
   #define CARD_PROFILE_PORTRAIT_W 92
-  #define CARD_PROFILE_PORTRAIT_H 160
+  #define CARD_PROFILE_PORTRAIT_H 136
   #define CARD_PROFILE_PORTRAIT_MAX_SCALE 3
-  // Rows x 134..282 (right arrow hit box starts at 284), y 52..222: the close
+  // Status message under the portrait: up to two lines of this text size from y 196
+  #define CARD_PROFILE_STATUS_Y 196
+  #define CARD_PROFILE_STATUS_SIZE 1
+  // Rows x 134..282 (right arrow hit box starts at 284), y 50..224: the close
   // button's hit circle ends at y 38 and the page dots start at y 225. Labels
-  // use size 1, so a CJK row (16 px label + 16 px value) fills its 34 px step.
+  // and values both use size 2 (16 px), so a row is 33 px in a 35 px step.
   #define CARD_PROFILE_STATS_LEFT 134
   #define CARD_PROFILE_STATS_RIGHT 282
   #define CARD_PROFILE_ROW_Y0 52
@@ -448,6 +532,24 @@
   #define CARD_PROFILE_VALUE_GAP 2
   #define CARD_PROFILE_BAR_H 8
   #define CARD_PROFILE_BAR_GAP 6
+  //#endregion
+  //#region Info card page 3 (progress): vertical rhythm, tops of each text line / the bar
+  // Spread evenly from the title (y 12) to the last line (ends y 217), above the page dots (y 226)
+  #define CARD_PROGRESS_TITLE_Y 12
+  #define CARD_PROGRESS_TITLE_MAXW (LCD_WIDTH - 2 * CARD_SIDE_MARGIN)
+  #define CARD_PROGRESS_LEVEL_Y 42
+  #define CARD_PROGRESS_BAR_Y 83
+  #define CARD_PROGRESS_NEXT_GAP 16
+  #define CARD_PROGRESS_EVO_LABEL_Y 140
+  #define CARD_PROGRESS_EVO_VALUE_Y 160
+  #define CARD_PROGRESS_MISTAKES_Y 201
+  //#endregion
+  //#region Pokedex gallery: 4x4 grid (x 78..242, y 43..207), detail header width
+  #define GALLERY_CELL 41
+  #define GALLERY_GRID_Y 43
+  #define GALLERY_THUMB_SCALE_NUM 1
+  #define GALLERY_THUMB_SCALE_DEN 1
+  #define GALLERY_DETAIL_HEADER_MAXW 234
   //#endregion
   // medal grid narrowed (was x 12..308) so it stays clear of the page arrows
   #define MED_X0 26
@@ -479,6 +581,17 @@
   #define POOP_X0 6
   #define POOP_DX 34
   #define POOP_Y SY(244)
+  //#region Main screen needs bars (4 bars, 2 columns x 2 rows, bottom panel y 160..240)
+  // Rect: rows y 162..196, the action buttons start at y 200; right bar ends at x 298.
+  #define NEEDS_LEFT_X 10
+  #define NEEDS_RIGHT_X 166
+  #define NEEDS_ROW1_Y 162
+  #define NEEDS_ROW2_Y 180
+  #define NEEDS_BAR_H 16
+  #define NEEDS_BAR_W_MAX 84
+  #define NEEDS_BAR_W_MIN 40
+  #define NEEDS_COLUMN_SPACING 24
+  //#endregion
   #define LIFE_X0 SX(180)
   #define LIFE_DX 14
   #define LIFE_Y 60
@@ -486,6 +599,7 @@
   #define BALL_S 2
   #define BALL_OFF 16
   #define GAME_PET_Y (LCD_HEIGHT - 6)
+  #define PET_HEART_SCALE 1  // "likes it" heart over the creature (32 px bitmap)
 #endif
 
 #define EVO_BTN_X (CX - EVO_BTN_W / 2)

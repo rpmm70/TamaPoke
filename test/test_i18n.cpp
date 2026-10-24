@@ -40,7 +40,6 @@ static std::string joinSpecs(const std::vector<std::string> &v) {
 struct ExpectedFmt { StrId id; const char *sig; };
 static const ExpectedFmt EXPECTED[] = {
   { S_POKEDEX_FMT,     "%u" },
-  { S_NAME_FMT,        "%s,%s,%u" },
   { S_RELEASE_FMT,     "%s" },
   { S_HITS_FMT,        "%u" },
   { S_STR_GAIN_FMT,    "%u" },

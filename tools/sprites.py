@@ -380,13 +380,43 @@ def egg():
 
 
 def poop():
-    g = G()
-    g.disk(16, 24, 7.0, 4.4, 'c', 'C')
-    g.disk(16, 18, 5.0, 3.4, 'c', 'C')
-    g.disk(16, 13, 3.0, 2.4, 'c', 'C')
-    g.px(16, 9, 'c'); g.px(17, 10, 'c')
-    g.outline()
-    return g.rows()
+    # Hand-drawn 3-tier swirl with a curled tip, cream highlights and a
+    # dark-brown shade on the right/bottom of each tier. Pinned here as a
+    # literal (like the heart) so species.h stays identical by construction.
+    return [
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        ".................kk.............",
+        "................kcCk............",
+        "............kkkkcCCk............",
+        "...........kcyccccCCk...........",
+        "...........kycccccCCk...........",
+        "...........kCCCCCCCCk...........",
+        ".........kkcccccccccCkk.........",
+        "........kccycccccccccCCk........",
+        "........kcyccccccccccCCk........",
+        "........kCCCCCCCCCCCCCCk........",
+        "......kkcccccccccccccccCkk......",
+        ".....kccccccccccccccccccCCk.....",
+        ".....kccycccccccccccccccCCk.....",
+        ".....kcyccccccccccccccccCCk.....",
+        ".....kccccccccccccccccccCCk.....",
+        ".....kccccccccccccccccccCCk.....",
+        "......kCCCCCCCCCCCCCCCCCCk......",
+        "........kkkkkkkkkkkkkkkk........",
+        "................................",
+        "................................",
+        "................................",
+    ]
 
 
 def heart():

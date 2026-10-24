@@ -38,6 +38,10 @@
 // the web installer). Shown on the settings screen and over serial at boot.
 #define FW_VERSION "1.17"
 
+// Secondary text (labels, version): darker than UI_TRACK, lighter than UI_INK.
+// Here and not in species.h, which tools/sprites.py regenerates.
+#define UI_LABEL C565(0x6B, 0x66, 0x58)
+
 #if BOARD_IS_ROUND
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
   LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
@@ -116,11 +120,12 @@ uint8_t cardPage = 0;         // 0 profile, 1 stats, 2 medals, 3 progress
 #define CARD_PAGE_COUNT 4
 //#region Hit boxes recorded while drawing (the touch code reads them)
 int16_t headerNameLeft = 0, headerNameWidth = 0;  // name in drawHeader(): tap = info card
+int16_t headerLevelRowLeft = 0, headerLevelRowWidth = 0;  // "Lv.N" + bar under the name: tap = info card too
 int16_t cardPencilLeft = 0, cardPencilTop = 0;    // rename pencil on card page 0
 int16_t cardPencilSize = 0;                       // 0 = not drawn yet
 //#endregion
 #pragma region Settings screens state
-// Settings menu (swipe down) and its sub-screens. Only one is open at a time;
+// Settings menu (hamburger button, top left) and its sub-screens. Only one is open at a time;
 // SETTINGS_CLOSED = main screen. The X button is the only way out (swipes are ignored).
 enum SettingsScreen : uint8_t {
   SETTINGS_CLOSED,
@@ -132,10 +137,15 @@ enum SettingsScreen : uint8_t {
 SettingsScreen settingsScreen = SETTINGS_CLOSED;
 int clockH = 12, clockM = 0;  // time being edited (always 0..23, also in 12h mode)
 bool clockUses24Hour = true;  // time screen display format, persisted in NVS
-// Brightness slider: in-memory only, not persisted. The backlight hookup is
-// pending (boardSetBrightness() is still driven only by the dimming logic).
+// Brightness slider: level 0..SETTINGS_BRIGHTNESS_MAX maps linearly onto the
+// panel range SCREEN_BRIGHTNESS_MIN..SCREEN_BRIGHTNESS_MAX (see
+// brightnessForSettingsLevel). Persisted in NVS when the audio/video screen closes.
 #define SETTINGS_BRIGHTNESS_MAX 10
-uint8_t settingsBrightnessLevel = SETTINGS_BRIGHTNESS_MAX;
+#define SETTINGS_BRIGHTNESS_DEFAULT 7  // ~184, close to the old fixed USB brightness (180)
+#define SCREEN_BRIGHTNESS_MIN 20       // level 0: dim but still readable
+#define SCREEN_BRIGHTNESS_MAX 255      // level SETTINGS_BRIGHTNESS_MAX
+uint8_t settingsBrightnessLevel = SETTINGS_BRIGHTNESS_DEFAULT;
+uint8_t settingsBrightnessSavedLevel = SETTINGS_BRIGHTNESS_DEFAULT;  // last value in NVS (skips no-op writes)
 #pragma endregion
 
 // bath scene: foam over the creature and cleanup when it pops
@@ -179,18 +189,24 @@ static const uint16_t INK_K = 0x18C4;  // spriteColor('k')
 struct Btn {
   int16_t cx, cy;
   const char *const *icon;
+  int8_t iconOffsetX, iconOffsetY;  // screen pixels added to the icon position (optical centering); omitted = 0
 };
+// SPR_ICON_PLAY (16x16, drawn at 2x) fills columns 2..14 and rows 2..14: its
+// visual center is at 8.5 in both axes against the cell center 8.0, so it sits
+// half a bitmap pixel (= 1 screen pixel at 2x) right and down. Shift it back.
+#define PLAY_ICON_OFFSET_X (-1)
+#define PLAY_ICON_OFFSET_Y (-1)
 #if BOARD_IS_ROUND
 Btn buttons[4] = {
   { 140, 390, SPR_ICON_FOOD },   // eat
-  { 202, 404, SPR_ICON_PLAY },   // play
+  { 202, 404, SPR_ICON_PLAY, PLAY_ICON_OFFSET_X, PLAY_ICON_OFFSET_Y },   // play
   { 264, 404, SPR_ICON_LIGHT },  // light
   { 326, 390, SPR_ICON_CLEAN },  // bath
 };
 #else
 Btn buttons[4] = {
   { (int16_t)(LCD_WIDTH * 1 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_FOOD },
-  { (int16_t)(LCD_WIDTH * 3 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_PLAY },
+  { (int16_t)(LCD_WIDTH * 3 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_PLAY, PLAY_ICON_OFFSET_X, PLAY_ICON_OFFSET_Y },
   { (int16_t)(LCD_WIDTH * 5 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_LIGHT },
   { (int16_t)(LCD_WIDTH * 7 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_CLEAN },
 };
@@ -260,6 +276,7 @@ void setup() {
   Serial.printf("TamaPoke fw v%s\n", FW_VERSION);
   loadLang();  // saved language (ES by default)
   loadClockFormatFromNvs();  // 12h/24h choice of the time screen
+  loadBrightnessLevelFromNvs();  // brightness slider of the audio/video screen
 #if BOARD_WAVESHARE_ROUND
   Wire.begin(IIC_SDA, IIC_SCL);
   // CST9217 (touch), AXP2101 (PMU) and PCF85063 (RTC) share this I2C bus.
@@ -428,7 +445,19 @@ void loop() {
   }
 }
 
-// brightness based on sleep + inactivity (AMOLED protection)
+// panel brightness for the user's slider level
+uint8_t brightnessForSettingsLevel() {
+  return SCREEN_BRIGHTNESS_MIN +
+         (SCREEN_BRIGHTNESS_MAX - SCREEN_BRIGHTNESS_MIN) * settingsBrightnessLevel / SETTINGS_BRIGHTNESS_MAX;
+}
+
+// true when render() draws the plain main screen: no other screen and no dialog/menu over it
+bool isMainScreenShowing() {
+  return !pet.awaitingStarter() && !galleryOpen && !gameOpen && !sackOpen && !kbOpen &&
+         settingsScreen == SETTINGS_CLOSED && !cardOpen && !feedMenuUntil && !confirmUntil && !choiceKind;
+}
+
+// brightness based on the user's level, sleep + inactivity (AMOLED protection)
 void updateBrightness(uint32_t now) {
   // visible events wake the screen on their own
   if (pet.evolving() || pet.ceremony || pet.eating() || pet.showHeart()) {
@@ -436,9 +465,14 @@ void updateBrightness(uint32_t now) {
   }
   uint32_t idle = now - lastInteract;
   dimStage = (idle > 300000) ? 2 : (idle > 90000) ? 1 : 0;
-  uint8_t target = pet.sleeping ? 25 : (usbPresent() ? 180 : 145);
-  if (dimStage == 1) target = pet.sleeping ? 10 : 60;
+  uint8_t normalBrightness = brightnessForSettingsLevel();
+  // the sleep dim only applies to the main screen: any other screen or menu
+  // opened while the creature sleeps comes back to the normal brightness
+  bool sleepDim = pet.sleeping && isMainScreenShowing();
+  uint8_t target = sleepDim ? 25 : normalBrightness;
+  if (dimStage == 1) target = sleepDim ? 10 : 60;
   else if (dimStage == 2) target = 8;
+  if (target > normalBrightness) target = normalBrightness;  // dimming never brightens a low setting
   if (screenOff) target = 0;
   static uint8_t current = 255;
   if (target != current) {
@@ -556,8 +590,10 @@ void handleSerial() {
 
 // ---------- touch input ----------
 
+// The box follows the creature as it walks (beh.x), so it can be caressed
+// anywhere it wanders; SX(123) is the half-width the fixed box used to have.
 bool inPetZone(int16_t x, int16_t y) {
-  return x > SX(110) && x < SX(356) && y > SY(95) && y < SY(310);
+  return abs(x - (int)beh.x) < SX(123) && y > SY(95) && y < SY(310);
 }
 
 // the touch is resolved when the finger LIFTS, to tell a tap from a swipe
@@ -609,29 +645,18 @@ void handleTouch() {
     uint32_t dt = millis() - tStart;
     if (!holdFired && !swallowGesture) {
       if (abs(dx) > SX(80) && abs(dy) < SY(70) && dt < 800) onSwipe(dx > 0 ? 1 : -1);
-      else if (abs(dy) > SY(80) && abs(dx) < SX(70) && dt < 800) onSwipeV(dy > 0 ? 1 : -1);
       else if (dt < 1500 && abs(dx) < 40 && abs(dy) < 40) onTap(tX0, tY0);
     }
   }
   wasPressed = pressed;
 }
 
-// vertical swipe: down opens the settings menu
-// (the info card opens by tapping the creature's name, see onTap)
+// The settings menu opens with the hamburger button and the info card by tapping
+// the creature's name (see onTap); the main screen has no swipe gestures.
 void openClock();         // prototype
 void openSettingsMenu();  // prototype
 
-void onSwipeV(int dir) {
-  if (pet.awaitingStarter()) return;  // blocked during the starter choice
-  if (gameOpen || galleryOpen || kbOpen || sackOpen || pet.ceremony) return;
-  if (settingsScreen != SETTINGS_CLOSED) return;  // only the X button leaves the settings
-  if (cardOpen) return;             // only the X button closes the card
-  if (dir > 0) {                    // swipe down: settings menu
-    if (!confirmUntil && !feedMenuUntil) openSettingsMenu();
-  }
-}
-
-// swipe: dir +1 = to the right
+// swipe: dir +1 = to the right. Only acts inside the info card and the gallery.
 void onSwipe(int dir) {
   if (pet.awaitingStarter()) return;  // blocked during the starter choice
   if (gameOpen || kbOpen || settingsScreen != SETTINGS_CLOSED) return;
@@ -640,25 +665,11 @@ void onSwipe(int dir) {
     cardPage = p < 0 ? 0 : (p > 3 ? 3 : p);
     return;
   }
-  if (!galleryOpen) {
-    if (!pet.ceremony && !confirmUntil) {
-      galleryOpen = true;
-      galleryPage = 0;
-      galleryDetail = 0;
-      galleryDirty = true;
-    }
-    return;
-  }
-  if (galleryDetail) {  // in detail: back to the grid
-    galleryDetail = 0;
-    galleryPmd.unload();
-    galleryDirty = true;
-    return;
-  }
+  if (!galleryOpen) return;  // main screen: no swipe action
+  if (galleryDetail) return;  // in detail: only the X goes back to the grid
   int np = galleryPage - dir;  // swiping left advances a page
   if (np < 0) {                // going back from the first = exit
-    galleryOpen = false;
-    galleryPmd.unload();
+    galleryCloseToSettingsMenu();
     return;
   }
   if (np > 9) np = 9;
@@ -736,6 +747,15 @@ void onTap(int16_t x, int16_t y) {
     feedMenuUntil = 0;
     return;
   }
+  //#region Tapping the hamburger button (top left) opens the settings menu
+  // Reached only with no dialog open: starter choice, ceremony, choice, release
+  // and food picker all returned above. Checked before the egg tap and the name box.
+  if (isTouchInsideCircle(x, y, HAMBURGER_X + HAMBURGER_W / 2, HAMBURGER_Y + HAMBURGER_H / 2, HAMBURGER_HIT_R)) {
+    sfxPlay(SFX_TAP);
+    openSettingsMenu();
+    return;
+  }
+  //#endregion
   if (pet.isEgg()) {
     pet.eggTap();
     sfxPlay(SFX_TAP);
@@ -744,10 +764,15 @@ void onTap(int16_t x, int16_t y) {
   //#region Tapping the creature's name (header) opens the info card
   // Same blockers the old swipe-up had: starter choice, ceremony, egg, dialogs
   // and overlays all returned above. The box spans from a little above the name
-  // down to the status line, which stays above the pet zone and every button.
-  if (headerNameWidth > 0 &&
+  // down to the level line, which stays above the pet zone and every button.
+  bool onHeaderName = headerNameWidth > 0 &&
       isTouchInsideRect(x, y, headerNameLeft - HDR_NAME_HIT_PAD, HDR_NAME_Y - HDR_NAME_HIT_PAD,
-                        headerNameWidth + 2 * HDR_NAME_HIT_PAD, HDR_MSG_Y - (HDR_NAME_Y - HDR_NAME_HIT_PAD))) {
+                        headerNameWidth + 2 * HDR_NAME_HIT_PAD, HDR_MSG_Y - (HDR_NAME_Y - HDR_NAME_HIT_PAD));
+  // the level row under the name: 16 = text height at size 2
+  bool onHeaderLevelRow = headerLevelRowWidth > 0 &&
+      isTouchInsideRect(x, y, headerLevelRowLeft - HDR_NAME_HIT_PAD, HDR_MSG_Y,
+                        headerLevelRowWidth + 2 * HDR_NAME_HIT_PAD, 16 + HDR_NAME_HIT_PAD);
+  if (onHeaderName || onHeaderLevelRow) {
     cardOpen = true;
     cardPage = 0;
     return;
@@ -1624,6 +1649,8 @@ void render() {
 
   if (pet.isEgg()) {
     drawHeader(T(S_EGG_HDR), inkColor(), eggMsg());
+    drawHamburgerButton();
+    drawHeaderClock();
     int s = 5, x = CX - 16 * s, y = PET_CY - 16 * s;
     drawMap(SPR_EGG, SPRITE_H, x, y, s, false);
     if (pet.eggCracks() >= 1)
@@ -1649,8 +1676,10 @@ void render() {
     const DexEntry &d = DEX_TBL[pet.speciesId];
     char name[28];
     const char *base = pet.nick[0] ? pet.nick : dexName(pet.speciesId);
-    snprintf(name, sizeof(name), T(S_NAME_FMT), pet.shiny ? "*" : "", base, pet.level());
-    drawHeader(name, gNight ? UI_INK_NIGHT : d.accent, statusMsg());
+    snprintf(name, sizeof(name), "%s%s", pet.shiny ? "*" : "", base);  // the level has its own line now
+    drawHeaderWithLevel(name, gNight ? UI_INK_NIGHT : d.accent);
+    drawHamburgerButton();
+    drawHeaderClock();
     drawStreakBadge();
     drawPet();
     drawBath();
@@ -1752,7 +1781,7 @@ void respawnBall() {
 
 void gameTap(int16_t x, int16_t y) {
   if (gameOverUntil) return;
-  if (y < SY(72)) {  // touching the header = quit with no reward
+  if (isTouchInsideCircle(x, y, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_HIT_R)) {  // X = quit with no reward
     gameOpen = false;
     return;
   }
@@ -2020,6 +2049,7 @@ void renderGame() {
   // the pokeball
   drawMap(SPR_ICON_PLAY, 16, (int)ballX - BALL_OFF, (int)ballY - BALL_OFF, BALL_S, false);
 
+  drawCloseButton(gfx, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_R, UI_INK, UI_BG_DAY);  // quit (see gameTap)
   gfx->flush();
 }
 
@@ -2138,9 +2168,9 @@ bool isTouchOnSettingsCloseButton(int16_t touchX, int16_t touchY) {
 #pragma endregion
 
 #pragma region Settings menu screen
-// Title, three large rows (Audio / Video, Time, Language) and the firmware version
-#define SETTINGS_MENU_ROW_COUNT 3
-static const StrId SETTINGS_MENU_ROW_LABELS[SETTINGS_MENU_ROW_COUNT] = { S_MENU_AV, S_MENU_TIME, S_MENU_LANG };
+// Title, four large rows (Pokedex, Audio / Video, Time, Language) and the firmware version
+#define SETTINGS_MENU_ROW_COUNT 4
+static const StrId SETTINGS_MENU_ROW_LABELS[SETTINGS_MENU_ROW_COUNT] = { S_MENU_POKEDEX, S_MENU_AV, S_MENU_TIME, S_MENU_LANG };
 
 void openSettingsMenu() { settingsScreen = SETTINGS_MENU; }
 
@@ -2168,7 +2198,7 @@ void renderSettingsMenu() {
   #pragma region Firmware version (discreet, at the very bottom)
   char versionText[20];
   snprintf(versionText, sizeof(versionText), "TamaPoke v%s", FW_VERSION);
-  gfx->setTextColor(UI_TRACK);
+  gfx->setTextColor(UI_LABEL);
   setSize(1);
   setCur(centerX(versionText, 1), SETTINGS_MENU_VERSION_Y);
   printT(versionText);
@@ -2185,8 +2215,15 @@ void handleSettingsMenuTap(int16_t touchX, int16_t touchY) {
   }
   for (int rowIndex = 0; rowIndex < SETTINGS_MENU_ROW_COUNT; rowIndex++) {
     if (!isTouchInsideRect(touchX, touchY, SETTINGS_MENU_ROW_X, settingsMenuRowTop(rowIndex), SETTINGS_MENU_ROW_W, SETTINGS_MENU_ROW_H)) continue;
-    if (rowIndex == 0) settingsScreen = SETTINGS_AUDIO_VIDEO;
-    else if (rowIndex == 1) openClock();  // loads the current time into the editor
+    if (rowIndex == 0) {  // Pokedex: opens the gallery exactly like the old swipe did
+      galleryOpen = true;
+      galleryPage = 0;
+      galleryDetail = 0;
+      galleryDirty = true;
+      settingsScreen = SETTINGS_CLOSED;
+    }
+    else if (rowIndex == 1) settingsScreen = SETTINGS_AUDIO_VIDEO;
+    else if (rowIndex == 2) openClock();  // loads the current time into the editor
     else settingsScreen = SETTINGS_LANGUAGE;
     return;
   }
@@ -2195,8 +2232,27 @@ void handleSettingsMenuTap(int16_t touchX, int16_t touchY) {
 
 #pragma region Audio / video settings screen
 // Sound on/off pill and a brightness bar with -/+ buttons (same squares as the
-// time screen). Brightness is only an in-memory level for now: hooking it to
-// the backlight (boardSetBrightness) is pending.
+// time screen). Each step applies on the next loop (updateBrightness); the level
+// is written to NVS only when the screen closes, since every NVS write freezes
+// both cores for ~1s.
+void loadBrightnessLevelFromNvs() {
+  Preferences preferences;
+  preferences.begin("tamapoke", true);  // read-only
+  settingsBrightnessLevel = preferences.getUChar("bright", SETTINGS_BRIGHTNESS_DEFAULT);
+  preferences.end();
+  if (settingsBrightnessLevel > SETTINGS_BRIGHTNESS_MAX) settingsBrightnessLevel = SETTINGS_BRIGHTNESS_DEFAULT;
+  settingsBrightnessSavedLevel = settingsBrightnessLevel;
+}
+
+void saveBrightnessLevelToNvs() {
+  if (settingsBrightnessLevel == settingsBrightnessSavedLevel) return;
+  Preferences preferences;
+  preferences.begin("tamapoke", false);
+  preferences.putUChar("bright", settingsBrightnessLevel);
+  preferences.end();
+  settingsBrightnessSavedLevel = settingsBrightnessLevel;
+}
+
 void renderAudioVideoSettings() {
   beginSettingsScreen(T(S_MENU_AV));
 
@@ -2231,6 +2287,7 @@ void renderAudioVideoSettings() {
 
 void handleAudioVideoSettingsTap(int16_t touchX, int16_t touchY) {
   if (isTouchOnSettingsCloseButton(touchX, touchY)) {  // back to the menu
+    saveBrightnessLevelToNvs();
     settingsScreen = SETTINGS_MENU;
     return;
   }
@@ -2285,19 +2342,21 @@ void stepClockHour(int hourStep) {
 
 // Two-segment switch on the CLK_MODE row (12h|24h, AM|PM): the selected segment
 // is filled. Disabled = track color with nothing selected (AM/PM in 24h mode).
-void drawClockModeSwitch(int switchLeft, const char *firstLabel, const char *secondLabel, bool secondSelected, bool enabled) {
-  const uint16_t outlineColor = enabled ? UI_INK : UI_TRACK;
-  gfx->fillRoundRect(switchLeft, CLK_MODE_Y, 2 * CLK_MODE_SEG_W, CLK_MODE_H, CLK_MODE_R, UI_WHITE);
-  if (enabled)
-    gfx->fillRoundRect(switchLeft + (secondSelected ? CLK_MODE_SEG_W : 0), CLK_MODE_Y, CLK_MODE_SEG_W, CLK_MODE_H, CLK_MODE_R, UI_BAR_OK);
-  gfx->drawRoundRect(switchLeft, CLK_MODE_Y, 2 * CLK_MODE_SEG_W, CLK_MODE_H, CLK_MODE_R, outlineColor);
-  gfx->drawFastVLine(switchLeft + CLK_MODE_SEG_W, CLK_MODE_Y, CLK_MODE_H, outlineColor);
-  for (int segmentIndex = 0; segmentIndex < 2; segmentIndex++) {
-    bool segmentSelected = enabled && ((segmentIndex == 1) == secondSelected);
-    gfx->setTextColor(!enabled ? UI_TRACK : segmentSelected ? UI_BG_DAY : UI_INK);
-    drawTextCenteredInBox(segmentIndex == 0 ? firstLabel : secondLabel, TS(3), switchLeft + segmentIndex * CLK_MODE_SEG_W, CLK_MODE_Y,
-                          CLK_MODE_SEG_W, CLK_MODE_H);
-  }
+// One button showing the current option; each tap switches to the other one.
+// Disabled = grayed out (AM/PM in 24h mode), kept in place so the layout does not jump.
+void drawClockToggleButton(int buttonLeft, const char *currentLabel, bool enabled) {
+  gfx->fillRoundRect(buttonLeft, CLK_MODE_Y, CLK_MODE_W, CLK_MODE_H, CLK_MODE_R, UI_WHITE);
+  gfx->drawRoundRect(buttonLeft, CLK_MODE_Y, CLK_MODE_W, CLK_MODE_H, CLK_MODE_R, enabled ? UI_INK : UI_TRACK);
+  gfx->setTextColor(enabled ? UI_INK : UI_TRACK);
+  drawTextCenteredInBox(currentLabel, TS(3), buttonLeft, CLK_MODE_Y, CLK_MODE_W, CLK_MODE_H);
+}
+
+// HOUR / MIN label centered under its -/+ button pair
+void drawClockPairLabel(const char *label, int pairLeft) {
+  int pairCenterX = pairLeft + CLK_PAIR_W / 2;
+  setSize(2);
+  setCur(pairCenterX - (int)textW(label, 2) / 2, CLK_LBL_Y);
+  printT(label);
 }
 #pragma endregion
 
@@ -2317,16 +2376,13 @@ void renderClock() {
   drawClockBtn(CLK_HP_X, CLK_BTN_Y, "+");  // hour +
   drawClockBtn(CLK_MM_X, CLK_BTN_Y, "-");  // min -
   drawClockBtn(CLK_MP_X, CLK_BTN_Y, "+");  // min +
-  setSize(2);
-  gfx->setTextColor(UI_TRACK);
-  setCur(CLK_HLBL_X, CLK_LBL_Y);
-  printT(T(S_HOUR));
-  setCur(CLK_MLBL_X, CLK_LBL_Y);
-  printT(T(S_MIN));
+  gfx->setTextColor(UI_LABEL);
+  drawClockPairLabel(T(S_HOUR), CLK_HM_X);
+  drawClockPairLabel(T(S_MIN), CLK_MM_X);
 
-  #pragma region 12h/24h switch and AM/PM toggle (language-neutral literals)
-  drawClockModeSwitch(CLK_FORMAT_X, "12h", "24h", clockUses24Hour, true);
-  drawClockModeSwitch(CLK_AMPM_X, "AM", "PM", clockH >= 12, !clockUses24Hour);
+  #pragma region 12h/24h and AM/PM toggle buttons (language-neutral literals)
+  drawClockToggleButton(CLK_FORMAT_X, clockUses24Hour ? "24h" : "12h", true);
+  drawClockToggleButton(CLK_AMPM_X, clockH >= 12 ? "PM" : "AM", !clockUses24Hour);
   #pragma endregion
 
   gfx->fillRoundRect(CLK_OK_X, CLK_OK_Y, CLK_OK_W, CLK_OK_H, CLK_OK_R, UI_BAR_OK);
@@ -2351,13 +2407,13 @@ void clockTap(int16_t x, int16_t y) {
     else if (x >= CLK_MP_X && x < CLK_MP_X + CLK_BTN) clockM = (clockM + 1) % 60;
     return;
   }
-  #pragma region 12h/24h switch (tap anywhere on it flips and persists) and AM/PM toggle (12h only)
-  if (isTouchInsideRect(x, y, CLK_FORMAT_X, CLK_MODE_Y, 2 * CLK_MODE_SEG_W, CLK_MODE_H)) {
+  #pragma region 12h/24h toggle (flips and persists) and AM/PM toggle (12h only)
+  if (isTouchInsideRect(x, y, CLK_FORMAT_X, CLK_MODE_Y, CLK_MODE_W, CLK_MODE_H)) {
     clockUses24Hour = !clockUses24Hour;
     saveClockFormatToNvs();
     return;
   }
-  if (!clockUses24Hour && isTouchInsideRect(x, y, CLK_AMPM_X, CLK_MODE_Y, 2 * CLK_MODE_SEG_W, CLK_MODE_H)) {
+  if (!clockUses24Hour && isTouchInsideRect(x, y, CLK_AMPM_X, CLK_MODE_Y, CLK_MODE_W, CLK_MODE_H)) {
     clockH = (clockH + 12) % 24;  // same hour on the dial, other half of the day
     return;
   }
@@ -2441,14 +2497,19 @@ void handleSettingsTap(int16_t touchX, int16_t touchY) {
 }
 #pragma endregion
 
-// flame + streak number at the top left
+// flame + streak number at the top right (under the clock and the battery),
+// right-justified on STREAK_RIGHT: 22 px for the flame and its gap, then the number
 void drawStreakBadge() {
   if (pet.streak < 1) return;
-  int x = STREAK_X, y = STREAK_Y;
-  gfx->fillTriangle(x + 8, y, x + 1, y + 17, x + 15, y + 17, UI_BAR_BAD);
-  gfx->fillTriangle(x + 8, y + 7, x + 4, y + 17, x + 12, y + 17, UI_BAR_WARN);
   char s[6];
   snprintf(s, sizeof(s), "%u", pet.streak);
+  int x = STREAK_RIGHT - 22 - (int)textW(s, 2), y = STREAK_Y;
+  #pragma region Flame: one teardrop silhouette (circle + tip triangle) with a smaller inner flame
+  gfx->fillCircle(x + 8, y + 12, 6, UI_BAR_BAD);
+  gfx->fillTriangle(x + 9, y, x + 2, y + 11, x + 14, y + 11, UI_BAR_BAD);
+  gfx->fillCircle(x + 8, y + 13, 3, UI_BAR_WARN);
+  gfx->fillTriangle(x + 8, y + 7, x + 5, y + 13, x + 11, y + 13, UI_BAR_WARN);
+  #pragma endregion
   gfx->setTextColor(inkColor());
   setSize(2);
   setCur(x + 22, y + 2);
@@ -2502,25 +2563,124 @@ int cardTextLineHeight() {
   return (gCjkFont ? 16 : 8) * gTextSize;
 }
 
-// Idle portrait at the largest whole scale that fits the portrait box (capped),
-// with its canvas centered in the box. Not drawPmdAct(): its minimum scale of 2
-// on the round board would push the widest sprites (96 px canvas) out of the column.
+// Smallest box (canvas pixel columns/rows) holding every visible pixel of all the
+// idle frames. PMD canvases carry empty margins (and the creature is rarely
+// centered inside them), so centering the canvas does not center the creature.
+// Measured once per species and cached; reading frames is cheap with a blob and
+// one SD read per frame when streaming.
+void measureIdleVisibleBounds(int &minColumn, int &maxColumn, int &minRow, int &maxRow) {
+  const PmdAct &idle = pmd.acts[PMD_IDLE];
+  static int cachedKey = -1;
+  static int cachedMinColumn, cachedMaxColumn, cachedMinRow, cachedMaxRow;
+  int key = (pet.speciesId * 2 + (pet.shiny ? 1 : 0)) * 65536 + idle.w * 256 + idle.h;
+  if (key != cachedKey) {
+    cachedMinColumn = idle.w;
+    cachedMaxColumn = -1;
+    cachedMinRow = idle.h;
+    cachedMaxRow = -1;
+    for (uint8_t frameIndex = 0; frameIndex < idle.frames; frameIndex++) {
+      const uint8_t *frameData = pmd.frame(PMD_IDLE, frameIndex);
+      if (!frameData) continue;
+      for (int row = 0; row < idle.h; row++) {
+        for (int column = 0; column < idle.w; column++) {
+          if (frameData[row * idle.w + column] == 0xFF) continue;
+          if (column < cachedMinColumn) cachedMinColumn = column;
+          if (column > cachedMaxColumn) cachedMaxColumn = column;
+          if (row < cachedMinRow) cachedMinRow = row;
+          if (row > cachedMaxRow) cachedMaxRow = row;
+        }
+      }
+    }
+    if (cachedMaxColumn < 0) {  // nothing visible (or unreadable): use the whole canvas
+      cachedMinColumn = 0;
+      cachedMaxColumn = idle.w - 1;
+      cachedMinRow = 0;
+      cachedMaxRow = idle.h - 1;
+    }
+    cachedKey = key;
+  }
+  minColumn = cachedMinColumn;
+  maxColumn = cachedMaxColumn;
+  minRow = cachedMinRow;
+  maxRow = cachedMaxRow;
+}
+
+// Idle portrait at the largest whole scale at which its VISIBLE pixels fit the
+// portrait box (capped), with those visible pixels centered in the box. Not
+// drawPmdAct(): its minimum scale of 2 on the round board would push the widest
+// sprites (96 px canvas) out of the column.
 void drawCardProfilePortrait() {
   const PmdAct &idle = pmd.acts[PMD_IDLE];
   if (!pmd.loaded || !idle.frames) return;
-  int scale = CARD_PROFILE_PORTRAIT_W / idle.w;
-  if (CARD_PROFILE_PORTRAIT_H / idle.h < scale) scale = CARD_PROFILE_PORTRAIT_H / idle.h;
+  int minColumn, maxColumn, minRow, maxRow;
+  measureIdleVisibleBounds(minColumn, maxColumn, minRow, maxRow);
+  int visibleWidth = maxColumn - minColumn + 1;
+  int visibleHeight = maxRow - minRow + 1;
+  int scale = CARD_PROFILE_PORTRAIT_W / visibleWidth;
+  if (CARD_PROFILE_PORTRAIT_H / visibleHeight < scale) scale = CARD_PROFILE_PORTRAIT_H / visibleHeight;
   if (scale > CARD_PROFILE_PORTRAIT_MAX_SCALE) scale = CARD_PROFILE_PORTRAIT_MAX_SCALE;
   if (scale < 1) scale = 1;
-  int canvasLeft = CARD_PROFILE_PORTRAIT_X + (CARD_PROFILE_PORTRAIT_W - idle.w * scale) / 2;
-  int canvasTop = CARD_PROFILE_PORTRAIT_Y + (CARD_PROFILE_PORTRAIT_H - idle.h * scale) / 2;
+  int canvasLeft = CARD_PROFILE_PORTRAIT_X + (CARD_PROFILE_PORTRAIT_W - visibleWidth * scale) / 2 - minColumn * scale;
+  int canvasTop = CARD_PROFILE_PORTRAIT_Y + (CARD_PROFILE_PORTRAIT_H - visibleHeight * scale) / 2 - minRow * scale;
   drawPmdFrameAtScale(pmd, PMD_IDLE, canvasLeft, canvasTop, millis(), true, false, scale);
+}
+
+// Creature status text (statusMsg()) centered under the portrait, in one line if
+// it fits the column, else split at a space into two, else shrunk. Tries the
+// preferred size first and steps down, so a wrapped line is preferred to tiny text.
+void drawCardProfileStatusMessage() {
+  const int columnWidth = CARD_PROFILE_PORTRAIT_W;
+  const int columnCenterX = CARD_PROFILE_PORTRAIT_X + CARD_PROFILE_PORTRAIT_W / 2;
+  char workingText[48];
+  snprintf(workingText, sizeof(workingText), "%s", statusMsg());
+  gfx->setTextColor(UI_INK);
+
+  for (int textSize = CARD_PROFILE_STATUS_SIZE; textSize >= 1; textSize--) {
+    setSize(textSize);
+    //#region Single line
+    if (textW(workingText, textSize) <= columnWidth) {
+      setCur(columnCenterX - textW(workingText, textSize) / 2, CARD_PROFILE_STATUS_Y);
+      printT(workingText);
+      return;
+    }
+    //#endregion
+
+    //#region Two lines, split at the space that balances them best
+    int bestSplitIndex = -1;
+    int bestWidestLine = columnWidth + 1;
+    for (int i = 0; workingText[i]; i++) {
+      if (workingText[i] != ' ') continue;
+      workingText[i] = '\0';
+      int widestLine = textW(workingText, textSize);
+      int secondLineWidth = textW(workingText + i + 1, textSize);
+      workingText[i] = ' ';
+      if (secondLineWidth > widestLine) widestLine = secondLineWidth;
+      if (widestLine < bestWidestLine) {
+        bestWidestLine = widestLine;
+        bestSplitIndex = i;
+      }
+    }
+    if (bestSplitIndex >= 0 && bestWidestLine <= columnWidth) {
+      workingText[bestSplitIndex] = '\0';
+      const char *secondLine = workingText + bestSplitIndex + 1;
+      setCur(columnCenterX - textW(workingText, textSize) / 2, CARD_PROFILE_STATUS_Y);
+      printT(workingText);
+      setCur(columnCenterX - textW(secondLine, textSize) / 2, CARD_PROFILE_STATUS_Y + cardTextLineHeight() + 2);
+      printT(secondLine);
+      return;
+    }
+    //#endregion
+  }
+  //#region Nothing fit even at size 1: draw the single line anyway, centered on the column
+  setCur(columnCenterX - textW(workingText, 1) / 2, CARD_PROFILE_STATUS_Y);
+  printT(workingText);
+  //#endregion
 }
 
 // Label of a stat row, left-justified in the stats column and shrunk to its
 // width on both boards. Returns the top of the value line under it.
 int drawCardProfileRowLabel(int rowTop, const char *label) {
-  gfx->setTextColor(UI_TRACK);
+  gfx->setTextColor(UI_LABEL);
   shrinkTextSizeToWidth(label, CARD_PROFILE_LABEL_SIZE, CARD_PROFILE_STATS_W);
   setCur(CARD_PROFILE_STATS_LEFT, rowTop);
   printT(label);
@@ -2601,6 +2761,10 @@ void renderCardProfile() {
   drawCardProfilePortrait();
   //#endregion
 
+  //#region Status message under the portrait
+  drawCardProfileStatusMessage();
+  //#endregion
+
   //#region Stat rows (right column): level, streak (best), bond, favorite food, age
   int rowTop = CARD_PROFILE_ROW_Y0;
   char levelText[8];
@@ -2679,27 +2843,30 @@ void renderCardMedals() {
 void renderCardProgress() {
   const DexEntry &d = DEX_TBL[pet.speciesId];
   gfx->setTextColor(UI_INK);
-  ctext(T(S_PROGRESS), 3, SY(44));
+  // large title, shrunk to fit the circle / screen width (long translations)
+  int titleSize = shrinkTextSizeToWidth(T(S_PROGRESS), TS(5), CARD_PROGRESS_TITLE_MAXW);
+  setCur(centerX(T(S_PROGRESS), titleSize), CARD_PROGRESS_TITLE_Y);
+  printT(T(S_PROGRESS));
 
-  // large level
+  // level under the title
   char lv[10];
   snprintf(lv, sizeof(lv), T(S_LVL_FMT), pet.level());
-  ctext(lv, 5, SY(86));
+  ctext(lv, 3, CARD_PROGRESS_LEVEL_Y);
 
   // progress bar to the next level (1 level = 60 min of play)
   uint8_t into = pet.ageMinutes % MINUTES_PER_LEVEL;
-  int bx = SX(93), bw = SX(280), by = SY(158), bh = BAR_H_CARD;
+  int bx = SX(93), bw = SX(280), by = CARD_PROGRESS_BAR_Y, bh = BAR_H_CARD;
   gfx->fillRoundRect(bx, by, bw, bh, 6, UI_TRACK);
   int fw = (bw - 4) * into / MINUTES_PER_LEVEL;
   if (fw > 0) gfx->fillRoundRect(bx + 2, by + 2, fw, bh - 4, 5, UI_BAR_OK);
   char nx[32];
   snprintf(nx, sizeof(nx), T(S_NEXT_LVL_FMT), MINUTES_PER_LEVEL - into, pet.level() + 1);
   gfx->setTextColor(UI_INK);
-  ctext(nx, 2, by + SY(32), LCD_WIDTH - 2 * CARD_SIDE_MARGIN);  // clear of the page arrows
+  ctext(nx, 2, by + CARD_PROGRESS_NEXT_GAP, LCD_WIDTH - 2 * CARD_SIDE_MARGIN);  // clear of the page arrows
 
   // evolution status (these lines sit level with the page arrows)
-  gfx->setTextColor(UI_TRACK);
-  ctext(T(S_EVO_LABEL), 2, SY(230), LCD_WIDTH - 2 * CARD_SIDE_MARGIN);
+  gfx->setTextColor(UI_LABEL);
+  ctext(T(S_EVO_LABEL), 2, CARD_PROGRESS_EVO_LABEL_Y, LCD_WIDTH - 2 * CARD_SIDE_MARGIN);
   char evoBuf[32];
   const char *evo;
   uint16_t evoCol = UI_INK;
@@ -2716,13 +2883,13 @@ void renderCardProgress() {
     }
   }
   gfx->setTextColor(evoCol);
-  ctext(evo, 2, SY(256), LCD_WIDTH - 2 * CARD_SIDE_MARGIN);
+  ctext(evo, 2, CARD_PROGRESS_EVO_VALUE_Y, LCD_WIDTH - 2 * CARD_SIDE_MARGIN);
 
   // care mistakes (delay evolution)
   char ms[24];
   snprintf(ms, sizeof(ms), T(S_MISTAKES_FMT), pet.careMistakes);
   gfx->setTextColor(pet.careMistakes > 0 ? UI_BAR_BAD : UI_INK);
-  ctext(ms, 2, SY(312));
+  ctext(ms, 2, CARD_PROGRESS_MISTAKES_Y);
 }
 
 void renderCard() {
@@ -2869,9 +3036,13 @@ void keyboardTap(int16_t x, int16_t y) {
 
 // The 4x4 grid takes 393x404 px on 466x466. GAL_CELL uses the SMALLER of the
 // X/Y scale factors so the whole grid always fits on screen.
-#define GAL_CELL (SX(80) < SY(80) ? SX(80) : SY(80))
+// The round board's grid is smaller (GALLERY_CELL in boards/layout.h) so it clears
+// the close button; the thumbnails are drawn at GALLERY_THUMB_SCALE_NUM/DEN.
+#define GAL_CELL GALLERY_CELL
 #define GAL_X ((LCD_WIDTH - 4 * GAL_CELL) / 2)
-#define GAL_Y SY(84)
+#define GAL_Y GALLERY_GRID_Y
+
+void drawGalleryNavigation(bool showLeftArrow, bool showRightArrow);  // defined after renderGallery
 
 // draws a thumbnail centered in its cell; sil=true paints it in ink
 void drawThumbCell(const uint8_t *b, int x, int y, int s, bool sil, int cell) {
@@ -2893,6 +3064,30 @@ void drawThumbCell(const uint8_t *b, int x, int y, int s, bool sil, int cell) {
   }
 }
 
+// Thumbnail centered in a grid cell at the rational scale
+// GALLERY_THUMB_SCALE_NUM/DEN (pixel boundaries rounded, so no gaps between pixels)
+void drawGalleryGridThumb(const uint8_t *b, int cellX, int cellY, bool sil) {
+  uint8_t thumbWidth = b[0], thumbHeight = b[1], paletteCount = b[2];
+  const uint8_t *palette = b + 3;
+  const uint8_t *pixels = palette + paletteCount * 2;
+  int scaledWidth = thumbWidth * GALLERY_THUMB_SCALE_NUM / GALLERY_THUMB_SCALE_DEN;
+  int scaledHeight = thumbHeight * GALLERY_THUMB_SCALE_NUM / GALLERY_THUMB_SCALE_DEN;
+  int originX = cellX + (GAL_CELL - scaledWidth) / 2;
+  int originY = cellY + (GAL_CELL - scaledHeight) / 2;
+  for (int row = 0; row < thumbHeight; row++) {
+    int top = row * GALLERY_THUMB_SCALE_NUM / GALLERY_THUMB_SCALE_DEN;
+    int bottom = (row + 1) * GALLERY_THUMB_SCALE_NUM / GALLERY_THUMB_SCALE_DEN;
+    for (int column = 0; column < thumbWidth; column++) {
+      uint8_t paletteIndex = pixels[row * thumbWidth + column];
+      if (paletteIndex == 0xFF) continue;
+      int left = column * GALLERY_THUMB_SCALE_NUM / GALLERY_THUMB_SCALE_DEN;
+      int right = (column + 1) * GALLERY_THUMB_SCALE_NUM / GALLERY_THUMB_SCALE_DEN;
+      uint16_t color = sil ? INK_K : (uint16_t)(palette[paletteIndex * 2] | (palette[paletteIndex * 2 + 1] << 8));
+      gfx->fillRect(originX + left, originY + top, right - left, bottom - top, color);
+    }
+  }
+}
+
 void drawThumb(const uint8_t *b, int x, int y, int s, bool sil) {
   drawThumbCell(b, x, y, s, sil, GAL_CELL);
 }
@@ -2910,7 +3105,7 @@ void renderGallery() {
     // auto-shrinks long names (they do not fit at size 3), measuring instead of
     // counting bytes; 13 characters at size 3 are the 234 px from before.
     setSize(3);
-    int gts = (textW(head, 3) <= 234) ? 3 : 2;
+    int gts = (textW(head, 3) <= GALLERY_DETAIL_HEADER_MAXW) ? 3 : 2;
     setSize(gts);
     setCur(centerX(head, gts), gts == 3 ? SY(56) : SY(60));
     printT(head);
@@ -2919,12 +3114,9 @@ void renderGallery() {
       drawPmdActM(galleryPmd, PMD_IDLE, CX, SY(300), reg ? millis() : 0, true, !reg, 6);
     } else {
       const uint8_t *t = thumbs.get(galleryDetail);
-      if (t) drawThumb(t, CX - GAL_CELL, SY(135), 4, !reg);
+      if (t) drawThumb(t, CX - GAL_CELL / 2, SY(135), 4, !reg);
     }
-    gfx->setTextColor(UI_INK);
-    setSize(2);
-    setCur(centerX(T(S_DETAIL_BACK), 2), SY(408));
-    printT(T(S_DETAIL_BACK));
+    drawGalleryNavigation(galleryDetail > 1, galleryDetail < 151);
     gfx->flush();
     return;
   }
@@ -2948,7 +3140,7 @@ void renderGallery() {
       int x = GAL_X + c * GAL_CELL, y = GAL_Y + r * GAL_CELL;
       const uint8_t *t = thumbs.get(dex);
       if (t) {
-        drawThumb(t, x, y, 2, !pet.isRegistered(dex));
+        drawGalleryGridThumb(t, x, y, !pet.isRegistered(dex));
         if (pet.isShinyRegistered(dex)) {
           gfx->setTextColor(UI_BAR_WARN);
           setSize(2);
@@ -2971,19 +3163,78 @@ void renderGallery() {
     if (i == galleryPage) gfx->fillCircle(dotsX0 + i * SX(14), SY(436), 4, UI_INK);
     else gfx->drawCircle(dotsX0 + i * SX(14), SY(436), 3, UI_INK);
   }
+  drawGalleryNavigation(galleryPage > 0, galleryPage < 9);
   gfx->flush();
 }
 
+#pragma region Gallery navigation buttons (close X and page/species arrows)
+// Shows the species `step` positions away (+1 next, -1 previous) in the detail
+// view, if there is one: any dex 1..151 can open detail (same rule as a grid tap).
+void galleryShowNeighborSpecies(int step) {
+  int16_t neighborDex = galleryDetail + step;
+  if (neighborDex < 1 || neighborDex > 151) return;
+  galleryDetail = neighborDex;
+  galleryPage = (neighborDex - 1) / 16;  // the grid shows this species' page when going back
+  galleryPmd.load(neighborDex, pet.isShinyRegistered(neighborDex));
+}
+
+// Closes the gallery and returns to the settings menu it is opened from
+void galleryCloseToSettingsMenu() {
+  galleryOpen = false;
+  galleryDetail = 0;
+  galleryPmd.unload();
+  settingsScreen = SETTINGS_MENU;
+}
+
+// Left/right arrows (same style and hit boxes as the info card) plus the round X.
+// Arrows are hidden when there is no further page/species in that direction.
+void drawGalleryNavigation(bool showLeftArrow, bool showRightArrow) {
+  drawCloseButton(gfx, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_R, UI_INK, UI_BG_DAY);
+  if (showLeftArrow) drawPageArrow(gfx, CARD_ARROW_LEFT_CX, CARD_ARROW_CY, CARD_ARROW_SIZE, -1, UI_INK);
+  if (showRightArrow) drawPageArrow(gfx, CARD_ARROW_RIGHT_CX, CARD_ARROW_CY, CARD_ARROW_SIZE, 1, UI_INK);
+}
+
+// Returns true when the tap hit the X (closeHit = true) or a visible arrow
+// (step = -1 left / +1 right).
+bool galleryNavigationHit(int16_t x, int16_t y, bool leftArrowVisible, bool rightArrowVisible, int &step, bool &closeHit) {
+  step = 0;
+  closeHit = isTouchInsideCircle(x, y, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_HIT_R);
+  if (closeHit) return true;
+  const int16_t arrowHitTop = CARD_ARROW_CY - CARD_ARROW_HIT_H / 2;
+  if (leftArrowVisible && isTouchInsideRect(x, y, 0, arrowHitTop, CARD_ARROW_HIT_W, CARD_ARROW_HIT_H)) {
+    step = -1;
+    return true;
+  }
+  if (rightArrowVisible && isTouchInsideRect(x, y, LCD_WIDTH - CARD_ARROW_HIT_W, arrowHitTop, CARD_ARROW_HIT_W, CARD_ARROW_HIT_H)) {
+    step = 1;
+    return true;
+  }
+  return false;
+}
+#pragma endregion
+
 void galleryTap(int16_t x, int16_t y) {
-  if (galleryDetail) {  // back to the grid
+  int navigationStep;
+  bool closeHit;
+  if (galleryDetail) {
+    // Only the X returns to the grid; the arrows switch species; other taps do nothing
+    if (!galleryNavigationHit(x, y, galleryDetail > 1, galleryDetail < 151, navigationStep, closeHit)) return;
+    if (!closeHit) {
+      galleryShowNeighborSpecies(navigationStep);
+      return;
+    }
     galleryDetail = 0;
     galleryPmd.unload();
     galleryDirty = true;
     return;
   }
-  if (y < SY(72)) {  // touching the header = exit
-    galleryOpen = false;
-    galleryPmd.unload();
+  if (galleryNavigationHit(x, y, galleryPage > 0, galleryPage < 9, navigationStep, closeHit)) {
+    if (closeHit) {
+      galleryCloseToSettingsMenu();
+    } else {
+      galleryPage += navigationStep;
+      galleryDirty = true;
+    }
     return;
   }
   // same reason as in the keyboard: filter before dividing
@@ -3019,18 +3270,90 @@ void drawBattery() {
   }
 }
 
-void drawHeader(const char *name, uint16_t nameColor, const char *msg) {
-  drawBattery();
+#pragma region Header
+// Name centered on CX at the top; HDR_NAME_MAX_W leaves room for the hamburger,
+// the streak badge, the clock and the battery.
+void drawHeaderName(const char *name, uint16_t nameColor) {
   gfx->setTextColor(nameColor);
-  ctext(name, 3, HDR_NAME_Y, LCD_WIDTH - 80);   // leaves room for the battery and the streak
+  ctext(name, 3, HDR_NAME_Y, HDR_NAME_MAX_W);
   //#region Remember where the name landed (tapping it opens the info card)
   // ctext() left the size it actually used set; textW() measures with it
   headerNameWidth = textW(name, gTextSize);
   headerNameLeft = CX - headerNameWidth / 2;
   //#endregion
+}
+
+// Egg and ceremony views: name plus a message line under it
+void drawHeader(const char *name, uint16_t nameColor, const char *msg) {
+  drawBattery();
+  drawHeaderName(name, nameColor);
+  headerLevelRowWidth = 0;  // no level row here: its tap box is off
   gfx->setTextColor(inkColor());
   ctext(msg, 2, HDR_MSG_Y);
 }
+
+// Main pet view: name plus "Lv.N" and a progress bar toward the next level
+void drawHeaderWithLevel(const char *name, uint16_t nameColor) {
+  drawBattery();
+  drawHeaderName(name, nameColor);
+
+  #pragma region Level text and progress bar, centered together on CX
+  char levelText[12];
+  snprintf(levelText, sizeof(levelText), T(S_LVL_FMT), pet.level());
+  gfx->setTextColor(inkColor());
+  setSize(HDR_LVL_TEXT_SIZE);
+  int levelTextWidth = textW(levelText, HDR_LVL_TEXT_SIZE);
+  int rowWidth = levelTextWidth + HDR_LVL_GAP + HDR_LVL_BAR_W;
+  int rowLeft = CX - rowWidth / 2;
+  headerLevelRowLeft = rowLeft;  // remembered for the tap that opens the info card
+  headerLevelRowWidth = rowWidth;
+  // the row keeps its 16 px line (size 2 height); the smaller text is centered on it
+  setCur(rowLeft, HDR_MSG_Y + (16 - 8 * HDR_LVL_TEXT_SIZE) / 2);
+  printT(levelText);
+  int barLeft = rowLeft + levelTextWidth + HDR_LVL_GAP;
+  int barTop = HDR_MSG_Y + (16 - HDR_LVL_BAR_H) / 2;  // 16 = text height at size 2
+  uint32_t minutesIntoLevel = pet.ageMinutes % MINUTES_PER_LEVEL;
+  int fillWidth = (HDR_LVL_BAR_W - 4) * (int)minutesIntoLevel / MINUTES_PER_LEVEL;
+  gfx->fillRoundRect(barLeft, barTop, HDR_LVL_BAR_W, HDR_LVL_BAR_H, 4, UI_TRACK);
+  if (fillWidth > 0) gfx->fillRoundRect(barLeft + 2, barTop + 2, fillWidth, HDR_LVL_BAR_H - 4, 2, UI_BAR_OK);
+  #pragma endregion
+}
+
+// Menu button at the top left (main pet view and egg view)
+void drawHamburgerButton() {
+  drawHamburgerIcon(gfx, HAMBURGER_X, HAMBURGER_Y, HAMBURGER_W, HAMBURGER_H, inkColor());
+}
+
+// Current local time at the top right, in the format chosen on the time screen.
+// Source: pet.lastSeenEpoch, the same cache sceneHour() reads (0 = no clock yet).
+void drawHeaderClock() {
+  uint32_t epochSeconds = pet.lastSeenEpoch;
+  if (!epochSeconds) return;
+  int hour = (int)((epochSeconds / 3600) % 24);
+  int minute = (int)((epochSeconds / 60) % 60);
+  char clockText[8];
+  const char *meridiemText = "";  // "AM"/"PM" in 12h mode, one size smaller so the clock stays narrow
+  if (clockUses24Hour) {
+    snprintf(clockText, sizeof(clockText), "%02d:%02d", hour, minute);
+  } else {
+    int hourOn12HourDial = hour % 12 == 0 ? 12 : hour % 12;
+    snprintf(clockText, sizeof(clockText), "%d:%02d", hourOn12HourDial, minute);
+    meridiemText = hour >= 12 ? "PM" : "AM";
+  }
+  const int meridiemSize = HDR_TIME_SIZE - 1;
+  int meridiemWidth = meridiemText[0] ? HDR_TIME_MERIDIEM_GAP + (int)textW(meridiemText, meridiemSize) : 0;
+  int clockLeft = HDR_TIME_RIGHT - meridiemWidth - (int)textW(clockText, HDR_TIME_SIZE);
+  gfx->setTextColor(inkColor());
+  setSize(HDR_TIME_SIZE);
+  setCur(clockLeft, HDR_TIME_Y);
+  printT(clockText);
+  if (meridiemText[0]) {  // bottom-aligned with the digits (8 px per text size step)
+    setSize(meridiemSize);
+    setCur(HDR_TIME_RIGHT - (int)textW(meridiemText, meridiemSize), HDR_TIME_Y + 8 * (HDR_TIME_SIZE - meridiemSize));
+    printT(meridiemText);
+  }
+}
+#pragma endregion
 
 // ceremony animation (10s): farewell = a bow with hearts and it walks away;
 // runaway = it gets scared and runs off. Replaces the idle.
@@ -3089,7 +3412,7 @@ void drawCeremony() {
   }
   drawPmdAct(act, x, y, now, true, false, 5);
   if (pet.showHeart())                     // big heart following the creature
-    drawMap(SPR_HEART, 32, x + 50, y - 190, 2, false);
+    drawMap(SPR_HEART, 32, x + SX(50), y - SY(190), PET_HEART_SCALE, false);
 }
 
 // decision dialog (2 stacked buttons): evolve/keep or say goodbye/stay together
@@ -3384,7 +3707,7 @@ void behNext() {
   int r = random(100);
   if (r < 35 && (pmd.has(PMD_WALKL) || pmd.has(PMD_WALKR))) {
     beh.mode = 1;  // walk
-    beh.targetX = 150 + random(176);
+    beh.targetX = SX(150) + random(SX(176));  // SX(): unscaled, the CYD walked half off its 320 px screen
     beh.until = now + 15000;
   } else if (r < 60) {
     // random gesture among the available ones
@@ -3448,7 +3771,8 @@ void drawPetPMD() {
 
   drawPmdAct(act, (int)beh.x, PET_GROUND, now - beh.t0, loop || act == PMD_IDLE, false, 5);
 
-  if (pet.showHeart()) drawMap(SPR_HEART, 32, (int)beh.x + 50, PET_GROUND - 190, 2, false);
+  // SX/SY: unscaled, the CYD drew it at y -34 and only its tip showed at the top edge
+  if (pet.showHeart()) drawMap(SPR_HEART, 32, (int)beh.x + SX(50), PET_GROUND - SY(190), PET_HEART_SCALE, false);
 }
 
 // animated sprite from the SD: integer per-pixel zoom, frames at their own pace
@@ -3507,10 +3831,10 @@ void drawPoops() {
 }
 
 void drawBars() {
-  drawBar(SX(78), SY(318), T(S_BAR_FOOD), pet.fullness);
-  drawBar(SX(244), SY(318), T(S_BAR_JOY), pet.joy);
-  drawBar(SX(78), SY(346), T(S_BAR_ENE), pet.energy);
-  drawBar(SX(244), SY(346), T(S_BAR_HYG), pet.hygiene);
+  drawBar(NEEDS_LEFT_X, NEEDS_ROW1_Y, T(S_BAR_FOOD), pet.fullness);
+  drawBar(NEEDS_RIGHT_X, NEEDS_ROW1_Y, T(S_BAR_JOY), pet.joy);
+  drawBar(NEEDS_LEFT_X, NEEDS_ROW2_Y, T(S_BAR_ENE), pet.energy);
+  drawBar(NEEDS_RIGHT_X, NEEDS_ROW2_Y, T(S_BAR_HYG), pet.hygiene);
 }
 
 // Gap between the label and its bar in the needs row. It was fixed at 48 px,
@@ -3537,20 +3861,19 @@ void drawBar(int x, int y, const char *label, uint8_t val) {
   setCur(x, y);
   printT(label);
   int gap = barLabelGap();
-  // the two columns start at 78 and 244 (see SX() in drawBars): the first
-  // one's bar has to end before the second one's label, and both are drawn
-  // the same width
-  int bw = SX(232) - (SX(78) + gap);
-  int bwMax = SX(100) > 40 ? SX(100) : 40;  // proportional ceiling (100 on the round one)
-  if (bw > bwMax) bw = bwMax;
-#if !BOARD_IS_ROUND
-  if (bw < 40) bw = 40;                     // floor (CYD only): keep the bar from disappearing
-#endif
-  int bx = x + gap, bh = 15;
+  // the two columns start at NEEDS_LEFT_X / NEEDS_RIGHT_X (boards/layout.h): the
+  // first one's bar has to end NEEDS_COLUMN_SPACING before the second one's
+  // label, and both are drawn the same width
+  int bw = (NEEDS_RIGHT_X - NEEDS_LEFT_X) - gap - NEEDS_COLUMN_SPACING;
+  if (bw > NEEDS_BAR_W_MAX) bw = NEEDS_BAR_W_MAX;
+  if (bw < NEEDS_BAR_W_MIN) bw = NEEDS_BAR_W_MIN;  // floor: keep the bar from disappearing
+  const int bh = NEEDS_BAR_H;
+  int bx = x + gap;
+  int by = y + (16 - bh) / 2;  // 16 = text height at size 2: the bar is centered on its label
   uint16_t fill = (val >= 50) ? UI_BAR_OK : (val >= 25) ? UI_BAR_WARN : UI_BAR_BAD;
-  gfx->fillRoundRect(bx, y, bw, bh, 4, UI_TRACK);
+  gfx->fillRoundRect(bx, by, bw, bh, 4, UI_TRACK);
   int fw = (bw - 4) * val / 100;
-  if (fw > 0) gfx->fillRoundRect(bx + 2, y + 2, fw, bh - 4, 3, fill);
+  if (fw > 0) gfx->fillRoundRect(bx + 2, by + 2, fw, bh - 4, 3, fill);
 }
 
 void drawButtons() {
@@ -3559,7 +3882,7 @@ void drawButtons() {
     int bx = buttons[i].cx - BTN_HALF, by = buttons[i].cy - BTN_HALF;
     if (!pet.sleeping) gfx->fillRoundRect(bx, by, 2 * BTN_HALF, 2 * BTN_HALF, 14, UI_WHITE);
     gfx->drawRoundRect(bx, by, 2 * BTN_HALF, 2 * BTN_HALF, 14, inkColor());
-    if (!off) drawMap(buttons[i].icon, 16, buttons[i].cx - 16, buttons[i].cy - 16, 2, false);
+    if (!off) drawMap(buttons[i].icon, 16, buttons[i].cx - 16 + buttons[i].iconOffsetX, buttons[i].cy - 16 + buttons[i].iconOffsetY, 2, false);
   }
 }
 

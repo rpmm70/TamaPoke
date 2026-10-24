@@ -25,14 +25,13 @@ enum StrId : uint8_t {
   S_EGG_HDR, S_EGG_LEGEND, S_EGG_RARE, S_EGG_TOUCH, S_EGG_MOVES, S_EGG_ALMOST,
   // shared formats
   S_POKEDEX_FMT,   // "POKEDEX %u/151"
-  S_NAME_FMT,      // "%s%s Nv.%u"
   // release dialog
   S_RELEASE_FMT, S_YES, S_NO,
   // minigame and punching bag
   S_HITS_FMT, S_STR_GAIN_FMT, S_NEW_RECORD, S_RECORD_FMT, S_HIT_FAST,
   S_SCORE_FMT, S_GREAT_JOY, S_PLUS_JOY,
   // clock / settings
-  S_SET_TIME, S_HOUR, S_MIN, S_LANG_LABEL,
+  S_SET_TIME, S_HOUR, S_MIN,
   // celebration
   S_MEDAL_BANNER, S_GREAT, S_STREAK_DAYS_FMT,
   // info card: profile
@@ -45,7 +44,7 @@ enum StrId : uint8_t {
   // info card: medals
   S_MEDALS_FMT,
   // keyboard and gallery
-  S_NAME, S_DETAIL_BACK,
+  S_NAME,
   // bars
   S_BAR_FOOD, S_BAR_JOY, S_BAR_ENE, S_BAR_HYG,
   // live minigame scoreboard
@@ -53,8 +52,6 @@ enum StrId : uint8_t {
   // info card: progress page
   S_PROGRESS, S_LVL_FMT, S_NEXT_LVL_FMT, S_EVO_LABEL, S_FINAL_FORM,
   S_EVO_READY, S_EVO_BLOCKED, S_EVO_IN_FMT, S_MISTAKES_FMT,
-  // sound switch (settings)
-  S_SND_ON, S_SND_OFF,
   S_EVO_TAP,        // evolution button text
   S_FAREWELL_BTN,   // farewell button text (includes the name: "%s ...")
   S_RUNAWAY_BTN,    // runaway-from-neglect button text (sad ending)
@@ -62,8 +59,8 @@ enum StrId : uint8_t {
   S_EVO_Q, S_EVO_KEEP, S_FAR_Q, S_FAR_GO, S_FAR_STAY,
   S_CHOOSE_STARTER,  // title of the starter choice (first time)
   S_NO_SPRITES, S_LOAD_SPRITES,  // notice when the sprite is missing from the SD
-  // settings menu: title, the three section rows, then the row labels and toggle values
-  S_MENU_TITLE, S_MENU_AV, S_MENU_TIME, S_MENU_LANG,
+  // settings menu: title, the four section rows (Pokedex first), then the row labels and toggle values
+  S_MENU_TITLE, S_MENU_POKEDEX, S_MENU_AV, S_MENU_TIME, S_MENU_LANG,
   S_SOUND, S_BRIGHTNESS, S_ON, S_OFF,
   STR_COUNT
 };

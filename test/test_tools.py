@@ -204,7 +204,6 @@ class TestBuffersDeTexto(unittest.TestCase):
     """
 
     ARGS_S = {  # what can arrive for each %s, in order
-        'S_NAME_FMT': ('estrella', 'nombre_o_apodo'),
         'S_RELEASE_FMT': ('nombre',),
         'S_FAREWELL_BTN': ('nombre_o_apodo',),
         'S_RUNAWAY_BTN': ('nombre_o_apodo',),

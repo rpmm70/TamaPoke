@@ -16,6 +16,9 @@ void drawCloseButton(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int1
 // Small pencil (edit) icon inside the square at (left, top) of side `size`,
 // drawn diagonally from the tip (bottom-left) to the eraser (top-right).
 void drawPencilIcon(Arduino_GFX *canvas, int16_t left, int16_t top, int16_t size, uint16_t color);
+// Hamburger (menu) icon: three parallel horizontal bars with rounded ends filling
+// the box at (left, top) of `width` x `height`. Bar thickness scales with the height (minimum 2 px).
+void drawHamburgerIcon(Arduino_GFX *canvas, int16_t left, int16_t top, int16_t width, int16_t height, uint16_t color);
 // Filled triangular arrow centered on (centerX, centerY).
 // direction -1 = points left, +1 = points right; `size` = width and height of the triangle.
 void drawPageArrow(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int16_t size, int8_t direction, uint16_t color);
