@@ -1,5 +1,10 @@
 #include "rtcbat.h"
-#include "pin_config.h"  // define XPOWERS_CHIP_AXP2101
+#include "boards/board_select.h"  // (pulls in pin_config.h: defines XPOWERS_CHIP_AXP2101)
+
+#if BOARD_WAVESHARE_ROUND
+// PCF85063 (RTC) + AXP2101 (PMU/battery), specific to the Waveshare. The CYD
+// has neither: see rtcbat_cyd.cpp.
+
 #include <Wire.h>
 #include <time.h>
 #include <SensorPCF85063.hpp>
@@ -19,7 +24,7 @@ bool rtcBegin() {
 uint32_t rtcEpoch() {
   if (!rtcOk) return 0;
   RTC_DateTime t = rtc.getDateTime();
-  if (t.getYear() < 2025 || t.getYear() > 2120) return 0;  // sin hora valida
+  if (t.getYear() < 2025 || t.getYear() > 2120) return 0;  // no valid time
   struct tm tmv = {};
   tmv.tm_year = t.getYear() - 1900;
   tmv.tm_mon = t.getMonth() - 1;
@@ -27,7 +32,7 @@ uint32_t rtcEpoch() {
   tmv.tm_hour = t.getHour();
   tmv.tm_min = t.getMinute();
   tmv.tm_sec = t.getSecond();
-  time_t e = mktime(&tmv);  // TZ por defecto = UTC, consistente con gmtime_r
+  time_t e = mktime(&tmv);  // default TZ = UTC, consistent with gmtime_r
   return e > 0 ? (uint32_t)e : 0;
 }
 
@@ -46,10 +51,10 @@ bool batBegin() {
   return pmuOk;
 }
 
-// Enciende la alimentacion de la AMOLED. En la Waveshare 1.75 el panel (OLED VDD)
-// cuelga del rail BLDO1 a 3.3V del AXP2101. El firmware daba por hecho que estaba
-// encendido; si el PMU se resetea (drenaje total), BLDO1 queda OFF y la pantalla
-// se ve negra aunque el resto funcione. Hay que llamarla ANTES de gfx->begin().
+// Turns on the AMOLED power supply. On the Waveshare 1.75 the panel (OLED VDD)
+// hangs off the AXP2101's 3.3V BLDO1 rail. The firmware assumed it was on; if
+// the PMU resets (full drain), BLDO1 stays OFF and the screen looks black even
+// though everything else works. It must be called BEFORE gfx->begin().
 void pmuEnablePanel() {
   if (!pmu.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
     Serial.println("AXP2101 no detectado (pmuEnablePanel)");
@@ -59,8 +64,8 @@ void pmuEnablePanel() {
   pmu.enableBLDO1();
 }
 
-// el estado de energia (I2C) se cachea ~2 s: leerlo en cada frame del loop
-// metia trafico I2C inutil y podia oscilar (parpadeo de brillo)
+// the power state (I2C) is cached for ~2 s: reading it every loop frame added
+// pointless I2C traffic and could oscillate (brightness flicker)
 static uint32_t powerCacheT = 0;
 static int cachedPct = -1;
 static bool cachedCharging = false, cachedUsb = true;
@@ -95,3 +100,5 @@ bool pwrShortPressed() {
   if (hit) pmu.clearIrqStatus();
   return hit;
 }
+
+#endif  // BOARD_WAVESHARE_ROUND

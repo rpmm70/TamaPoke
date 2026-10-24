@@ -1,20 +1,30 @@
-// TamaPoke - tamagotchi pixel art inspirado en la gen 1
-// para Waveshare ESP32-S3-Touch-AMOLED-1.75
+// TamaPoke - pixel art tamagotchi inspired by gen 1
+// Supports TWO boards (see boards/board_select.h):
+//   - Waveshare ESP32-S3-Touch-AMOLED-1.75 (round 466x466): ORIGINAL behavior,
+//     no build flags. Instructions below.
+//   - ESP32-2432S028R "Cheap Yellow Display" / ELEGOO 2.8" (rect. 320x240): build
+//     with -D BOARD_CYD_RECT (PlatformIO: pio run -e cyd-rect). See CYD_PORT_NOTES.md
+//     for known limitations (memory, uncalibrated touch, no RTC/battery).
 //
-// Librerias (Library Manager o repo de Waveshare):
-//   - "GFX Library for Arduino" (moononournation), con soporte CO5300 QSPI
-//   - "SensorLib" (Lewis He), driver tactil CST9217
+// (Instructions for the original Waveshare board:)
 //
-// Placa: ESP32S3 Dev Module | Flash 16MB | PSRAM: OPI PSRAM | USB CDC On Boot: Enabled
+// Libraries (Library Manager or the Waveshare repo):
+//   - "GFX Library for Arduino" (moononournation), with CO5300 QSPI support
+//   - "SensorLib" (Lewis He), CST9217 touch driver
 //
-// Los sprites y la tabla de especies se generan con tools/sprites.py (emit).
+// Board: ESP32S3 Dev Module | Flash 16MB | PSRAM: OPI PSRAM | USB CDC On Boot: Enabled
+//
+// The sprites and the species table are generated with tools/sprites.py (emit).
 
 #include <Arduino.h>
 #include <Wire.h>
 #include "Arduino_GFX_Library.h"
-#include "TouchDrvCSTXXX.hpp"
-#include <U8g2lib.h>  // fuentes CJK (japones); ver applyLangFont()
-#include "pin_config.h"
+#include <U8g2lib.h>  // CJK fonts (Japanese); see applyLangFont()
+#include <Preferences.h>  // NVS: 12h/24h choice of the time screen
+#include "boards/board_select.h"  // picks the board (round Waveshare vs rect. CYD)
+#include "boards/layout.h"        // CX/CY/HORIZON/SX()/SY()/minigame area
+#include "band_canvas.h"          // CYD framebuffer split into bands (no PSRAM)
+#include "touch_hal.h"            // touch: capacitive (Waveshare) or resistive (CYD)
 #include "species.h"
 #include "dex.h"
 #include "pet.h"
@@ -22,75 +32,129 @@
 #include "rtcbat.h"
 #include "i18n.h"
 #include "audio.h"
+#include "ui_icons.h"  // close button, pencil, page arrows and their hit tests
 
-// Version del firmware. Subir este numero en cada release (y manifest.json para
-// el instalador web). Se muestra en la pantalla de ajustes y por serie al arrancar.
+// Firmware version. Bump this number on every release (and manifest.json for
+// the web installer). Shown on the settings screen and over serial at boot.
 #define FW_VERSION "1.17"
 
+#if BOARD_IS_ROUND
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
   LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
 Arduino_CO5300 *panel = new Arduino_CO5300(
   bus, LCD_RESET, 0 /*rotation*/, LCD_WIDTH, LCD_HEIGHT, 6, 0, 0, 0);
-// Framebuffer completo en PSRAM: dibujamos todo y hacemos flush() (sin parpadeo)
+// Full framebuffer in PSRAM: we draw everything and then flush() (no flicker)
 Arduino_Canvas *gfx = new Arduino_Canvas(LCD_WIDTH, LCD_HEIGHT, panel);
+#else
+// CYD: ILI9341 320x240 over 4-wire SPI on the HSPI bus (14/12/13/15), which is
+// exactly what the library assumes by default for HSPI. rotation=1 -> landscape.
+Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, TFT_MISO, HSPI);
+Arduino_ILI9341 *panel = new Arduino_ILI9341(bus, TFT_RST, 1 /*rotation*/, false /*ips*/);
+// Full framebuffer (320x240x2 = 150 KB) in INTERNAL RAM: the CYD has no PSRAM
+// and 150 KB in one piece never fits (largest free block ~110 KB), so
+// BandCanvas splits it into 64-row bands (see band_canvas.h). If even the bands
+// do not fit, setup() falls back to drawing directly on the panel (gfx = panel;
+// works but flickers). The base type Arduino_GFX* is used so they can be
+// swapped; flush() is virtual in the base.
+static BandCanvas *fbCanvas = new BandCanvas(LCD_WIDTH, LCD_HEIGHT, panel);
+Arduino_GFX *gfx = fbCanvas;
+#endif
 
-TouchDrvCST92xx touch;
-// fuente CJK activa: de momento siempre false, la carga llegara con el
-// soporte de japones/coreano/chino (ver PR #13)
+// Brightness: on the CO5300 the panel itself controls it; on the CYD it is the backlight (PWM)
+static void boardSetBrightness(uint8_t v) {
+#if BOARD_IS_ROUND
+  panel->setBrightness(v);
+#else
+  ledcWrite(TFT_BL, v);  // per-pin ledc API (ESP32 Arduino core 3.x)
+#endif
+}
+
+// Full-screen background. On the round one it is a circle with the bezel's
+// radius (231 px); on a rectangular one there is no bezel to mimic: fill everything.
+inline void fillScreenBg(uint16_t color) {
+#if BOARD_IS_ROUND
+  gfx->fillCircle(CX, CY, 231, color);
+#else
+  gfx->fillScreen(color);
+#endif
+}
+// active CJK font: always false for now, loading will come with
+// Japanese/Korean/Chinese support (see PR #13)
 bool gCjkFont = false;
-#define TOUCH_ADDR 0x5A  // CST9217
 Pet pet;
 
-// sprite animado de la SD para la especie actual (si existe el archivo)
-SdMon mon;          // sprite B/N (respaldo y minijuego si no hay PMD)
-PmdMon pmd;         // sprite PMD multi-accion (pantalla principal)
-PmdMon evoPmd;      // forma anterior, solo durante el parpadeo de evolucion
+// animated sprite from the SD for the current species (if the file exists)
+SdMon mon;          // B/W sprite (fallback and minigame if there is no PMD)
+PmdMon pmd;         // multi-action PMD sprite (main screen)
+PmdMon evoPmd;      // previous form, only during the evolution flashing
 int16_t monFor = -2;
 bool monShinyFor = false;
 
-// comportamiento del bicho en pantalla
+// on-screen creature behavior
 struct {
-  uint8_t mode = 0;     // 0 idle, 1 paseo, 2 gesto one-shot
+  uint8_t mode = 0;     // 0 idle, 1 walk, 2 one-shot gesture
   uint8_t act = PMD_IDLE;
-  uint32_t t0 = 0;      // inicio de la animacion en curso
-  uint32_t until = 0;   // fin del estado actual
-  float x = 233, targetX = 233;
+  uint32_t t0 = 0;      // start of the current animation
+  uint32_t until = 0;   // end of the current state
+  float x = CX, targetX = CX;
 } beh;
-#define PET_GROUND 304  // linea de suelo de la mascota
-PmdMon galleryPmd;  // sprite grande de la vista detalle de la galeria (PMD/TPK2, legal)
+#define PET_GROUND SY(304)  // the pet's ground line
+PmdMon galleryPmd;  // large sprite for the gallery detail view (PMD/TPK2, license-compliant)
 
-// galeria pokedex
+// pokedex gallery
 bool galleryOpen = false;
 bool galleryDirty = false;
-int galleryPage = 0;        // 10 paginas de 16
-int16_t galleryDetail = 0;  // dex en vista detalle, 0 = rejilla
+int galleryPage = 0;        // 10 pages of 16
+int16_t galleryDetail = 0;  // dex in detail view, 0 = grid
 
-bool screenOff = false;       // pulsacion corta del boton PWR
-bool cardOpen = false;        // ficha del bicho (deslizar vertical)
-bool kbOpen = false;          // teclado para renombrar al bicho
+bool screenOff = false;       // short press of the PWR button
+bool cardOpen = false;        // creature info card (tap the name on the main screen)
+bool kbOpen = false;          // keyboard to rename the creature
 char nameBuf[12] = "";
 uint8_t nameLen = 0;
-uint8_t cardPage = 0;         // 0 perfil, 1 stats+medallas
-bool clockOpen = false;       // pantalla de ajuste de hora (deslizar abajo)
-int clockH = 12, clockM = 0;  // hora en edicion
+uint8_t cardPage = 0;         // 0 profile, 1 stats, 2 medals, 3 progress
+#define CARD_PAGE_COUNT 4
+//#region Hit boxes recorded while drawing (the touch code reads them)
+int16_t headerNameLeft = 0, headerNameWidth = 0;  // name in drawHeader(): tap = info card
+int16_t cardPencilLeft = 0, cardPencilTop = 0;    // rename pencil on card page 0
+int16_t cardPencilSize = 0;                       // 0 = not drawn yet
+//#endregion
+#pragma region Settings screens state
+// Settings menu (swipe down) and its sub-screens. Only one is open at a time;
+// SETTINGS_CLOSED = main screen. The X button is the only way out (swipes are ignored).
+enum SettingsScreen : uint8_t {
+  SETTINGS_CLOSED,
+  SETTINGS_MENU,
+  SETTINGS_AUDIO_VIDEO,
+  SETTINGS_TIME,
+  SETTINGS_LANGUAGE
+};
+SettingsScreen settingsScreen = SETTINGS_CLOSED;
+int clockH = 12, clockM = 0;  // time being edited (always 0..23, also in 12h mode)
+bool clockUses24Hour = true;  // time screen display format, persisted in NVS
+// Brightness slider: in-memory only, not persisted. The backlight hookup is
+// pending (boardSetBrightness() is still driven only by the dimming logic).
+#define SETTINGS_BRIGHTNESS_MAX 10
+uint8_t settingsBrightnessLevel = SETTINGS_BRIGHTNESS_MAX;
+#pragma endregion
 
-// escena de bano: espuma sobre el bicho y limpieza al reventar
+// bath scene: foam over the creature and cleanup when it pops
 uint32_t bathUntil = 0;
 bool bathPending = false;
 struct { int16_t x, y; uint8_t r, ph; } bubbles[14];
-uint32_t feedMenuUntil = 0;   // selector de comida abierto hasta este millis
+uint32_t feedMenuUntil = 0;   // food picker open until this millis
 
-// minijuego "toques": mantener la pokeball en el aire
+// "keepy-uppy" minigame: keep the pokeball in the air
 bool gameOpen = false;
 uint32_t gameOverUntil = 0;
 float ballX, ballY, ballVX, ballVY, gamePetX;
-uint32_t lastGameStep = 0;  // ultima llamada a stepGame(): fisica por tiempo real, no por frame
+uint32_t lastGameStep = 0;  // last stepGame() call: physics by real time, not per frame
 uint8_t gameScore, gameMisses;
-float hitX, hitY;             // ultimo golpe (anillo de impacto)
+float hitX, hitY;             // last hit (impact ring)
 uint32_t hitTime = 0;
 bool gameNewHi = false;
 
-// saco de entrenamiento (entrena la fuerza)
+// training bag (trains strength)
 bool sackOpen = false;
 uint32_t sackUntil = 0, sackOverUntil = 0;
 uint16_t sackHits = 0;
@@ -98,133 +162,160 @@ float sackShake = 0;
 uint8_t sackGain = 0;
 bool sackNewHi = false;
 
-// las 9 especies con sprite propio en flash (respaldo sin SD): dex -> indice
+// the 9 species with their own sprite in flash (fallback without SD): dex -> index
 int flashIdxForDex(int16_t dex) {
   static const int8_t IDX[10] = { -1, 3, 4, 5, 0, 1, 2, 6, 7, 8 };
   return (dex >= 1 && dex <= 9) ? IDX[dex] : -1;
 }
 
-#define CX 233  // centro de la pantalla redonda
-#define CY 233
-#define PET_CY 202  // centro vertical del sprite
+// CX/CY/HORIZON live in boards/layout.h (derived from the board)
+#define PET_CY SY(202)  // vertical center of the sprite
 
 static const uint16_t INK_K = 0x18C4;  // spriteColor('k')
 
-// botones de icono siguiendo el arco inferior de la pantalla redonda
-// (los exteriores van mas altos para no salirse del circulo)
+// icon buttons following the lower arc of the round screen (the outer ones
+// sit higher so they do not stick out of the circle). On a rectangular
+// board they go in a straight row spread near the bottom edge.
 struct Btn {
   int16_t cx, cy;
   const char *const *icon;
 };
+#if BOARD_IS_ROUND
 Btn buttons[4] = {
-  { 140, 390, SPR_ICON_FOOD },   // comer
-  { 202, 404, SPR_ICON_PLAY },   // jugar
-  { 264, 404, SPR_ICON_LIGHT },  // luz
-  { 326, 390, SPR_ICON_CLEAN },  // bano
+  { 140, 390, SPR_ICON_FOOD },   // eat
+  { 202, 404, SPR_ICON_PLAY },   // play
+  { 264, 404, SPR_ICON_LIGHT },  // light
+  { 326, 390, SPR_ICON_CLEAN },  // bath
 };
-#define BTN_HALF 26  // boton de 52x52
-#define BTN_HIT 36   // radio tactil (un poco mas generoso)
+#else
+Btn buttons[4] = {
+  { (int16_t)(LCD_WIDTH * 1 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_FOOD },
+  { (int16_t)(LCD_WIDTH * 3 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_PLAY },
+  { (int16_t)(LCD_WIDTH * 5 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_LIGHT },
+  { (int16_t)(LCD_WIDTH * 7 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_CLEAN },
+};
+#endif
+// a single #define: PlatformIO's .ino conversion (-fpreprocessed -dD) sees both
+// #if branches and would warn about a redefinition
+#define BTN_HALF (BOARD_IS_ROUND ? 26 : 18)  // 52x52 button; smaller on the rect board (much shorter screen)
+#define BTN_HIT 36   // touch radius (a bit more generous)
 
-// grietas del huevo (pixeles 'k' sobre el sprite)
+// egg cracks ('k' pixels over the sprite)
 static const uint8_t CRACK1[][2] = { {15,8},{16,9},{15,10} };
 static const uint8_t CRACK2[][2] = { {11,13},{12,14},{11,15},{20,12},{19,13},{20,14} };
-// estrellas del modo noche
-static const uint16_t STARS[][2] = { {120,140},{330,120},{370,210},{95,230},{280,90},{160,95} };
+//#region Night mode stars
+// x/y in 466-space (scaled with SX/SY), size in px drawn literally,
+// brightness 0-16 (16 = full white, lower = lerp565 toward the local sky)
+struct NightStar { uint16_t x, y; uint8_t size, brightness; };
+static const NightStar STARS[] = {
+  {120, 140, 4, 16}, {330, 130, 4, 16}, {385, 190, 2, 10}, { 75, 205, 2,  9},
+  {275,  95, 3, 14}, {170, 100, 2, 16}, { 68, 125, 3, 12}, {410, 140, 2, 12},
+  {225, 105, 2,  9}, {300, 170, 2,  8}, {235, 160, 3, 13}, {160, 185, 2, 11},
+  {432, 205, 2,  8}, {112,  92, 2, 10},
+};
+// these stars dim to STAR_TWINKLE_DIM_BRIGHTNESS for one step out of every
+// STAR_TWINKLE_CYCLE_STEPS, offset per star so they never dim together
+static const uint8_t STAR_TWINKLE_INDICES[] = { 5, 7, 11 };
+static const uint32_t STAR_TWINKLE_STEP_MS = 400;
+static const uint8_t STAR_TWINKLE_CYCLE_STEPS = 7;
+static const uint8_t STAR_TWINKLE_DIM_BRIGHTNESS = 5;
+//#endregion
 
 bool wasPressed = false;
-// eleccion de inicial (primera partida): Bulbasaur / Charmander / Squirtle, 3 filas
+// starter choice (first game): Bulbasaur / Charmander / Squirtle, 3 rows
 static const int16_t STARTER_DEX[3] = { 1, 4, 7 };
-#define STARTER_ROW_Y 110
-#define STARTER_ROW_H 70
-#define STARTER_ROW_GAP 8
-// boton-CTA de evolucion (centrado, mitad de pantalla)
-#define EVO_BTN_W 256
-#define EVO_BTN_H 64
-#define EVO_BTN_X (CX - EVO_BTN_W / 2)
-#define EVO_BTN_Y 172
-// boton-CTA de despedida (mas ancho: lleva el nombre + frase)
-#define FAR_BTN_W 408
-#define FAR_BTN_H 58
-#define FAR_BTN_X (CX - FAR_BTN_W / 2)
-#define FAR_BTN_Y 176
-// el CST9217 avisa por el pin INT cuando hay datos tactiles; lo usamos para no
-// leer el bus I2C mientras el chip esta dormido (esa lectura se colgaba ~1s)
-volatile bool gTouchIrq = false;
-void IRAM_ATTR touchIsr() { gTouchIrq = true; }
+// STARTER_*, EVO_BTN_*, FAR_BTN_* and the rest of the menu boxes: boards/layout.h
+// (a single definition for both drawing and touch detection)
+void ctext(const char *s, int n, int y, int maxW = 0);
+void drawThumbCell(const uint8_t *b, int x, int y, int s, bool sil, int cell);
+int fitSize(const char *s, int n, int maxW);  // centered text (defined next to centerX)
+// PlatformIO does not generate the prototype for functions returning 'const char *'
+const char *eggMsg();
+const char *statusMsg();
+// the CST9217 signals on the INT pin when touch data is available; we use it to
+// avoid reading the I2C bus while the chip is asleep (that read hung for ~1s)
+// gTouchIrq/touchIsr (CST9217) and the XPT2046 polling live in touch_hal_*.cpp
 uint32_t lastRender = 0;
-// proteccion del AMOLED: atenuado por inactividad
+// AMOLED protection: dimming on inactivity
 uint32_t lastInteract = 0;
-uint8_t dimStage = 0;        // 0 despierto, 1 atenuado (90s), 2 casi apagado (5min)
-bool swallowGesture = false; // el toque que despierta no acciona nada
-uint32_t holdStart = 0;     // pulsacion larga sobre el bicho
-uint32_t confirmUntil = 0;  // dialogo "soltar?" activo hasta este millis
-uint8_t choiceKind = 0;     // dialogo de decision: 0 ninguno, 1 evolucion, 2 despedida
-uint32_t choiceUntil = 0;   // se cierra solo a este millis
-int16_t tX0, tY0, tXl, tYl; // gesto en curso (inicio y ultima posicion)
+uint8_t dimStage = 0;        // 0 awake, 1 dimmed (90s), 2 nearly off (5min)
+bool swallowGesture = false; // the wake-up touch does not trigger anything
+uint32_t holdStart = 0;     // long press on the creature
+uint32_t confirmUntil = 0;  // "release?" dialog active until this millis
+uint8_t choiceKind = 0;     // decision dialog: 0 none, 1 evolution, 2 farewell
+uint32_t choiceUntil = 0;   // closes on its own at this millis
+int16_t tX0, tY0, tXl, tYl; // gesture in progress (start and last position)
 uint32_t tStart = 0;
 bool holdFired = false;
 
 void setup() {
-  Serial.setRxBufferSize(8192);  // la transferencia a SD llega en bloques de 2 KB
+  Serial.setRxBufferSize(8192);  // the SD transfer arrives in 2 KB blocks
   Serial.begin(115200);
-  // CRITICO: sin esto, Serial.print BLOQUEA el juego cuando no hay un
-  // monitor serie abierto en el host (el bufer TX del USB CDC se llena
-  // y nadie lo vacia) -> con timeout 0 los mensajes se descartan
-  Serial.setTxTimeoutMs(0);
+  // CRITICAL: without this, Serial.print BLOCKS the game when no serial
+  // monitor is open on the host (the USB CDC TX buffer fills up and nobody
+  // drains it) -> with timeout 0 the messages are dropped
+#if BOARD_IS_ROUND
+  Serial.setTxTimeoutMs(0);  // USB CDC only (S3); the CYD uses UART, whose TX does drain
+#endif
   Serial.printf("TamaPoke fw v%s\n", FW_VERSION);
-  loadLang();  // idioma guardado (ES por defecto)
+  loadLang();  // saved language (ES by default)
+  loadClockFormatFromNvs();  // 12h/24h choice of the time screen
+#if BOARD_WAVESHARE_ROUND
   Wire.begin(IIC_SDA, IIC_SCL);
-  // CST9217 (tactil), AXP2101 (PMU) y PCF85063 (RTC) comparten este bus I2C.
-  // Red de seguridad para PMU/RTC (SensorLib NO respeta este timeout en el
-  // tactil; el cuelgue del tactil dormido se resuelve gateando por INT, ver
+  // CST9217 (touch), AXP2101 (PMU) and PCF85063 (RTC) share this I2C bus.
+  // Safety net for PMU/RTC (SensorLib does NOT honor this timeout for the
+  // touch; the sleeping-touch hang is solved by gating on INT, see
   // handleTouch).
   Wire.setTimeOut(50);
+#endif  // the CYD does not use I2C
 
-  // CRITICO: encender la alimentacion del panel (BLDO1=OLED VDD 3.3V) ANTES de
-  // inicializar el display. Si el PMU se reseteo (drenaje total), este rail
-  // queda OFF y la pantalla se ve negra aunque el resto de la placa funcione.
+  // CRITICAL: turn on the panel power (BLDO1=OLED VDD 3.3V) BEFORE initializing
+  // the display. If the PMU reset (full drain), this rail stays OFF and the
+  // screen looks black even though the rest of the board works.
   pmuEnablePanel();
 
-  // QSPI a 80MHz (por defecto 40): el flush del framebuffer es el cuello de
-  // botella del fps (~56ms a 40MHz). Si el panel mostrara basura, bajar a 40M.
+  // QSPI at 80MHz (default 40): the framebuffer flush is the fps bottleneck
+  // (~56ms at 40MHz). If the panel shows garbage, drop back to 40M.
+#if BOARD_IS_ROUND
   if (!gfx->begin(80000000)) Serial.println("gfx->begin() fallo");
-  panel->setBrightness(180);
-  applyLangFont();  // fuente del idioma guardado (clasica salvo CJK)
+  boardSetBrightness(180);
+#else
+  ledcAttach(TFT_BL, 5000, 8);
+  boardSetBrightness(0);  // no white flash until there is an image
+  if (!panel->begin(40000000)) Serial.println("gfx->begin() fallo");  // 40 MHz: ILI9341's reliable maximum
+  Serial.printf("CYD heap: libre=%u mayor_bloque=%u (framebuffer necesita %u)\n",
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
+                (unsigned)(LCD_WIDTH * LCD_HEIGHT * 2));
+  // the panel is already initialized: GFX_SKIP_OUTPUT_BEGIN only allocates the
+  // bands, and if they do not fit it draws straight to the panel
+  bool useCanvas = fbCanvas->begin(GFX_SKIP_OUTPUT_BEGIN);
+  gfx = useCanvas ? (Arduino_GFX *)fbCanvas : (Arduino_GFX *)panel;
+  if (useCanvas) Serial.printf("CYD: framebuffer en bandas OK, heap libre=%u\n", (unsigned)ESP.getFreeHeap());
+  else Serial.println("CYD: framebuffer NO cabe -> dibujo directo (parpadeo)");
+  boardSetBrightness(180);
+#endif
+  applyLangFont();  // font for the saved language (classic unless CJK)
 
-  touch.setPins(TP_RESET, TP_INT);
-  bool touchOk = false;
-  for (int i = 0; i < 3 && !touchOk; i++) {  // a veces falla al primer intento
-    touchOk = touch.begin(Wire, 0x5A, IIC_SDA, IIC_SCL);
-    if (!touchOk) delay(150);
-  }
-  if (!touchOk) Serial.println("CST9217 no detectado");
-  // begin() deja el chip en modo comando (lee la identidad y no sale);
-  // hace falta un reset por hardware para que vuelva a reportar toques
-  touch.reset();
-  touch.setMaxCoordinates(LCD_WIDTH, LCD_HEIGHT);
-  touch.setMirrorXY(true, true);  // el panel esta montado girado 180 grados
-  // INT activo-bajo: salta cuando hay datos. Gatea las lecturas I2C (ver loop)
-  pinMode(TP_INT, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(TP_INT), touchIsr, FALLING);
+  touchHalBegin();
 
   pet.begin();
   sdBegin();
   thumbs.load();
 
-  // reloj real: aplica el tiempo que estuvo apagado
+  // real clock: applies the time it was powered off
   rtcBegin();
   batBegin();
   pwrSetup();
   uint32_t e = rtcEpoch();
   if (e == 0) {
-    // Sin pila de respaldo, el PCF85063 pierde la hora al cortar la
-    // alimentacion. Sembrar siempre la fecha fija haria RETROCEDER el tiempo de
-    // juego respecto a lo ya guardado, y eso rompe la racha, la edad y la hora
-    // de la escena. Se siembra con la ultima hora vista, si es posterior, para
-    // que el tiempo no vaya nunca hacia atras. Los minutos apagado se pierden
-    // igual (sin RTC no hay forma de saberlos), pero nada se descuadra.
-    uint32_t seed = 1767225600UL;             // RTC virgen de verdad
-    uint32_t seen = pet.savedEpoch();         // usa la NVS que pet ya tiene abierta
+    // Without a backup cell, the PCF85063 loses the time when power is cut.
+    // Always seeding a fixed date would make game time go BACKWARDS relative
+    // to what was already saved, and that breaks the streak, the age and the
+    // scene's time of day. It is seeded with the last time seen, if later, so
+    // time never goes backwards. The minutes spent off are lost anyway
+    // (without an RTC there is no way to know them), but nothing gets out of sync.
+    uint32_t seed = 1767225600UL;             // truly blank RTC
+    uint32_t seen = pet.savedEpoch();         // uses the NVS pet already has open
     if (seen > seed) seed = seen;
     rtcSetEpoch(seed);
     e = rtcEpoch();
@@ -233,28 +324,28 @@ void setup() {
   }
   pet.syncClock(e);
 
-  audioBegin();  // ES8311 + I2S + amplificador (suena un jingle de arranque)
+  audioBegin();  // ES8311 + I2S + amplifier (plays a startup jingle)
 
   lastInteract = millis();
 }
 
-// carga/descarga el sprite de SD cuando cambia la especie
+// loads/unloads the SD sprite when the species changes
 void ensureMon() {
   if (pet.speciesId == monFor && monShinyFor == pet.shiny && !sdDirty) return;
-  // los ficheros recien recibidos pueden incluir un thumbs.bin nuevo, que se
-  // cargaba solo en setup(): sin esto no se veia en la galeria hasta reiniciar
+  // freshly received files may include a new thumbs.bin, which was only
+  // loaded in setup(): without this it did not show in the gallery until a reboot
   if (sdDirty) { thumbs.unload(); thumbs.load(); }
   sdDirty = false;
   monFor = pet.speciesId;
   monShinyFor = pet.shiny;
   mon.unload();
   pmd.unload();
-  beh.x = beh.targetX = 233;
+  beh.x = beh.targetX = CX;
   beh.mode = 0;
   beh.until = 0;
   if (pet.speciesId >= 1 && pet.speciesId <= DEX_COUNT) {
-    pmd.load(pet.speciesId, pet.shiny);          // principal: PMD
-    if (!pmd.loaded) mon.load(pet.speciesId, pet.shiny);  // respaldo: B/N
+    pmd.load(pet.speciesId, pet.shiny);          // main: PMD
+    if (!pmd.loaded) mon.load(pet.speciesId, pet.shiny);  // fallback: B/W
   }
 }
 
@@ -262,18 +353,18 @@ void loop() {
   uint32_t now = millis();
   pet.update(now);
 
-  // el amplificador sigue al estado de sueno (la llamada sale sola si no cambia).
-  // Aqui cubre todas las vias: el boton de luz, el sueno nocturno y el que llega
-  // aplicado desde la progresion offline.
+  // the amplifier follows the sleep state (the call returns early if unchanged).
+  // Here it covers every path: the light button, night sleep and sleep that
+  // arrives applied from offline progression.
   audioSetSleeping(pet.sleeping);
 
-  // avisa con un sonido cuando el bicho pasa a estar listo para evolucionar
-  // (incluye el caso de cumplir al despertar). canEvolveNow es false durmiendo.
+  // plays a sound when the creature becomes ready to evolve (including the
+  // case where it qualifies on waking up). canEvolveNow is false while asleep.
   static bool wasEvoReady = false;
   bool evoReady = pet.wantEvolveButton();
   if (evoReady && !wasEvoReady) sfxPlay(SFX_MEDAL);
   wasEvoReady = evoReady;
-  // aviso sombrio cuando el bicho esta a punto de escaparse por abandono
+  // somber warning when the creature is about to run away from neglect
   static bool wasRunReady = false;
   bool runReady = pet.canRunawayNow();
   if (runReady && !wasRunReady) sfxPlay(SFX_DENY);
@@ -283,7 +374,7 @@ void loop() {
   handleSerial();
   ensureMon();
 
-  // pulsacion corta del PWR: pantalla on/off
+  // short PWR press: screen on/off
   static uint32_t lastPwr = 0;
   if (now - lastPwr > 250) {
     lastPwr = now;
@@ -295,16 +386,16 @@ void loop() {
 
   updateBrightness(now);
 
-  // vuelca el autoguardado periodico SOLO con la pantalla atenuada/apagada o
-  // durmiendo: la escritura a NVS congela ~1s ambos cores (caché de flash off),
-  // y aqui no hay animacion que se corte ni dedo esperando respuesta. Con 90s
-  // de inactividad la pantalla ya atenua, asi que se vuelca enseguida; el uso
-  // activo persiste igual por los guardados de cada accion (comer/jugar/...).
+  // flushes the periodic autosave ONLY with the screen dimmed/off or while
+  // sleeping: writing to NVS freezes both cores for ~1s (flash cache off), and
+  // here there is no animation to interrupt nor a finger waiting for a response.
+  // After 90s of inactivity the screen already dims, so it flushes right away;
+  // active use still persists through each action's saves (eat/play/...).
   if (pet.savePending() && (screenOff || dimStage >= 1 || pet.sleeping)) {
     pet.flushSave();
   }
 
-  // anota la hora real cada 30 s (se persiste en cada save del juego)
+  // records the real time every 30 s (persisted on every game save)
   static uint32_t lastClock = 0;
   if (now - lastClock > 30000) {
     lastClock = now;
@@ -312,7 +403,7 @@ void loop() {
     if (e) pet.lastSeenEpoch = e;
   }
 
-  // latido de salud cada 5 min (para el soak test; se descarta si no hay monitor)
+  // health heartbeat every 5 min (for the soak test; dropped if no monitor is attached)
   static uint32_t lastHealth = 0;
   if (now - lastHealth > 300000) {
     lastHealth = now;
@@ -322,24 +413,24 @@ void loop() {
                   usbPresent() ? 1 : 0, dimStage, screenOff ? 1 : 0);
   }
 
-  // 85 ms en juego/saco: margen seguro para que el redibujado no pise el envio
-  // DMA del frame anterior (a 40-65 ms solapaba y causaba flashes negros; con
-  // sprites grandes el dibujo tarda mas, asi que se deja colchon)
-  // Con la pantalla apagada no se dibuja: a brillo 0 no se ve nada, pero el
-  // redibujado y el flush DMA del framebuffer de 466x466 seguian corriendo a
-  // 10 fps, y medido son 70 ms de trabajo por cada 100 (46 de ellos solo el
-  // volcado). Es la mayor carga evitable de la placa. Cada render repinta la
-  // escena entera, asi que no queda nada a medias; y al quedarse lastRender
-  // congelado, el primer frame tras despertar sale en el acto.
+  // 85 ms in game/bag: safe margin so the redraw does not stomp on the previous
+  // frame's DMA transfer (at 40-65 ms it overlapped and caused black flashes;
+  // with big sprites drawing takes longer, so some slack is left)
+  // Nothing is drawn with the screen off: at brightness 0 nothing is visible,
+  // but the redraw and DMA flush of the 466x466 framebuffer kept running at
+  // 10 fps, and measured that is 70 ms of work out of every 100 (46 of them just
+  // the flush). It is the board's biggest avoidable load. Each render repaints
+  // the whole scene, so nothing is left half-done; and since lastRender stays
+  // frozen, the first frame after waking comes out immediately.
   if (!screenOff && now - lastRender >= (uint32_t)((gameOpen || sackOpen) ? 85 : 100)) {
     lastRender = now;
     render();
   }
 }
 
-// brillo segun sueno + inactividad (proteccion del AMOLED)
+// brightness based on sleep + inactivity (AMOLED protection)
 void updateBrightness(uint32_t now) {
-  // los eventos visibles despiertan la pantalla solos
+  // visible events wake the screen on their own
   if (pet.evolving() || pet.ceremony || pet.eating() || pet.showHeart()) {
     lastInteract = now;
   }
@@ -352,11 +443,11 @@ void updateBrightness(uint32_t now) {
   static uint8_t current = 255;
   if (target != current) {
     current = target;
-    panel->setBrightness(target);
+    boardSetBrightness(target);
   }
 }
 
-// ---------- consola serie (provision de SD + depuracion) ----------
+// ---------- serial console (SD provisioning + debugging) ----------
 
 void handleSerial() {
   if (!Serial.available()) return;
@@ -385,7 +476,7 @@ void handleSerial() {
     pet.setClock(e);
     Serial.printf("rtc=%u\n", rtcEpoch());
     Serial.println("DONE");
-  } else if (line.startsWith("RTCSET ")) {  // solo RTC (simular apagados en pruebas)
+  } else if (line.startsWith("RTCSET ")) {  // RTC only (simulate power-offs in testing)
     rtcSetEpoch((uint32_t)line.substring(7).toInt());
     Serial.printf("rtc=%u\n", rtcEpoch());
     Serial.println("DONE");
@@ -399,14 +490,14 @@ void handleSerial() {
     if (!galleryOpen) galleryPmd.unload();
     Serial.println("DONE");
   } else if (line == "EGGS") {
-    // simula 20 tiradas de huevo (no cambia el estado del juego)
+    // simulates 20 egg rolls (does not change the game state)
     for (int i = 0; i < 20; i++) {
       int16_t d = pet.pickEggSpecies();
       Serial.printf("%d:%s(r%u) ", d, DEX_TBL[d].name, DEX_TBL[d].rarity);
     }
     Serial.println();
     Serial.println("DONE");
-  } else if (line == "SHINY") {  // alterna shiny del actual (pruebas)
+  } else if (line == "SHINY") {  // toggles shiny on the current one (testing)
     pet.shiny = !pet.shiny;
     Serial.printf("shiny=%d\n", pet.shiny);
     Serial.println("DONE");
@@ -414,7 +505,7 @@ void handleSerial() {
     pet.rename(line.substring(5).c_str());
     Serial.printf("nick=%s\n", pet.nick);
     Serial.println("DONE");
-  } else if (line == "CAREDAY") {  // simula un dia nuevo cuidado (pruebas)
+  } else if (line == "CAREDAY") {  // simulates a new day of care (testing)
     pet.setClock(pet.lastSeenEpoch + 86400);
     pet.caress();
     Serial.printf("streak=%u bond=%u medals=0x%X\n", pet.streak, pet.bond, pet.medals);
@@ -426,13 +517,13 @@ void handleSerial() {
     pet.startRunaway();
     Serial.println("DONE");
   } else if (line == "BEEP") {
-    sfxPlay(SFX_HATCH);  // prueba de audio
+    sfxPlay(SFX_HATCH);  // audio test
     Serial.println("DONE");
   } else if (line == "ABANDON") {
-    pet.dbgRunawayReady();  // fuerza el estado "lista para escaparse" (test del boton)
+    pet.dbgRunawayReady();  // forces the "ready to run away" state (button test)
     Serial.println("DONE");
   } else if (line == "WIPE") {
-    pet.factoryReset();     // borra NVS y reinicia -> partida nueva (eleccion de inicial)
+    pet.factoryReset();     // wipes NVS and reboots -> new game (starter choice)
     Serial.println("DONE");
     delay(100);
     ESP.restart();
@@ -452,7 +543,7 @@ void handleSerial() {
                   pet.speciesId, pet.level(), pet.fullness, pet.joy, pet.energy,
                   pet.hygiene, pet.careMistakes, sdReady, mon.loaded,
                   batPercent(), usbPresent(), rtcEpoch());
-    Serial.printf("peso=%u fue=%u def=%u vel=%u genes=%u/%u/%u tr=%u/%u/%u baya=%d\n",
+    Serial.printf("peso=%u fue=%u def=%u vel=%u genes=%u/%u/%u tr=%u/%u/%u comida=%d\n",
                   pet.weight, pet.atkStat(), pet.defStat(), pet.speStat(),
                   pet.geneAtk, pet.geneDef, pet.geneSpe,
                   pet.trAtk, pet.trDef, pet.trSpe, pet.berryKnown);
@@ -463,106 +554,89 @@ void handleSerial() {
   }
 }
 
-// ---------- entrada tactil ----------
+// ---------- touch input ----------
 
 bool inPetZone(int16_t x, int16_t y) {
-  return x > 110 && x < 356 && y > 95 && y < 310;
+  return x > SX(110) && x < SX(356) && y > SY(95) && y < SY(310);
 }
 
-// el toque se resuelve al LEVANTAR el dedo para distinguir tap de deslizar
+// the touch is resolved when the finger LIFTS, to tell a tap from a swipe
 void handleTouch() {
   static uint32_t lastPoll = 0;
-  if (millis() - lastPoll < 20) return;  // 50 Hz le sobra a un dedo
+  if (millis() - lastPoll < 20) return;  // 50 Hz is plenty for a finger
   lastPoll = millis();
-  // solo tocamos el bus si el chip aviso por INT o si el dedo sigue abajo (hay
-  // que detectar el levantamiento). Leer el CST9217 dormido se colgaba ~1s y
-  // congelaba el loop entero; SensorLib no respeta el timeout de Wire.
-  if (!gTouchIrq && !wasPressed) return;
-  gTouchIrq = false;
-  // Un ciclo de solo direccion antes de leer. Sin esto, getPoint() se colgaba
-  // exactamente 1000 ms (el timeout por defecto del driver I2C, que SensorLib no
-  // acota) y congelaba el loop entero: es lo que se percibia como "el minijuego
-  // se congela 2-3 segundos al tocar la bola" (issue #16), porque ahi los toques
-  // son rapidos y seguidos.
-  //
-  // Medido en placa, jugando lo mismo (~470 lecturas, marcador ~50):
-  //   sin esta linea: 5 parones de 1000 ms en 60 s
-  //   con ella:       0
-  // El contador de rechazos salio 0 en ambos casos, asi que NO funciona
-  // saltandose lecturas cuando el chip no contesta: lo que hace es despertarlo,
-  // para que la lectura siguiente no se encuentre el CST9217 dormido.
-  Wire.beginTransmission(TOUCH_ADDR);
-  if (Wire.endTransmission() != 0) return;  // no responde: se reintenta en 20 ms
+  // we only touch the bus if the chip signaled on INT or if the finger is still
+  // down (the lift has to be detected). Reading the sleeping CST9217 hung ~1s
+  // and froze the whole loop; SensorLib does not honor the Wire timeout.
+  // (the INT gating and the CST9217 anti-hang "address-only cycle" now live
+  // in touch_hal_waveshare.cpp, with their original comments)
+  if (!touchHalHasEvent() && !wasPressed) return;
   int16_t x, y;
-  bool pressed = touch.getPoint(&x, &y, 1) > 0;
+  bool pressed = touchHalGetPoint(&x, &y);
 
-  // saco de entrenamiento: cada toque cuenta al instante (aporrear rapido)
+  // training bag: each touch counts instantly (fast mashing)
   if (sackOpen) {
     if (pressed && !wasPressed) {
       lastInteract = millis();
-      if (y < 72) sackOpen = false;  // tocar arriba = abandonar
+      if (y < SY(72)) sackOpen = false;  // touching the top = quit
       else sackTap();
     }
     wasPressed = pressed;
     return;
   }
 
-  if (pressed && !wasPressed) {  // empieza el gesto
+  if (pressed && !wasPressed) {  // gesture starts
     tX0 = tXl = x;
     tY0 = tYl = y;
     tStart = millis();
     holdFired = false;
-    swallowGesture = (dimStage > 0) || screenOff;  // si estaba a oscuras, solo despierta
+    swallowGesture = (dimStage > 0) || screenOff;  // if it was dark, only wake up
     screenOff = false;
     lastInteract = millis();
-  } else if (pressed) {  // sigue apoyado
+  } else if (pressed) {  // still held down
     tXl = x;
     tYl = y;
-    // pulsacion larga sin moverse sobre el bicho -> dialogo de soltar
-    if (!holdFired && !swallowGesture && !galleryOpen && !cardOpen && !kbOpen && !clockOpen && millis() - tStart > 3000 &&
+    // long press without moving on the creature -> release dialog
+    if (!holdFired && !swallowGesture && !galleryOpen && !cardOpen && !kbOpen && settingsScreen == SETTINGS_CLOSED && millis() - tStart > 3000 &&
         abs(tXl - tX0) < 30 && abs(tYl - tY0) < 30 && inPetZone(tX0, tY0) &&
         !pet.isEgg() && !confirmUntil && !pet.ceremony) {
       confirmUntil = millis() + 10000;
       holdFired = true;
     }
-  } else if (wasPressed) {  // levanta el dedo: resolver gesto
+  } else if (wasPressed) {  // finger lifted: resolve gesture
     lastInteract = millis();
     int dx = tXl - tX0, dy = tYl - tY0;
     uint32_t dt = millis() - tStart;
     if (!holdFired && !swallowGesture) {
-      if (abs(dx) > 80 && abs(dy) < 70 && dt < 800) onSwipe(dx > 0 ? 1 : -1);
-      else if (abs(dy) > 80 && abs(dx) < 70 && dt < 800) onSwipeV(dy > 0 ? 1 : -1);
+      if (abs(dx) > SX(80) && abs(dy) < SY(70) && dt < 800) onSwipe(dx > 0 ? 1 : -1);
+      else if (abs(dy) > SY(80) && abs(dx) < SX(70) && dt < 800) onSwipeV(dy > 0 ? 1 : -1);
       else if (dt < 1500 && abs(dx) < 40 && abs(dy) < 40) onTap(tX0, tY0);
     }
   }
   wasPressed = pressed;
 }
 
-// deslizar vertical: abre/cierra la ficha del bicho
-void openClock();  // prototipo
+// vertical swipe: down opens the settings menu
+// (the info card opens by tapping the creature's name, see onTap)
+void openClock();         // prototype
+void openSettingsMenu();  // prototype
 
 void onSwipeV(int dir) {
-  if (pet.awaitingStarter()) return;  // bloqueado durante la eleccion de inicial
+  if (pet.awaitingStarter()) return;  // blocked during the starter choice
   if (gameOpen || galleryOpen || kbOpen || sackOpen || pet.ceremony) return;
-  if (clockOpen) { clockOpen = false; return; }
-  if (cardOpen) {
-    if (dir < 0) cardOpen = false;  // arriba cierra la ficha
-    return;
-  }
-  if (dir > 0) {                    // deslizar abajo: ajustar hora
-    if (!confirmUntil && !feedMenuUntil) openClock();
-  } else if (!pet.isEgg() && !confirmUntil && !feedMenuUntil) {
-    cardOpen = true;                // deslizar arriba: ficha
-    cardPage = 0;
+  if (settingsScreen != SETTINGS_CLOSED) return;  // only the X button leaves the settings
+  if (cardOpen) return;             // only the X button closes the card
+  if (dir > 0) {                    // swipe down: settings menu
+    if (!confirmUntil && !feedMenuUntil) openSettingsMenu();
   }
 }
 
-// deslizar: dir +1 = hacia la derecha
+// swipe: dir +1 = to the right
 void onSwipe(int dir) {
-  if (pet.awaitingStarter()) return;  // bloqueado durante la eleccion de inicial
-  if (gameOpen || kbOpen || clockOpen) return;
-  if (cardOpen) {  // dentro de la ficha: cambiar entre las 4 paginas
-    int p = (int)cardPage + (dir > 0 ? -1 : 1);  // izquierda avanza
+  if (pet.awaitingStarter()) return;  // blocked during the starter choice
+  if (gameOpen || kbOpen || settingsScreen != SETTINGS_CLOSED) return;
+  if (cardOpen) {  // inside the card: switch between the 4 pages
+    int p = (int)cardPage + (dir > 0 ? -1 : 1);  // left advances
     cardPage = p < 0 ? 0 : (p > 3 ? 3 : p);
     return;
   }
@@ -575,14 +649,14 @@ void onSwipe(int dir) {
     }
     return;
   }
-  if (galleryDetail) {  // en detalle: volver a la rejilla
+  if (galleryDetail) {  // in detail: back to the grid
     galleryDetail = 0;
     galleryPmd.unload();
     galleryDirty = true;
     return;
   }
-  int np = galleryPage - dir;  // deslizar a la izquierda avanza pagina
-  if (np < 0) {                // retroceder desde la primera = salir
+  int np = galleryPage - dir;  // swiping left advances a page
+  if (np < 0) {                // going back from the first = exit
     galleryOpen = false;
     galleryPmd.unload();
     return;
@@ -594,12 +668,14 @@ void onSwipe(int dir) {
   }
 }
 
+void handleInfoCardTap(int16_t x, int16_t y);  // prototype (defined next to renderCard)
+
 void onTap(int16_t x, int16_t y) {
-  // Serial.printf("TOUCH %d %d\n", x, y);  // diagnostico (silenciado: satura el log)
-  if (pet.awaitingStarter()) {  // primera partida: elegir inicial
+  // Serial.printf("TOUCH %d %d\n", x, y);  // diagnostic (silenced: floods the log)
+  if (pet.awaitingStarter()) {  // first game: pick a starter
     for (int i = 0; i < 3; i++) {
       int ry = STARTER_ROW_Y + i * (STARTER_ROW_H + STARTER_ROW_GAP);
-      if (x >= 70 && x <= 396 && y >= ry && y <= ry + STARTER_ROW_H) {
+      if (x >= STARTER_ROW_X && x <= STARTER_ROW_X + STARTER_ROW_W && y >= ry && y <= ry + STARTER_ROW_H) {
         pet.chooseStarter(STARTER_DEX[i]);
         sfxPlay(SFX_TAP);
         break;
@@ -615,48 +691,44 @@ void onTap(int16_t x, int16_t y) {
     keyboardTap(x, y);
     return;
   }
-  if (clockOpen) {
-    clockTap(x, y);
+  if (settingsScreen != SETTINGS_CLOSED) {
+    handleSettingsTap(x, y);
     return;
   }
-  if (pet.ceremony) return;  // durante la despedida no hay botones
+  if (pet.ceremony) return;  // no buttons during the farewell
   if (cardOpen) {
-    if (cardPage == 0 && y < 84) openKeyboard();  // tocar el nombre = renombrar
-    else if (cardPage == 1 && y >= 300 && y <= 340 && x >= 96 && x <= 370) {
-      cardOpen = false;            // boton ENTRENAR FUERZA
-      startSack();
-    } else {
-      cardOpen = false;
-    }
+    handleInfoCardTap(x, y);
     return;
   }
   if (gameOpen) {
     gameTap(x, y);
     return;
   }
-  if (choiceKind) {          // dialogo de decision: boton accion (arriba) / mantener (abajo)
-    bool b1 = (x >= 93 && x <= 373 && y >= 206 && y <= 258);  // accion
-    bool b2 = (x >= 93 && x <= 373 && y >= 268 && y <= 320);  // mantener / quedaros
-    if (choiceKind == 1) {                 // evolucion
+  if (choiceKind) {          // decision dialog: action button (top) / keep (bottom)
+    bool b1 = (x >= CH_BX && x <= CH_BX + CH_BW && y >= CH_Y + CH_B1_REL_Y && y <= CH_Y + CH_B1_REL_Y + CH_BH);  // action
+    bool b2 = (x >= CH_BX && x <= CH_BX + CH_BW && y >= CH_Y + CH_B2_REL_Y && y <= CH_Y + CH_B2_REL_Y + CH_BH);  // keep / stay together
+    if (choiceKind == 1) {                 // evolution
       if (b1) { int16_t old = pet.speciesId; pet.evolve(); evoPmd.load(old, pet.shiny); }
       else if (b2) pet.declineEvolve();
-    } else if (choiceKind == 2) {          // despedida
+    } else if (choiceKind == 2) {          // farewell
       if (b1) pet.startFarewell();
       else if (b2) pet.declineFarewell();
     }
     choiceKind = 0;
     return;
   }
-  if (confirmUntil) {        // dialogo "soltar?": SI / NO
-    if (timeLeft(confirmUntil) && x >= 118 && x <= 218 && y >= 252 && y <= 304) {
+  if (confirmUntil) {        // "release?" dialog: YES / NO
+    if (timeLeft(confirmUntil) && x >= CONF_X + CONF_BTN_MARGIN && x <= CONF_X + CONF_BTN_MARGIN + CONF_BTN_W &&
+        y >= CONF_Y + CONF_BTN_REL_Y && y <= CONF_Y + CONF_BTN_REL_Y + CONF_BTN_H) {
       pet.release();
     }
     confirmUntil = 0;
     return;
   }
-  if (feedMenuUntil) {       // selector de comida
-    if (timeLeft(feedMenuUntil) && y >= 288 && y <= 352 && x >= 101 && x <= 365) {
-      int item = (x - 101) / 66;
+  if (feedMenuUntil) {       // food picker
+    if (timeLeft(feedMenuUntil) && y >= FEED_Y && y <= FEED_Y + FEED_H && x >= FEED_X && x <= FEED_X + FEED_W) {
+      int item = (x - FEED_X) / FEED_ITEM;
+      if (item > 3) item = 3;  // the exact right edge gave index 4
       if (item == 3) pet.feedCandy();
       else pet.feedBerry(item);
       sfxPlay(SFX_EAT);
@@ -669,13 +741,25 @@ void onTap(int16_t x, int16_t y) {
     sfxPlay(SFX_TAP);
     return;
   }
-  // boton de evolucion: abre el dialogo evolucionar/mantener
+  //#region Tapping the creature's name (header) opens the info card
+  // Same blockers the old swipe-up had: starter choice, ceremony, egg, dialogs
+  // and overlays all returned above. The box spans from a little above the name
+  // down to the status line, which stays above the pet zone and every button.
+  if (headerNameWidth > 0 &&
+      isTouchInsideRect(x, y, headerNameLeft - HDR_NAME_HIT_PAD, HDR_NAME_Y - HDR_NAME_HIT_PAD,
+                        headerNameWidth + 2 * HDR_NAME_HIT_PAD, HDR_MSG_Y - (HDR_NAME_Y - HDR_NAME_HIT_PAD))) {
+    cardOpen = true;
+    cardPage = 0;
+    return;
+  }
+  //#endregion
+  // evolution button: opens the evolve/keep dialog
   if (pet.wantEvolveButton() && x >= EVO_BTN_X && x <= EVO_BTN_X + EVO_BTN_W &&
       y >= EVO_BTN_Y && y <= EVO_BTN_Y + EVO_BTN_H) {
     choiceKind = 1; choiceUntil = millis() + 12000;
     return;
   }
-  // botones de final (mismo recuadro): escapada directa; despedida abre dialogo
+  // ending buttons (same box): runaway is immediate; farewell opens a dialog
   if (x >= FAR_BTN_X && x <= FAR_BTN_X + FAR_BTN_W &&
       y >= FAR_BTN_Y && y <= FAR_BTN_Y + FAR_BTN_H) {
     if (pet.canRunawayNow()) { pet.startRunaway(); return; }
@@ -698,7 +782,7 @@ void onTap(int16_t x, int16_t y) {
       return;
     }
   }
-  // tocar al bicho = caricia
+  // touching the creature = caress
   if (inPetZone(x, y)) {
     Serial.println("PET");
     pet.caress();
@@ -708,13 +792,13 @@ void onTap(int16_t x, int16_t y) {
 
 // ---------- render ----------
 
-bool gNight = false;  // noche real (por hora) o durmiendo: lo fija render()
+bool gNight = false;  // real night (by the clock) or sleeping: set by render()
 uint16_t inkColor() { return gNight ? UI_INK_NIGHT : UI_INK; }
 
-// ---------- escena de fondo: bioma del tipo + hora real del RTC ----------
+// ---------- background scene: type's biome + real RTC time ----------
 
 #define C565(r, g, b) ((uint16_t)((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3)))
-#define HORIZON 232  // linea donde el cielo se encuentra con el suelo
+// HORIZON defined in boards/layout.h (232 on the round one; proportional on the CYD)
 
 uint16_t lerp565(uint16_t a, uint16_t b, int i, int n) {
   if (n <= 0) return a;
@@ -724,26 +808,51 @@ uint16_t lerp565(uint16_t a, uint16_t b, int i, int n) {
                     (((ag + (bg - ag) * i / n) << 5)) | (ab + (bb - ab) * i / n));
 }
 
-// hora del dia 0-23 (de la hora real cacheada cada 30s; 13 si no hay reloj)
+// night stars over a sky gradient of skyHeight rows (drawScene and the minigame)
+void drawNightStars(uint32_t nowMs, uint16_t skyTop, uint16_t skyBottom, int skyHeight) {
+  uint32_t twinkleSlot = nowMs / STAR_TWINKLE_STEP_MS;
+  for (int i = 0; i < (int)(sizeof(STARS) / sizeof(STARS[0])); i++) {
+    const NightStar &star = STARS[i];
+
+    //#region Apply deterministic twinkle
+    int effectiveBrightness = star.brightness;
+    for (int j = 0; j < (int)sizeof(STAR_TWINKLE_INDICES); j++) {
+      if (STAR_TWINKLE_INDICES[j] == i && (twinkleSlot + j * 3) % STAR_TWINKLE_CYCLE_STEPS == 0)
+        effectiveBrightness = STAR_TWINKLE_DIM_BRIGHTNESS;
+    }
+    //#endregion
+
+    //#region Pick star color and draw
+    uint16_t starColor = UI_WHITE;
+    if (effectiveBrightness < 16) {
+      uint16_t localSkyColor = lerp565(skyTop, skyBottom, SY(star.y), skyHeight);
+      starColor = lerp565(localSkyColor, UI_WHITE, effectiveBrightness, 16);
+    }
+    gfx->fillRect(SX(star.x), SY(star.y), star.size, star.size, starColor);
+    //#endregion
+  }
+}
+
+// hour of the day 0-23 (from the real time cached every 30s; 13 if there is no clock)
 int sceneHour() {
   uint32_t e = pet.lastSeenEpoch;
   return e ? (int)((e / 3600) % 24) : 13;
 }
 
-// suelo de cada bioma de dia (de noche se mezcla hacia el azul nocturno)
+// daytime ground of each biome (at night it is blended toward night blue)
 static const uint16_t BIOME_SOIL[6] = {
-  C565(0x7e, 0xc0, 0x7f),  // 0 pradera
-  C565(0xdc, 0xca, 0x94),  // 1 playa (arena)
-  C565(0x4f, 0x8a, 0x55),  // 2 bosque
-  C565(0x8a, 0x55, 0x44),  // 3 volcan
-  C565(0xa8, 0x90, 0x6a),  // 4 montana
-  C565(0xe6, 0xee, 0xf5),  // 5 nieve
+  C565(0x7e, 0xc0, 0x7f),  // 0 meadow
+  C565(0xdc, 0xca, 0x94),  // 1 beach (sand)
+  C565(0x4f, 0x8a, 0x55),  // 2 forest
+  C565(0x8a, 0x55, 0x44),  // 3 volcano
+  C565(0xa8, 0x90, 0x6a),  // 4 mountain
+  C565(0xe6, 0xee, 0xf5),  // 5 snow
 };
 
 void drawClouds(uint32_t now, uint16_t col) {
   for (int k = 0; k < 2; k++) {
-    int cx = (int)((now / 50 + k * 250) % 560) - 40;
-    int cy = 70 + k * 34;
+    int cx = (int)((now / 50 + k * SX(250)) % SX(560)) - SX(40);
+    int cy = SY(70) + k * SY(34);
     gfx->fillCircle(cx, cy, 16, col);
     gfx->fillCircle(cx + 18, cy + 3, 13, col);
     gfx->fillCircle(cx - 15, cy + 4, 12, col);
@@ -754,149 +863,619 @@ void drawScene(uint8_t biome, uint32_t now, bool night) {
   int h = sceneHour();
   uint16_t top, bot;
   if (night)            { top = C565(0x0c, 0x12, 0x24); bot = C565(0x1e, 0x26, 0x46); }
-  else if (h < 8)       { top = C565(0xd1, 0x6a, 0x86); bot = C565(0xf3, 0xb8, 0x7c); }  // amanecer
-  else if (h < 18)      { top = C565(0x8f, 0xc8, 0xea); bot = C565(0xdc, 0xee, 0xe6); }  // dia
-  else                  { top = C565(0xc7, 0x5a, 0x4a); bot = C565(0xf0, 0xae, 0x64); }  // atardecer
+  else if (h < 8)       { top = C565(0xd1, 0x6a, 0x86); bot = C565(0xf3, 0xb8, 0x7c); }  // dawn
+  else if (h < 18)      { top = C565(0x8f, 0xc8, 0xea); bot = C565(0xdc, 0xee, 0xe6); }  // day
+  else                  { top = C565(0xc7, 0x5a, 0x4a); bot = C565(0xf0, 0xae, 0x64); }  // dusk
 
-  // cielo en bandas
+  // sky in bands
   for (int y = 0; y < HORIZON; y += 8)
-    gfx->fillRect(0, y, 466, 8, lerp565(top, bot, y, HORIZON));
+    gfx->fillRect(0, y, LCD_WIDTH, 8, lerp565(top, bot, y, HORIZON));
 
-  // sol o luna
+  // sun or moon (positions hand-placed for 466 px: SX()/SY() rescale them; on
+  // the CYD they are approximate, pending eyeball tweaking on a real board)
   if (night) {
-    gfx->fillCircle(360, 78, 24, C565(0xe8, 0xee, 0xf5));
-    gfx->fillCircle(370, 72, 22, lerp565(top, bot, 78, HORIZON));  // creciente
-    for (auto &st : STARS) gfx->fillRect(st[0], st[1], 4, 4, UI_WHITE);
+    gfx->fillCircle(SX(360), SY(78), 24, C565(0xe8, 0xee, 0xf5));
+    gfx->fillCircle(SX(370), SY(72), 22, lerp565(top, bot, SY(78), HORIZON));  // crescent
+    drawNightStars(now, top, bot, HORIZON);
   } else if (h < 18) {
-    gfx->fillCircle(360, 84, 26, h < 8 ? C565(0xff, 0xd9, 0x8a) : C565(0xff, 0xe7, 0x9f));
+    gfx->fillCircle(SX(360), SY(84), 26, h < 8 ? C565(0xff, 0xd9, 0x8a) : C565(0xff, 0xe7, 0x9f));
     drawClouds(now, C565(0xff, 0xff, 0xff));
   } else {
-    gfx->fillCircle(233, HORIZON - 6, 34, C565(0xff, 0xf1, 0xc8));  // sol poniente
+    gfx->fillCircle(CX, HORIZON - 6, 34, C565(0xff, 0xf1, 0xc8));  // setting sun
   }
 
-  // mar de la playa: una franja de agua sobre la arena
+  // biome soil (the beach sea is drawn with the biome details, over the hill)
   uint16_t soil = BIOME_SOIL[biome < 6 ? biome : 0];
   if (night) soil = lerp565(soil, C565(0x16, 0x1c, 0x30), 9, 16);
-  if (biome == 1) {
-    uint16_t sea = night ? C565(0x1c, 0x34, 0x52) : C565(0x4f, 0x96, 0xc4);
-    gfx->fillRect(0, HORIZON - 26, 466, 26, sea);
-    for (int i = 0; i < 3; i++) {
-      int wy = HORIZON - 22 + i * 7;
-      uint16_t fc = night ? C565(0x3a, 0x58, 0x78) : C565(0xbf, 0xe6, 0xf5);
-      gfx->fillRect(60 + ((now / 60 + i * 30) % 60), wy, 26, 2, fc);
-      gfx->fillRect(300 - ((now / 60 + i * 20) % 60), wy, 26, 2, fc);
-    }
-  }
 
-  // suelo
-  gfx->fillRect(0, HORIZON, 466, 466 - HORIZON, soil);
+  // ground
+  gfx->fillRect(0, HORIZON, LCD_WIDTH, LCD_HEIGHT - HORIZON, soil);
   uint16_t hill = lerp565(soil, night ? C565(0x0c, 0x12, 0x24) : C565(0xff, 0xff, 0xff), 3, 16);
-  gfx->fillRoundRect(-60, HORIZON - 14, 586, 60, 30, hill);
+  gfx->fillRoundRect(-60, HORIZON - 14, LCD_WIDTH + 120, 60, 30, hill);
 
-  // detalles del bioma
+  // biome details
   uint16_t dk = lerp565(soil, C565(0x10, 0x18, 0x20), night ? 11 : 7, 16);
-  if (biome == 2) {  // bosque: coniferas en silueta
-    for (int tx : { 60, 150, 360, 416 }) {
-      gfx->fillTriangle(tx, HORIZON - 46, tx - 16, HORIZON, tx + 16, HORIZON, dk);
-      gfx->fillTriangle(tx, HORIZON - 60, tx - 12, HORIZON - 28, tx + 12, HORIZON - 28, dk);
+  if (biome == 0) {  // meadow: flowering bushes plus grass tufts
+    //#region Meadow palette (day colors, blended toward night blue after dark)
+    const uint16_t nightBlue = C565(0x0c, 0x12, 0x24);
+    uint16_t bushShadeColor = C565(0x3c, 0x8a, 0x4c);
+    uint16_t bushHighlightColor = C565(0x58, 0xb8, 0x68);
+    uint16_t flowerColors[3] = { C565(0xf0, 0x8a, 0xa4), C565(0xff, 0xd9, 0x5e), C565(0xff, 0xff, 0xff) };
+    if (night) {
+      bushShadeColor = lerp565(bushShadeColor, nightBlue, 10, 16);
+      bushHighlightColor = lerp565(bushHighlightColor, nightBlue, 10, 16);
+      for (int colorIndex = 0; colorIndex < 3; colorIndex++)
+        flowerColors[colorIndex] = lerp565(flowerColors[colorIndex], nightBlue, 10, 16);
     }
-  } else if (biome == 3) {  // volcan: rocas y brasas
-    gfx->fillTriangle(70, HORIZON, 40, HORIZON + 30, 100, HORIZON + 30, dk);
-    gfx->fillTriangle(400, HORIZON + 4, 372, HORIZON + 30, 430, HORIZON + 30, dk);
-    if (!night)
-      for (int e = 0; e < 4; e++)
-        gfx->fillRect(120 + e * 70, HORIZON + 8 + (e % 2) * 6, 4, 4, C565(0xff, 0x9b, 0x3a));
-  } else if (biome == 4) {  // montana: cumbres al fondo
-    gfx->fillTriangle(140, HORIZON - 50, 60, HORIZON, 220, HORIZON, dk);
-    gfx->fillTriangle(330, HORIZON - 38, 250, HORIZON, 410, HORIZON, dk);
-  } else if (biome == 5 && !night) {  // nieve: copos cayendo
-    for (int f = 0; f < 10; f++) {
-      int fx = (f * 53 + now / 40) % 466;
-      int fy = (f * 90 + now / 18) % HORIZON;
-      gfx->fillRect(fx, fy, 3, 3, UI_WHITE);
+    //#endregion
+
+    //#region Meadow layout (x and radius in 466-space, flower offsets in tenths of the bush radius)
+    struct MeadowBushLayout { int16_t centerX466, radius466; int8_t mirror, flowerCount, colorShift; };
+    static const MeadowBushLayout bushLayouts[4] = {
+      { 62, 26, 1, 4, 0 },
+      { 128, 17, -1, 3, 1 },
+      { 338, 21, 1, 3, 2 },
+      { 412, 28, -1, 4, 1 },
+    };
+    static const int8_t flowerOffsets[4][2] = { { -6, -12 }, { 4, -17 }, { 9, -8 }, { -12, -5 } };
+    const int bushBaseY = HORIZON + SY(8);
+    const int largeFlowerSize = SY(6);
+    const int smallFlowerSize = SY(4);
+    //#endregion
+
+    //#region Bushes: two side lobes, main dome, flat base, highlight, flowers
+    for (const MeadowBushLayout &bushLayout : bushLayouts) {
+      const int bushCenterX = SX(bushLayout.centerX466);
+      const int bushRadius = SY(bushLayout.radius466);
+      const int mirror = bushLayout.mirror;
+
+      //#region Bush body
+      gfx->fillCircle(bushCenterX + mirror * (-8 * bushRadius / 10), bushBaseY + (-6 * bushRadius / 10),
+                      7 * bushRadius / 10, bushShadeColor);
+      gfx->fillCircle(bushCenterX + mirror * (8 * bushRadius / 10), bushBaseY + (-5 * bushRadius / 10),
+                      6 * bushRadius / 10, bushShadeColor);
+      gfx->fillCircle(bushCenterX, bushBaseY - bushRadius, bushRadius, bushShadeColor);
+      gfx->fillRect(bushCenterX - bushRadius, bushBaseY - 4 * bushRadius / 10,
+                    2 * bushRadius, 4 * bushRadius / 10 + 1, bushShadeColor);
+      gfx->fillCircle(bushCenterX + mirror * (-3 * bushRadius / 10), bushBaseY + (-13 * bushRadius / 10),
+                      4 * bushRadius / 10, bushHighlightColor);
+      //#endregion
+
+      //#region Flowers (alternating 3x3 and 2x2 on the CYD)
+      for (int flowerIndex = 0; flowerIndex < bushLayout.flowerCount; flowerIndex++) {
+        const int flowerSize = (flowerIndex % 2 == 0) ? largeFlowerSize : smallFlowerSize;
+        const int flowerX = bushCenterX + mirror * (flowerOffsets[flowerIndex][0] * bushRadius / 10) - flowerSize / 2;
+        const int flowerY = bushBaseY + (flowerOffsets[flowerIndex][1] * bushRadius / 10) - flowerSize / 2;
+        gfx->fillRect(flowerX, flowerY, flowerSize, flowerSize,
+                      flowerColors[(flowerIndex + bushLayout.colorShift) % 3]);
+      }
+      //#endregion
     }
-  } else if (biome == 0) {  // pradera: matas de hierba
-    for (int gx : { 80, 175, 300, 395 })
-      for (int b = -1; b <= 1; b++)
-        gfx->fillRect(gx + b * 5, HORIZON + 6, 2, 8 + (b == 0 ? 4 : 0), dk);
+    //#endregion
+
+    //#region Grass tufts in front (bottom-aligned, shorter side blades)
+    const int tuftBaseY = HORIZON + SY(24);
+    const int sideBladeHeight = SY(12);
+    const int centerBladeHeight = SY(18);
+    const int bladeSpacing = SX(7);
+    for (int tuftX466 : { 96, 160, 306, 452 }) {
+      const int tuftX = SX(tuftX466);
+      for (int blade = -1; blade <= 1; blade++) {
+        const int bladeHeight = (blade == 0) ? centerBladeHeight : sideBladeHeight;
+        gfx->fillRect(tuftX + blade * bladeSpacing, tuftBaseY - bladeHeight, 2, bladeHeight, dk);
+      }
+    }
+    //#endregion
+  } else if (biome == 1) {  // beach: sea rolling toward the shore, wash edge, palm tree
+    //#region Beach colors (night uses the night sea colors; the palm blends toward night blue)
+    const uint16_t nightBlue = C565(0x0c, 0x12, 0x24);
+    const uint16_t seaColor = night ? C565(0x1c, 0x34, 0x52) : C565(0x4f, 0x96, 0xc4);
+    const uint16_t foamColor = night ? C565(0x3a, 0x58, 0x78) : C565(0xbf, 0xe6, 0xf5);
+    const uint16_t farSeaColor = lerp565(seaColor, C565(0x10, 0x18, 0x20), 4, 16);
+    const uint16_t shallowColor = lerp565(seaColor, foamColor, 6, 16);
+    const uint16_t wetSandColor = lerp565(soil, dk, 6, 16);
+    uint16_t trunkColor = C565(0xa8, 0x7a, 0x4a);
+    uint16_t trunkRingColor = C565(0x7a, 0x54, 0x30);
+    uint16_t frondDarkColor = C565(0x2e, 0x7d, 0x3a);
+    uint16_t frondLightColor = C565(0x5c, 0xb0, 0x4c);
+    uint16_t coconutColor = C565(0x6b, 0x45, 0x22);
+    if (night) {
+      trunkColor = lerp565(trunkColor, nightBlue, 10, 16);
+      trunkRingColor = lerp565(trunkRingColor, nightBlue, 10, 16);
+      frondDarkColor = lerp565(frondDarkColor, nightBlue, 10, 16);
+      frondLightColor = lerp565(frondLightColor, nightBlue, 10, 16);
+      coconutColor = lerp565(coconutColor, nightBlue, 10, 16);
+    }
+    //#endregion
+
+    //#region Shoreline geometry (CYD: sea 122-137 deep, 138-143 shallow, wash edge 144-151, wet sand to 152)
+    const int seaTopY = HORIZON - SY(52);
+    const int shallowTopY = HORIZON - SY(20);
+    const int waterRestY = HORIZON - SY(8);
+    const int washRange = SY(14);
+    const int wetSandHeight = SY(18);
+    const int foamRimHeight = SY(4);
+    const int tongueRadius = SY(10);
+    //#endregion
+
+    //#region Sea body, far-sea band, wet sand and shallow strip
+    gfx->fillRect(0, seaTopY, LCD_WIDTH, shallowTopY - seaTopY, seaColor);
+    gfx->fillRect(0, seaTopY, LCD_WIDTH, SY(4), farSeaColor);
+    gfx->fillRect(0, waterRestY, LCD_WIDTH, wetSandHeight, wetSandColor);
+    gfx->fillRect(0, shallowTopY, LCD_WIDTH, waterRestY - shallowTopY, shallowColor);
+    //#endregion
+
+    //#region Wash tongues: five columns whose foam edge washes up and pulls back
+    const uint32_t washPeriodMs = 2000, washRiseMs = 700, columnLagMs = 130;
+    static const int8_t columnDepthTwelfths[5] = { 10, 13, 9, 12, 11 };
+    const int columnCount = 5;
+    const int columnWidth = (LCD_WIDTH + columnCount - 1) / columnCount;
+    for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+      //#region Smoothstep wash amount 0..256 for this column
+      const uint32_t washPhaseMs = (now + columnIndex * columnLagMs) % washPeriodMs;
+      const int32_t rampAmount = washPhaseMs < washRiseMs
+        ? (int32_t)(washPhaseMs * 256 / washRiseMs)
+        : (int32_t)((washPeriodMs - washPhaseMs) * 256 / (washPeriodMs - washRiseMs));
+      const int32_t washAmount = rampAmount * rampAmount * (768 - 2 * rampAmount) / 65536;
+      //#endregion
+
+      //#region Foam rim, then shallow water inset above it
+      const int edgeY = waterRestY + (int)(washRange * columnDepthTwelfths[columnIndex] * washAmount / (12 * 256));
+      const int columnX = columnIndex * columnWidth;
+      const int tongueHeight = edgeY - shallowTopY;
+      gfx->fillRoundRect(columnX, shallowTopY, columnWidth, tongueHeight + foamRimHeight, tongueRadius, foamColor);
+      gfx->fillRoundRect(columnX, shallowTopY, columnWidth, tongueHeight, tongueRadius, shallowColor);
+      //#endregion
+    }
+    //#endregion
+
+    //#region Wave crests travelling toward the shore (accelerating, widening, brightening)
+    const uint32_t crestPeriodMs = 6000;
+    const int crestCount = 3;
+    const int crestTopY = seaTopY + SY(6);
+    const int crestSpan = waterRestY - SY(2) - crestTopY;
+    static const int16_t crestCenters466[3][2] = { { 90, 300 }, { 200, 410 }, { 40, 250 } };
+    for (int crestIndex = 0; crestIndex < crestCount; crestIndex++) {
+      const uint32_t crestPhaseMs = (now + crestIndex * (crestPeriodMs / crestCount)) % crestPeriodMs;
+      const int32_t crestProgress = (int32_t)(crestPhaseMs * 256 / crestPeriodMs);
+      const int crestY = crestTopY + (int)(crestSpan * crestProgress * crestProgress / 65536);
+      const int crestHalfWidth = SX(14) + (int)(SX(40) * crestProgress / 256);
+      const int crestThickness = crestProgress > 128 ? SY(4) : SY(2);
+      const uint16_t crestColor = lerp565(seaColor, foamColor, 3 + (int)(crestProgress * 11 / 256), 16);
+      for (int segmentIndex = 0; segmentIndex < 2; segmentIndex++) {
+        gfx->fillRect(SX(crestCenters466[crestIndex][segmentIndex]) - crestHalfWidth, crestY,
+                      2 * crestHalfWidth, crestThickness, crestColor);
+      }
+    }
+    //#endregion
+
+    //#region Palm trunk: eight tapered segments leaning left, darker ring on each
+    const int trunkBaseX = SX(124), trunkBaseY = HORIZON + SY(18);
+    const int crownX = SX(100), crownY = SY(128);
+    const int trunkSegmentCount = 8;
+    const int segmentHeight = (trunkBaseY - crownY) / trunkSegmentCount;
+    const int trunkLean = trunkBaseX - crownX;
+    for (int segmentIndex = 0; segmentIndex < trunkSegmentCount; segmentIndex++) {
+      const int segmentCenterX = trunkBaseX - trunkLean * segmentIndex * segmentIndex / (trunkSegmentCount * trunkSegmentCount);
+      const int segmentWidth = SX(14) - (SX(14) - SX(9)) * segmentIndex / (trunkSegmentCount - 1);
+      const int segmentTopY = trunkBaseY - (segmentIndex + 1) * segmentHeight;
+      gfx->fillRect(segmentCenterX - segmentWidth / 2, segmentTopY, segmentWidth, segmentHeight + 1, trunkColor);
+      gfx->fillRect(segmentCenterX - segmentWidth / 2, segmentTopY, segmentWidth, SY(3), trunkRingColor);
+    }
+    //#endregion
+
+    //#region Palm crown: hub, six drooping fronds (two triangles each), coconuts
+    gfx->fillCircle(crownX, crownY, SY(8), frondDarkColor);
+    // { midDx, midDy, tipDx, tipDy, useLightGreen } offsets from the crown in 466-space
+    static const int8_t fronds466[6][5] = {
+      { -38, -14, -66, 16, 0 }, { 40, -14, 70, 14, 0 }, { -26, -22, -52, -12, 1 },
+      { 28, -22, 54, -10, 1 }, { -22, 4, -34, 34, 1 }, { 22, 4, 38, 32, 0 },
+    };
+    const int frondThickness = SY(6);
+    const int frondTipThickness = SY(4);
+    for (const auto &frond : fronds466) {
+      const uint16_t frondColor = frond[4] ? frondLightColor : frondDarkColor;
+      const int midX = crownX + SX(frond[0]), midY = crownY + SY(frond[1]);
+      const int tipX = crownX + SX(frond[2]), tipY = crownY + SY(frond[3]);
+      gfx->fillTriangle(crownX, crownY - frondThickness, crownX, crownY + frondThickness, midX, midY, frondColor);
+      gfx->fillTriangle(midX, midY - frondTipThickness, midX, midY + frondTipThickness, tipX, tipY, frondColor);
+    }
+    const int coconutRadius = SY(7);
+    gfx->fillCircle(crownX - SX(8), crownY + SY(8), coconutRadius, coconutColor);
+    gfx->fillCircle(crownX + SX(7), crownY + SY(10), coconutRadius, coconutColor);
+    gfx->fillCircle(crownX - SX(1), crownY + SY(15), coconutRadius, coconutColor);
+    //#endregion
+  } else if (biome == 2) {  // forest: hazy back row, two leafy trees, darker front row of conifers
+    //#region Forest colors
+    uint16_t hazeTarget = night ? C565(0x3a, 0x48, 0x66) : C565(0xb8, 0xd4, 0xcc);
+    uint16_t backRowColor = lerp565(dk, hazeTarget, night ? 5 : 6, 16);
+    uint16_t frontRowColor = lerp565(dk, C565(0x10, 0x28, 0x18), 4, 16);
+    uint16_t trunkColor = lerp565(dk, C565(0x3a, 0x26, 0x18), 9, 16);
+    uint16_t canopyColor = lerp565(dk, C565(0x6a, 0x96, 0x3a), night ? 3 : 6, 16);
+    //#endregion
+
+    //#region Conifer tier shapes (per tier, bottom first: baseRise60, apexRise60, halfWidth16)
+    static const uint8_t TWO_TIER_SHAPE[2][3] = { { 0, 46, 16 }, { 28, 60, 12 } };
+    static const uint8_t THREE_TIER_SHAPE[3][3] = { { 0, 34, 16 }, { 22, 50, 12 }, { 40, 60, 8 } };
+    //#endregion
+
+    //#region Forest tree tables (466-space)
+    // conifers: centerX, height, baseHalfWidth, tierCount, baseOffsetY, isFrontRow
+    static const int16_t FOREST_CONIFERS[10][6] = {
+      { 40, 95, 22, 2, -2, 0 }, { 112, 130, 26, 3, -1, 0 }, { 200, 62, 18, 2, -2, 0 },   // back row (hazy)
+      { 268, 74, 20, 2, -1, 0 }, { 300, 96, 22, 3, -2, 0 }, { 436, 90, 22, 2, -1, 0 },
+      { 72, 140, 34, 3, 4, 1 }, { 150, 175, 36, 3, 6, 1 }, { 340, 160, 34, 3, 5, 1 },    // front row (dark)
+      { 422, 118, 30, 2, 3, 1 },
+    };
+    const int BACK_ROW_CONIFER_COUNT = 6;
+    // leafy trees: centerX, height, canopyRadius, baseOffsetY
+    static const int16_t FOREST_DECIDUOUS[2][4] = { { 24, 78, 22, 5 }, { 384, 92, 24, 4 } };
+    //#endregion
+
+    //#region Trees: back row conifers, then leafy trees, then front row conifers
+    for (int pass = 0; pass < 3; pass++) {
+      //#region Pass 1: leafy trees (thin trunk, two-circle canopy)
+      if (pass == 1) {
+        for (int i = 0; i < 2; i++) {
+          int treeX = SX(FOREST_DECIDUOUS[i][0]);
+          int groundY = HORIZON + FOREST_DECIDUOUS[i][3];
+          int treeTopY = groundY - SY(FOREST_DECIDUOUS[i][1]);
+          int canopyRadius = SX(FOREST_DECIDUOUS[i][2]);
+          int canopyCenterY = treeTopY + canopyRadius;
+          gfx->fillRect(treeX - 1, canopyCenterY, 3, groundY - canopyCenterY, trunkColor);
+          gfx->fillCircle(treeX, canopyCenterY, canopyRadius, canopyColor);
+          gfx->fillCircle(treeX + canopyRadius * 6 / 10, canopyCenterY + canopyRadius * 5 / 10,
+                          canopyRadius * 7 / 10, canopyColor);
+        }
+        continue;
+      }
+      //#endregion
+
+      //#region Pass 0 and 2: conifers of the matching row
+      int firstConifer = (pass == 0) ? 0 : BACK_ROW_CONIFER_COUNT;
+      int lastConifer = (pass == 0) ? BACK_ROW_CONIFER_COUNT : 10;
+      for (int i = firstConifer; i < lastConifer; i++) {
+        int treeX = SX(FOREST_CONIFERS[i][0]);
+        int treeHeight = SY(FOREST_CONIFERS[i][1]);
+        int baseHalfWidth = SX(FOREST_CONIFERS[i][2]);
+        int tierCount = FOREST_CONIFERS[i][3];
+        int groundY = HORIZON + FOREST_CONIFERS[i][4];
+        bool isFrontRow = FOREST_CONIFERS[i][5] != 0;
+        uint16_t bodyColor = isFrontRow ? frontRowColor : backRowColor;
+
+        //#region Trunk (front row only): tiers start a few pixels above the ground
+        int trunkHeight = isFrontRow ? SY(8) : 0;
+        if (isFrontRow) gfx->fillRect(treeX - 1, groundY - trunkHeight - 1, 3, trunkHeight + 1, trunkColor);
+        int tierGroundY = groundY - trunkHeight;
+        int tierSpanHeight = treeHeight - trunkHeight;
+        //#endregion
+
+        //#region Tiers, bottom first
+        const uint8_t (*tierShape)[3] = (tierCount == 3) ? THREE_TIER_SHAPE : TWO_TIER_SHAPE;
+        for (int j = 0; j < tierCount; j++) {
+          int tierBaseY = tierGroundY - tierSpanHeight * tierShape[j][0] / 60;
+          int tierApexY = tierGroundY - tierSpanHeight * tierShape[j][1] / 60;
+          int tierHalfWidth = baseHalfWidth * tierShape[j][2] / 16;
+          gfx->fillTriangle(treeX, tierApexY, treeX - tierHalfWidth, tierBaseY, treeX + tierHalfWidth, tierBaseY, bodyColor);
+        }
+        //#endregion
+      }
+      //#endregion
+    }
+    //#endregion
+  } else if (biome == 3) {  // volcano: flat-topped cone, lava down the left slope, rocks and embers
+    //#region Cone geometry (466-space, scaled with SX/SY)
+    const int craterY = HORIZON - SY(120);
+    const int craterLeftX = SX(82), craterRightX = SX(118);
+    const int baseLeftX = SX(10), baseRightX = SX(180);
+    const int litFaceTopX = SX(108), litFaceBaseX = SX(126);
+    //#endregion
+
+    //#region Volcano colors (the cone darkens at night, lava and glow stay bright)
+    const uint16_t nightBlue = C565(0x16, 0x1c, 0x30);
+    uint16_t coneShadowColor = C565(0x5e, 0x44, 0x3e);
+    uint16_t coneLitColor = C565(0x7a, 0x58, 0x4c);
+    uint16_t smokeColor = C565(0xa8, 0xa0, 0x9c);
+    if (night) {
+      coneShadowColor = lerp565(coneShadowColor, nightBlue, 9, 16);
+      coneLitColor = lerp565(coneLitColor, nightBlue, 9, 16);
+      smokeColor = C565(0x4a, 0x3c, 0x4c);
+    }
+    const uint16_t lavaColor = C565(0xff, 0x5a, 0x1e);
+    const uint16_t lavaCoreColor = C565(0xff, 0xb0, 0x30);
+    const uint16_t dripColor = C565(0xff, 0xe8, 0x80);
+    static const uint8_t flickerSteps[4] = { 0, 1, 3, 2 };
+    const uint16_t glowColor = lerp565(C565(0xff, 0xa8, 0x40), C565(0xff, 0xf0, 0xa0), flickerSteps[(now / 150) % 4], 3);
+    //#endregion
+
+    //#region Smoke puffs rising from the crater (drawn first so the glow and cone sit in front)
+    for (int puffIndex = 0; puffIndex < 2; puffIndex++) {
+      int puffRise = (int)((now / 80 + puffIndex * SY(24)) % SY(48));
+      int puffX = SX(100) + puffIndex * SX(6) + puffRise / 3;
+      int puffY = craterY - SY(12) - puffRise;
+      gfx->fillCircle(puffX, puffY, SY(6) + puffRise / 6, smokeColor);
+    }
+    //#endregion
+
+    //#region Crater glow halo (the cone covers its lower half)
+    gfx->fillRoundRect(craterLeftX, craterY - SY(10), craterRightX - craterLeftX, SY(14), SY(6), glowColor);
+    //#endregion
+
+    //#region Cone: flat-topped trapezoid as two triangles, plus a lit right face
+    gfx->fillTriangle(craterLeftX, craterY, baseLeftX, HORIZON, baseRightX, HORIZON, coneShadowColor);
+    gfx->fillTriangle(craterLeftX, craterY, craterRightX, craterY, baseRightX, HORIZON, coneShadowColor);
+    gfx->fillTriangle(litFaceTopX, craterY, craterRightX, craterY, baseRightX, HORIZON, coneLitColor);
+    gfx->fillTriangle(litFaceTopX, craterY, baseRightX, HORIZON, litFaceBaseX, HORIZON, coneLitColor);
+    gfx->drawFastHLine(craterLeftX, craterY, craterRightX - craterLeftX + 1, glowColor);
+    //#endregion
+
+    //#region Lava stream down the left slope (parallelogram segments, tapering tip)
+    const int lavaPointX[4] = { (int)SX(84), (int)SX(70), (int)SX(54), (int)SX(36) };
+    const int lavaPointY[4] = { craterY, (int)(HORIZON - SY(84)), (int)(HORIZON - SY(52)), (int)(HORIZON - SY(20)) };
+    const int lavaWidth[4] = { (int)SX(10), (int)SX(8), (int)SX(7), 0 };
+    for (int segmentIndex = 0; segmentIndex < 3; segmentIndex++) {
+      int topX = lavaPointX[segmentIndex], topY = lavaPointY[segmentIndex], topWidth = lavaWidth[segmentIndex];
+      int bottomX = lavaPointX[segmentIndex + 1], bottomY = lavaPointY[segmentIndex + 1], bottomWidth = lavaWidth[segmentIndex + 1];
+      gfx->fillTriangle(topX, topY, topX + topWidth, topY, bottomX + bottomWidth, bottomY, lavaColor);
+      if (bottomWidth > 0) gfx->fillTriangle(topX, topY, bottomX, bottomY, bottomX + bottomWidth, bottomY, lavaColor);
+    }
+    //#endregion
+
+    //#region Bright lava core on the upper two segments
+    const int coreTopX = SX(87), coreMidX = SX(72), coreTipX = SX(56), coreWidth = SX(4);
+    gfx->fillTriangle(coreTopX, lavaPointY[0], coreTopX + coreWidth, lavaPointY[0], coreMidX + coreWidth, lavaPointY[1], lavaCoreColor);
+    gfx->fillTriangle(coreTopX, lavaPointY[0], coreMidX, lavaPointY[1], coreMidX + coreWidth, lavaPointY[1], lavaCoreColor);
+    gfx->fillTriangle(coreMidX, lavaPointY[1], coreMidX + coreWidth, lavaPointY[1], coreTipX, lavaPointY[2], lavaCoreColor);
+    //#endregion
+
+    //#region Animated drip sliding down the stream centerline
+    int dripPhase = (int)((now / 25) % 90);
+    int dripSegment = dripPhase / 30, dripStep = dripPhase % 30;
+    int dripStartX = lavaPointX[dripSegment] + lavaWidth[dripSegment] / 2;
+    int dripEndX = lavaPointX[dripSegment + 1] + lavaWidth[dripSegment + 1] / 2;
+    int dripX = dripStartX + (dripEndX - dripStartX) * dripStep / 30;
+    int dripY = lavaPointY[dripSegment] + (lavaPointY[dripSegment + 1] - lavaPointY[dripSegment]) * dripStep / 30;
+    gfx->fillRect(dripX - 1, dripY - 1, 3, 3, dripColor);
+    //#endregion
+
+    //#region Ground rocks and embers (embers glow day and night)
+    gfx->fillTriangle(SX(70), HORIZON, SX(40), HORIZON + 30, SX(100), HORIZON + 30, dk);
+    gfx->fillTriangle(SX(400), HORIZON + 4, SX(372), HORIZON + 30, SX(430), HORIZON + 30, dk);
+    for (int ember = 0; ember < 4; ember++)
+      gfx->fillRect(SX(120) + ember * SX(70), HORIZON + 8 + (ember % 2) * 6, 4, 4, C565(0xff, 0x9b, 0x3a));
+    //#endregion
+  } else if (biome == 4) {  // mountain: hazy back range, darker front range, snow caps, small conifers
+    //#region Mountain colors
+    uint16_t hazeTarget = night ? C565(0x5a, 0x66, 0x8a) : C565(0xc8, 0xd8, 0xe8);
+    uint16_t backRowColor = lerp565(dk, hazeTarget, night ? 5 : 6, 16);
+    uint16_t frontRowColor = dk;
+    uint16_t frontSnowColor = night ? lerp565(C565(0xf4, 0xf8, 0xfc), C565(0x1e, 0x26, 0x46), 9, 16)
+                                    : C565(0xf4, 0xf8, 0xfc);
+    uint16_t backSnowColor = lerp565(frontSnowColor, backRowColor, 5, 16);
+    uint16_t treeColor = lerp565(dk, C565(0x10, 0x30, 0x18), 8, 16);
+    //#endregion
+
+    //#region Peak table (466-space: apexX, peakHeight, baseHalfWidth)
+    // the front-left peak stays at 155 so on the round board it clears the header text
+    static const int16_t MOUNTAIN_PEAKS[6][3] = {
+      { 60, 130, 100 }, { 200, 110, 100 }, { 300, 135, 110 }, { 415, 140, 100 },  // back row (hazy)
+      { 110, 155, 120 }, { 395, 150, 105 },                                        // front row (dark)
+    };
+    const int BACK_ROW_PEAK_COUNT = 4;
+    //#endregion
+
+    //#region Peaks with snow caps (back row first, then front row)
+    for (int i = 0; i < 6; i++) {
+      bool isBackRow = i < BACK_ROW_PEAK_COUNT;
+      uint16_t bodyColor = isBackRow ? backRowColor : frontRowColor;
+      uint16_t snowColor = isBackRow ? backSnowColor : frontSnowColor;
+
+      //#region Peak body
+      int apexX = SX(MOUNTAIN_PEAKS[i][0]);
+      int peakHeight = SY(MOUNTAIN_PEAKS[i][1]);
+      int baseHalfWidth = SX(MOUNTAIN_PEAKS[i][2]);
+      int apexY = HORIZON - peakHeight;
+      gfx->fillTriangle(apexX, apexY, apexX - baseHalfWidth, HORIZON, apexX + baseHalfWidth, HORIZON, bodyColor);
+      //#endregion
+
+      //#region Snow cap on the same slopes (top 30 percent of the peak)
+      int capDepth = peakHeight * 3 / 10;
+      int capHalfWidth = baseHalfWidth * capDepth / peakHeight;
+      int capBottomY = apexY + capDepth;
+      gfx->fillTriangle(apexX, apexY, apexX - capHalfWidth, capBottomY, apexX + capHalfWidth, capBottomY, snowColor);
+      //#endregion
+
+      //#region Notch in the cap's lower edge so the snow line is jagged
+      int notchHalfWidth = capHalfWidth / 2;
+      int notchTipY = capBottomY - capDepth / 3;
+      gfx->fillTriangle(apexX, notchTipY, apexX - notchHalfWidth, capBottomY, apexX + notchHalfWidth, capBottomY, bodyColor);
+      //#endregion
+    }
+    //#endregion
+
+    //#region Small conifers at the foot of the range (x466, baseOffsetY, isLarge)
+    static const int16_t MOUNTAIN_CONIFERS[6][3] = {
+      { 18, 2, 1 }, { 48, -2, 0 }, { 80, 3, 1 }, { 350, 1, 0 }, { 388, -3, 1 }, { 446, 2, 0 },
+    };
+    for (int i = 0; i < 6; i++) {
+      int treeX = SX(MOUNTAIN_CONIFERS[i][0]);
+      int treeBaseY = HORIZON + MOUNTAIN_CONIFERS[i][1];
+      int treeHeight = MOUNTAIN_CONIFERS[i][2] ? 30 : 22;
+      int treeHalfWidth = MOUNTAIN_CONIFERS[i][2] ? 8 : 6;
+      //#region Lower tier (forest-tree proportions: apex at 46/60, upper tier base at 28/60)
+      gfx->fillTriangle(treeX, treeBaseY - treeHeight * 46 / 60, treeX - treeHalfWidth, treeBaseY,
+                        treeX + treeHalfWidth, treeBaseY, treeColor);
+      //#endregion
+      //#region Upper tier
+      int upperTierBaseY = treeBaseY - treeHeight * 28 / 60;
+      int upperHalfWidth = treeHalfWidth * 12 / 16;
+      gfx->fillTriangle(treeX, treeBaseY - treeHeight, treeX - upperHalfWidth, upperTierBaseY,
+                        treeX + upperHalfWidth, upperTierBaseY, treeColor);
+      //#endregion
+    }
+    //#endregion
+  } else if (biome == 5) {  // snow: background mounds, frozen lake, falling flakes (day only)
+    //#region Snow colors (day palette, blended toward night blue after dark)
+    const uint16_t nightBlue = C565(0x0c, 0x12, 0x24);
+    uint16_t backMoundLitColor = C565(0xdc, 0xe6, 0xf0);
+    uint16_t backMoundShadeColor = C565(0xb0, 0xbe, 0xd2);
+    uint16_t frontMoundLitColor = C565(0xf4, 0xf8, 0xfc);
+    uint16_t frontMoundShadeColor = C565(0xbc, 0xc8, 0xda);
+    uint16_t lakeRimColor = C565(0x7c, 0xa2, 0xc0);
+    uint16_t lakeIceColor = C565(0xb0, 0xd2, 0xe8);
+    uint16_t lakeReflectionColor = C565(0xd0, 0xe6, 0xf4);
+    uint16_t lakeGlintColor = UI_WHITE;
+    if (night) {
+      backMoundLitColor = lerp565(backMoundLitColor, nightBlue, 9, 16);
+      backMoundShadeColor = lerp565(backMoundShadeColor, nightBlue, 9, 16);
+      frontMoundLitColor = lerp565(frontMoundLitColor, nightBlue, 9, 16);
+      frontMoundShadeColor = lerp565(frontMoundShadeColor, nightBlue, 9, 16);
+      lakeRimColor = lerp565(lakeRimColor, nightBlue, 7, 16);
+      lakeIceColor = lerp565(lakeIceColor, nightBlue, 7, 16);
+      lakeReflectionColor = lerp565(lakeReflectionColor, nightBlue, 7, 16);
+      lakeGlintColor = lerp565(lakeGlintColor, nightBlue, 8, 16);
+    }
+    const uint16_t driftCrestColor = lerp565(hill, frontMoundShadeColor, 8, 16);
+    const uint16_t lakeCrackColor = lerp565(lakeRimColor, lakeIceColor, 6, 16);
+    //#endregion
+
+    //#region Mound table (466-space: leftX, width, rise; back row first, then front row)
+    static const int16_t SNOW_MOUNDS[4][3] = {
+      { -20, 150, 34 }, { 250, 170, 40 },  // back row (hazier)
+      { 95, 110, 22 }, { 380, 110, 26 },   // front row (whiter)
+    };
+    const int BACK_ROW_MOUND_COUNT = 2;
+    const int shadeWidth = SX(10);
+    //#endregion
+
+    //#region Background snow mounds (shade on the left, the sun is on the right)
+    for (int i = 0; i < 4; i++) {
+      bool isBackRow = i < BACK_ROW_MOUND_COUNT;
+      int moundLeft = SX(SNOW_MOUNDS[i][0]);
+      int moundWidth = SX(SNOW_MOUNDS[i][1]);
+      int moundRadius = SY(SNOW_MOUNDS[i][2]);
+      int moundTop = HORIZON - 14 - moundRadius;
+      gfx->fillRoundRect(moundLeft, moundTop, moundWidth, 2 * moundRadius, moundRadius,
+                         isBackRow ? backMoundShadeColor : frontMoundShadeColor);
+      gfx->fillRoundRect(moundLeft + shadeWidth, moundTop, moundWidth - shadeWidth, 2 * moundRadius, moundRadius,
+                         isBackRow ? backMoundLitColor : frontMoundLitColor);
+    }
+    //#endregion
+
+    //#region Repaint the front hill over the mound bases so the mounds read as behind it
+    // the hill is flat across the visible width from HORIZON-14 down, so this is pixel-identical
+    gfx->fillRect(0, HORIZON - 14, LCD_WIDTH, SY(40) + 2, hill);
+    gfx->drawFastHLine(0, HORIZON - 14, LCD_WIDTH, driftCrestColor);
+    //#endregion
+
+    //#region Frozen lake on the right (rim, ice, paler far half)
+    const int lakeLeft = SX(318);
+    const int lakeWidth = SX(124);
+    const int lakeTop = HORIZON + SY(4);
+    const int lakeHeight = SY(18);
+    const int lakeInset = SX(4);
+    const int iceHeight = lakeHeight - 2;
+    gfx->fillRoundRect(lakeLeft, lakeTop, lakeWidth, lakeHeight, lakeHeight / 2, lakeRimColor);
+    gfx->fillRoundRect(lakeLeft + lakeInset, lakeTop + 1, lakeWidth - 2 * lakeInset, iceHeight, iceHeight / 2,
+                       lakeIceColor);
+    gfx->fillRoundRect(lakeLeft + 3 * lakeInset, lakeTop + 1, lakeWidth - 6 * lakeInset, iceHeight / 2,
+                       iceHeight / 4, lakeReflectionColor);
+    //#endregion
+
+    //#region Lake glints (white) and a stepped crack (darker ice)
+    gfx->drawFastHLine(lakeLeft + SX(26), lakeTop + 2, SX(16), lakeGlintColor);
+    gfx->drawFastHLine(lakeLeft + SX(80), lakeTop + lakeHeight - 3, SX(10), lakeGlintColor);
+    gfx->drawFastHLine(lakeLeft + SX(50), lakeTop + SY(6), SX(8), lakeCrackColor);
+    gfx->drawFastHLine(lakeLeft + SX(56), lakeTop + SY(9), SX(8), lakeCrackColor);
+    gfx->drawFastHLine(lakeLeft + SX(62), lakeTop + SY(12), SX(8), lakeCrackColor);
+    //#endregion
+
+    //#region Falling snowflakes (day only)
+    if (!night) {
+      for (int flake = 0; flake < 10; flake++) {
+        int flakeX = (flake * 53 + now / 40) % LCD_WIDTH;
+        int flakeY = (flake * 90 + now / 18) % HORIZON;
+        gfx->fillRect(flakeX, flakeY, 3, 3, UI_WHITE);
+      }
+    }
+    //#endregion
   }
 }
 
-// primera partida: elige inicial entre Bulbasaur / Charmander / Squirtle
+// first game: pick a starter among Bulbasaur / Charmander / Squirtle
 void renderStarterSelect() {
   gfx->fillScreen(RGB565_BLACK);
-  gfx->fillCircle(CX, CY, 231, UI_BG_DAY);
-  const char *t = T(S_CHOOSE_STARTER);
+  fillScreenBg(UI_BG_DAY);
   gfx->setTextColor(UI_INK);
-  setSize(2);
-  setCur(centerX(t, 2), 68);
-  printT(t);
+  ctext(T(S_CHOOSE_STARTER), 2, STARTER_TITLE_Y);
   for (int i = 0; i < 3; i++) {
     int16_t d = STARTER_DEX[i];
     const DexEntry &de = DEX_TBL[d];
     int ry = STARTER_ROW_Y + i * (STARTER_ROW_H + STARTER_ROW_GAP);
-    gfx->fillRoundRect(70, ry, 326, STARTER_ROW_H, 14, lerp565(de.accent, UI_WHITE, 6, 8));
-    gfx->drawRoundRect(70, ry, 326, STARTER_ROW_H, 14, de.accent);
-    const uint8_t *th = thumbs.get(d);     // miniatura del inicial (si la SD esta lista)
-    if (th) drawThumb(th, 76, ry - 5, 3, false);
+    gfx->fillRoundRect(STARTER_ROW_X, ry, STARTER_ROW_W, STARTER_ROW_H, STARTER_R, lerp565(de.accent, UI_WHITE, 6, 8));
+    gfx->drawRoundRect(STARTER_ROW_X, ry, STARTER_ROW_W, STARTER_ROW_H, STARTER_R, de.accent);
+    const uint8_t *th = thumbs.get(d);     // starter thumbnail (if the SD is ready)
+    if (th) drawThumbCell(th, STARTER_TH_X, ry + STARTER_TH_DY, STARTER_TH_S, false, STARTER_TH_CELL);
     gfx->setTextColor(UI_INK);
-    setSize(3);
-    setCur(178, ry + 24);
+    int nx = STARTER_ROW_X + STARTER_NAME_DX;
+    int fs = fitSize(dexName(d), TS(3), STARTER_ROW_X + STARTER_ROW_W - nx - 6);
+    setSize(fs);
+    setCur(nx, ry + STARTER_NAME_DY);
     printT(dexName(d));
   }
   gfx->flush();
 }
 
-// ---------- texto: tamano y cursor (preparado para fuentes CJK) ----------
-// La fuente clasica ancla el cursor en la ESQUINA SUPERIOR del texto, y las 74
-// coordenadas Y del codigo estan escritas asi. Las fuentes U8g2 lo anclan en la
-// LINEA BASE (drawChar hace curY = y - baseline*size), asi que al cambiar de
-// fuente todo el texto subiria. setCur() compensa esa diferencia en un solo
-// sitio, para que la Y siga significando "arriba" con cualquier fuente.
+// ---------- text: size and cursor (ready for CJK fonts) ----------
+// The classic font anchors the cursor at the TOP CORNER of the text, and the 74
+// Y coordinates in the code are written that way. U8g2 fonts anchor it at the
+// BASELINE (drawChar does curY = y - baseline*size), so switching fonts would
+// shift all the text up. setCur() compensates for that difference in a single
+// place, so Y keeps meaning "top" with any font.
 //
-// setSize() existe solo porque la libreria tiene textsize_x protegido y setCur()
-// necesita saber la escala activa para multiplicar el ascenso.
+// setSize() exists only because the library keeps textsize_x protected and
+// setCur() needs to know the active scale to multiply the ascent.
 //
-// Con la fuente clasica gFontAscent es 0, asi que setCur(x,y) es exactamente
-// setCur(x,y): esto no mueve un pixel en los seis idiomas actuales.
+// With the classic font gFontAscent is 0, so setCur(x,y) is exactly
+// setCur(x,y): this does not move a pixel in the six current languages.
 uint8_t gTextSize = 1;
-int gFontAscent = 0;  // px del borde superior a la linea base, 0 = fuente clasica
+int gFontAscent = 0;  // px from the top edge to the baseline, 0 = classic font
 
-// --- ajuste de la fuente CJK (los dos valores van juntos) ---
-// La fuente clasica mide 8 px de alto a escala 1. Si la CJK mide mas, hay que
-// dividir la escala para que los tamanos cuadren... pero dividir ADELGAZA el
-// trazo: a escala 1 la unifont pinta lineas de 1 px mientras el latino a escala
-// 2 las pinta de 2, y el japones se ve tenue aunque mida igual.
+// --- CJK font tuning (the two values go together) ---
+// The classic font is 8 px tall at scale 1. If the CJK one is taller, the scale
+// has to be divided so the sizes match... but dividing THINS the stroke: at
+// scale 1 unifont draws 1 px lines while Latin at scale 2 draws them 2 px wide,
+// and Japanese looks faint even though it is the same size.
 //
-// Por eso conviene una fuente base pequena Y EN NEGRITA (_b_), que permita usar
-// la MISMA escala que el latino: asi el grosor coincide y no hay que dividir.
+// That is why a small AND BOLD (_b_) base font is preferable, allowing the SAME
+// scale as Latin: that way the stroke weight matches and no division is needed.
 //
-// Se probo una fuente realmente negrita (b10_b) y NO sirve a este tamano: los
-// trazos se juntan y los kana pierden detalle, ilegibles incluso para un lector
-// nativo. Se vuelve a la unifont, que es la mas legible, y el trazo fino se
-// compensa en printT() repintando 1 px desplazado (pseudo-negrita).
-// japanese3 y no japanese1: los subconjuntos 1 y 2 traen kana y kanji pero
-// NINGUNA puntuacion CJK, y Arduino_GFX no dibuja nada cuando le falta el
-// glifo (ni avanza el cursor), asi que los 25 signos ！ y ？ de las cadenas
-// desaparecian. Es la misma familia unifont: cabecera de metricas identica y
-// superconjunto estricto, comprobado glifo a glifo sobre los 226 codepoints
-// que usa el firmware. Cuesta 102 KB mas de flash y no mueve un pixel.
-// El coreano necesita una fuente con hangul, y CJK_FONT era un solo #define.
-// En vez de dar por hecho que un subconjunto sirve para las dos escrituras, la
-// fuente se elige por idioma. korean2 y no korean1: el coreano de aqui usa 296
-// silabas distintas y todas estan en KS X 1001, el conjunto de 2350 que es el
-// tamano medido para korean2; korean1 trae 478. La comprobacion mira la
-// pertenencia a KS X 1001, no recorre la tabla de la fuente, asi que se apoya
-// en que el conjunto de korean2 sea ese; el ASCII se da por presente.
-// Sin comprobar en placa: si CJK_SIZE_DIV 2 le sienta a korean2 igual que a la
-// japonesa. El ascenso si se mide en tiempo de ejecucion en applyLangFont().
+// A truly bold font (b10_b) was tried and does NOT work at this size: the
+// strokes merge and the kana lose detail, illegible even to a native reader.
+// It goes back to unifont, which is the most legible, and the thin stroke is
+// compensated in printT() by redrawing 1 px offset (pseudo-bold).
+// japanese3 and not japanese1: subsets 1 and 2 include kana and kanji but NO
+// CJK punctuation, and Arduino_GFX draws nothing when a glyph is missing (nor
+// advances the cursor), so the 25 ！ and ？ marks in the strings disappeared.
+// It is the same unifont family: identical metrics header and a strict
+// superset, checked glyph by glyph over the 226 codepoints the firmware
+// uses. It costs 102 KB more flash and does not move a pixel.
+// Korean needs a font with hangul, and CJK_FONT was a single #define.
+// Instead of assuming one subset works for both scripts, the font is chosen
+// per language. korean2 and not korean1: the Korean here uses 296 distinct
+// syllables and all of them are in KS X 1001, the 2350-syllable set that is
+// the measured size for korean2; korean1 has 478. The check looks at
+// membership in KS X 1001, it does not walk the font's table, so it relies on
+// korean2's set being exactly that; ASCII is assumed present.
+// Not verified on the board: whether CJK_SIZE_DIV 2 suits korean2 as well as
+// the Japanese one. The ascent, however, is measured at runtime in applyLangFont().
 #define CJK_FONT_JA u8g2_font_unifont_t_japanese3
 #define CJK_FONT_KO u8g2_font_unifont_t_korean2
 #define CJK_SIZE_DIV 2
 
 void setSize(uint8_t n) {
-  // gTextSize guarda la escala REALMENTE aplicada, no la pedida: setCur()
-  // multiplica el ascenso por ella y tiene que cuadrar con lo que se pinta.
+  // gTextSize stores the scale ACTUALLY applied, not the requested one: setCur()
+  // multiplies the ascent by it and it has to match what is drawn.
   gTextSize = gCjkFont ? (n >= CJK_SIZE_DIV ? n / CJK_SIZE_DIV : 1) : n;
   gfx->setTextSize(gTextSize);
 }
@@ -905,41 +1484,42 @@ void setCur(int x, int y) {
   gfx->setCursor(x, y + gFontAscent * gTextSize);
 }
 
-// Fija la fuente del idioma activo. Es el UNICO sitio que la toca: el resto del
-// codigo dibuja igual para todos los idiomas gracias a textW()/setCur().
+// Sets the font for the active language. It is the ONLY place that touches it:
+// the rest of the code draws the same for every language thanks to textW()/setCur().
 //
-// El ascenso se mide en vez de codificarlo: getTextBounds() devuelve y1 como
-// desplazamiento del borde superior respecto al cursor, negativo con las fuentes
-// U8g2 (que anclan en la linea base). Asi setCur() puede seguir tratando la Y
-// como "arriba" sea cual sea la fuente, sin constantes magicas por fuente.
+// The ascent is measured instead of hard-coded: getTextBounds() returns y1 as
+// the offset of the top edge relative to the cursor, negative with U8g2 fonts
+// (which anchor at the baseline). That way setCur() can keep treating Y as
+// "top" whatever the font, with no per-font magic constants.
 void applyLangFont() {
   gCjkFont = LANG_IS_CJK(gLang);
   if (!gCjkFont) {
-    gfx->setFont();            // 5x7 clasica, CP437: la Y ya es el borde superior
+    gfx->setFont();            // classic 5x7, CP437: Y is already the top edge
     gfx->setUTF8Print(false);
     gFontAscent = 0;
     return;
   }
   gfx->setFont((gLang == LANG_KO) ? CJK_FONT_KO : CJK_FONT_JA);
-  gfx->setUTF8Print(true);     // las cadenas CJK son UTF-8 multibyte
+  gfx->setUTF8Print(true);     // CJK strings are multibyte UTF-8
   int16_t x1, y1;
   uint16_t w, h;
   uint8_t antes = gTextSize;
   gfx->setTextSize(1);
   gfx->getTextBounds("A", 0, 0, &x1, &y1, &w, &h);
-  gFontAscent = -y1;           // y1 negativo: subir desde la linea base
+  gFontAscent = -y1;           // negative y1: go up from the baseline
   gfx->setTextSize(antes);
 }
 
-// ---------- medida de texto (preparado para fuentes CJK) ----------
-// La fuente clasica de Arduino_GFX avanza 6 px por caracter a tamano 1, y la UI
-// centraba con strlen(s)*6*n a pelo. Eso solo vale para un byte por caracter y
-// ancho fijo: con una fuente U8g2 para japones/coreano/chino, ni strlen() cuenta
-// caracteres (UTF-8 es multibyte) ni todos miden lo mismo. Centralizarlo aqui es
-// lo que permitira anadir esos idiomas sin tocar cada punto de dibujado.
+// ---------- text measurement (ready for CJK fonts) ----------
+// Arduino_GFX's classic font advances 6 px per character at size 1, and the UI
+// centered with a bare strlen(s)*6*n. That only works for one byte per
+// character and fixed width: with a U8g2 font for Japanese/Korean/Chinese,
+// strlen() does not count characters (UTF-8 is multibyte) and they are not all
+// the same width. Centralizing it here is what will allow adding those
+// languages without touching every drawing site.
 //
-// Para la fuente clasica devuelve EXACTAMENTE la misma cuenta que habia antes,
-// asi que este cambio no mueve un pixel en los seis idiomas actuales.
+// For the classic font it returns EXACTLY the same count as before, so this
+// change does not move a pixel in the six current languages.
 uint16_t textW(const char *s, uint8_t size) {
   if (!gCjkFont) return (uint16_t)strlen(s) * 6 * size;
   int16_t x1, y1;
@@ -948,16 +1528,43 @@ uint16_t textW(const char *s, uint8_t size) {
   return w;
 }
 
-// x del cursor para dejar el texto centrado en CX
+// cursor x to leave the text centered on CX
 int centerX(const char *s, uint8_t size) { return CX - textW(s, size) / 2; }
 
-// Imprime respetando la fuente activa. Con la CJK repinta el texto desplazado
-// 1 px: la unifont a escala reducida deja trazos de 1 px y se ve tenue, y una
-// fuente de verdad negrita a este tamano junta los trazos y estropea los kana.
-// Repintar engorda el trazo sin deformar el glifo. Probado en placa por
-// usakomint, que comparo las dos opciones en japones.
-// El teclado de apodos es solo alfabeto (se deja asi a proposito), de modo que
-// aqui nunca hay CJK y no hace falta engordar nada.
+// Size that fits in maxW. On the round board it changes nothing (returns n). On
+// the rectangular one it steps the size down until it fits; it measures with the
+// size ALREADY set (textW with a CJK font ignores the argument and uses the active font).
+int fitSize(const char *s, int n, int maxW) {
+#if BOARD_IS_ROUND
+  (void)s; (void)maxW;
+  return n;
+#else
+  if (maxW <= 0) maxW = LCD_WIDTH - 8;
+  for (; n > 1; n--) {
+    setSize(n);
+    if (textW(s, n) <= maxW) break;
+  }
+  return n;
+#endif
+}
+
+// Text centered on CX: TS() reduces the size on the rectangular board and
+// fitSize() lowers it further if it does not fit. On the round one it is
+// equivalent to setSize + setCur(centerX) + printT.
+void ctext(const char *s, int n, int y, int maxW) {
+  n = fitSize(s, TS(n), maxW);
+  setSize(n);
+  setCur(centerX(s, n), y);
+  printT(s);
+}
+
+// Prints honoring the active font. With CJK it redraws the text offset by
+// 1 px: unifont at a reduced scale leaves 1 px strokes and looks faint, and a
+// truly bold font at this size merges the strokes and ruins the kana.
+// Redrawing thickens the stroke without distorting the glyph. Tested on the
+// board by usakomint, who compared both options in Japanese.
+// The nickname keyboard is alphabet-only (left that way on purpose), so there
+// is never CJK here and nothing needs thickening.
 void printT(char c) { gfx->print(c); }
 
 void printT(const char *s) {
@@ -970,7 +1577,7 @@ void printT(const char *s) {
 }
 
 void render() {
-  if (pet.awaitingStarter()) {  // primera partida: elegir inicial (prioridad total)
+  if (pet.awaitingStarter()) {  // first game: pick a starter (top priority)
     renderStarterSelect();
     return;
   }
@@ -990,8 +1597,8 @@ void render() {
     renderKeyboard();
     return;
   }
-  if (clockOpen) {
-    renderClock();
+  if (settingsScreen != SETTINGS_CLOSED) {
+    renderSettingsScreen();
     return;
   }
   if (cardOpen) {
@@ -1000,8 +1607,8 @@ void render() {
   }
   int h = sceneHour();
   gNight = pet.sleeping || h < 6 || h >= 20;
-  // drawScene cubre los 466x466 completos: sin fillScreen(NEGRO) previo para
-  // que un flush DMA solapado nunca capture negro a medias (anti-parpadeo)
+  // drawScene covers the full 466x466: no prior fillScreen(BLACK), so an
+  // overlapping DMA flush never captures half-drawn black (anti-flicker)
   drawScene(pet.isEgg() ? 0 : DEX_TBL[pet.speciesId].biome, millis(), gNight);
 
   if (pet.ceremony) {
@@ -1027,15 +1634,16 @@ void render() {
       const char *rar = (pet.eggRarity() == R_LEGENDARIO) ? T(S_EGG_LEGEND) : T(S_EGG_RARE);
       gfx->setTextColor(pet.eggRarity() == R_LEGENDARIO ? UI_BAR_WARN : 0x4C98);
       setSize(2);
-      setCur(centerX(rar, 2), 316);
+      setCur(centerX(rar, 2), SY(316));
       printT(rar);
     }
     char reg[24];
     snprintf(reg, sizeof(reg), T(S_POKEDEX_FMT), pet.registeredCount());
-    gfx->fillRect(0, 312, 466, 154, gNight ? UI_BG_NIGHT : UI_BG_DAY);
+    // bottom panel: lower third (y=312..466 of 466); SY() rescales it
+    gfx->fillRect(0, SY(312), LCD_WIDTH, LCD_HEIGHT - SY(312), gNight ? UI_BG_NIGHT : UI_BG_DAY);
     gfx->setTextColor(inkColor());
     setSize(2);
-    setCur(centerX(reg, 2), 348);
+    setCur(centerX(reg, 2), SY(348));
     printT(reg);
   } else {
     const DexEntry &d = DEX_TBL[pet.speciesId];
@@ -1047,65 +1655,69 @@ void render() {
     drawPet();
     drawBath();
     drawPoops();
-    // panel inferior: base limpia para barras y botones sobre el paisaje
-    gfx->fillRect(0, 312, 466, 154, gNight ? UI_BG_NIGHT : UI_BG_DAY);
+    // bottom panel: clean base for bars and buttons over the landscape
+    gfx->fillRect(0, SY(312), LCD_WIDTH, LCD_HEIGHT - SY(312), gNight ? UI_BG_NIGHT : UI_BG_DAY);
     drawBars();
     drawButtons();
     drawCelebration();
-    if (pet.wantEvolveButton()) drawEvolveButton();        // CTA rojo: evolucionar
-    else if (pet.canRunawayNow()) drawRunawayButton();     // CTA sombrio: escapada (abandono)
-    else if (pet.wantFarewellButton()) drawFarewellButton();  // CTA dorado: despedida
+    if (pet.wantEvolveButton()) drawEvolveButton();        // red CTA: evolve
+    else if (pet.canRunawayNow()) drawRunawayButton();     // somber CTA: runaway (neglect)
+    else if (pet.wantFarewellButton()) drawFarewellButton();  // gold CTA: farewell
   }
 
   if (pet.sleeping) {
     gfx->setTextColor(UI_INK_NIGHT);
-    setSize(3);
-    setCur(320, 130);
+    setSize(TS(3));
+    setCur(SX(320), SY(130));
     printT("Zz");
   }
 
-  // selector de comida
+  // food picker
   if (feedMenuUntil) {
     if (!timeLeft(feedMenuUntil)) {
       feedMenuUntil = 0;
     } else {
-      gfx->fillRoundRect(101, 288, 264, 64, 14, UI_WHITE);
-      gfx->drawRoundRect(101, 288, 264, 64, 14, inkColor());
-      drawMap(SPR_ICON_FOOD, 16, 110, 296, 3, false);
-      drawMap(SPR_ICON_BERRY_B, 16, 176, 296, 3, false);
-      drawMap(SPR_ICON_BERRY_G, 16, 242, 296, 3, false);
-      drawMap(SPR_ICON_CANDY, 16, 308, 296, 3, false);
+      gfx->fillRoundRect(FEED_X, FEED_Y, FEED_W, FEED_H, FEED_R, UI_WHITE);
+      gfx->drawRoundRect(FEED_X, FEED_Y, FEED_W, FEED_H, FEED_R, inkColor());
+      const int fix = FEED_X + (FEED_ITEM - 16 * FEED_ICON_S) / 2;
+      const int fiy = FEED_Y + (FEED_H - 16 * FEED_ICON_S) / 2;
+      drawMap(SPR_ICON_APPLE, 16, fix, fiy, FEED_ICON_S, false);    // apple
+      drawMap(SPR_ICON_BERRY_B, 16, fix + FEED_ITEM, fiy, FEED_ICON_S, false);  // hamburger
+      drawMap(SPR_ICON_BERRY_G, 16, fix + 2 * FEED_ITEM, fiy, FEED_ICON_S, false);  // pizza
+      drawMap(SPR_ICON_CANDY, 16, fix + 3 * FEED_ITEM, fiy, FEED_ICON_S, false);
     }
   }
 
-  // dialogo "soltar?" (pulsacion larga sobre el bicho)
+  // "release?" dialog (long press on the creature)
   if (confirmUntil) {
     if (!timeLeft(confirmUntil)) {
       confirmUntil = 0;
     } else {
-      gfx->fillRoundRect(94, 168, 278, 152, 16, UI_WHITE);
-      gfx->drawRoundRect(94, 168, 278, 152, 16, UI_INK);
-      // 48 y no 28: el buffer se dimensiono cuando toda cadena era de un byte
-      // por caracter. Con una fila UTF-8, "%s 놓아줄까요?" mas el nombre pasa
-      // de 28 y snprintf corta a mitad de una secuencia de 3 bytes, que la
-      // fuente ya no sabe dibujar.
+      gfx->fillRoundRect(CONF_X, CONF_Y, CONF_W, CONF_H, CONF_R, UI_WHITE);
+      gfx->drawRoundRect(CONF_X, CONF_Y, CONF_W, CONF_H, CONF_R, UI_INK);
+      // 48 and not 28: the buffer was sized when every string was one byte
+      // per character. With a UTF-8 row, "%s 놓아줄까요?" plus the name goes
+      // over 28 and snprintf cuts in the middle of a 3-byte sequence, which
+      // the font can no longer draw.
       char q[48];
       snprintf(q, sizeof(q), T(S_RELEASE_FMT), dexName(pet.speciesId));
       gfx->setTextColor(UI_INK);
+      ctext(q, 2, CONF_Y + CONF_QY, CONF_W - 16);
+      const int cby = CONF_Y + CONF_BTN_REL_Y;
+      const int yesX = CONF_X + CONF_BTN_MARGIN;
+      const int noX = CONF_X + CONF_W - CONF_BTN_MARGIN - CONF_BTN_W;
       setSize(2);
-      setCur(centerX(q, 2), 196);
-      printT(q);
-      gfx->fillRoundRect(118, 252, 100, 52, 12, UI_BAR_OK);
+      gfx->fillRoundRect(yesX, cby, CONF_BTN_W, CONF_BTN_H, 12, UI_BAR_OK);
       gfx->setTextColor(UI_WHITE);
-      setCur(118 + (100 - textW(T(S_YES), 2)) / 2, 270);
+      setCur(yesX + (CONF_BTN_W - textW(T(S_YES), 2)) / 2, cby + CONF_BTN_TY);
       printT(T(S_YES));
-      gfx->fillRoundRect(248, 252, 100, 52, 12, UI_BAR_BAD);
-      setCur(248 + (100 - textW(T(S_NO), 2)) / 2, 270);
+      gfx->fillRoundRect(noX, cby, CONF_BTN_W, CONF_BTN_H, 12, UI_BAR_BAD);
+      setCur(noX + (CONF_BTN_W - textW(T(S_NO), 2)) / 2, cby + CONF_BTN_TY);
       printT(T(S_NO));
     }
   }
 
-  // dialogo de decision (evolucionar/mantener, despedirse/quedaros)
+  // decision dialog (evolve/keep, say goodbye/stay together)
   if (choiceKind) {
     if (!timeLeft(choiceUntil)) choiceKind = 0;
     else drawChoiceDialog();
@@ -1114,7 +1726,7 @@ void render() {
   gfx->flush();
 }
 
-// ---------- minijuego: toques con la pokeball ----------
+// ---------- minigame: keepy-uppy with the pokeball ----------
 
 void startGame() {
   if (pet.isEgg() || pet.sleeping || pet.ceremony) return;
@@ -1124,15 +1736,15 @@ void startGame() {
   gameMisses = 0;
   gameNewHi = false;
   hitTime = 0;
-  gamePetX = 233;
+  gamePetX = CX;
   lastGameStep = millis();
   respawnBall();
 }
 
 void respawnBall() {
-  ballX = 150 + random(166);
-  ballY = 96;
-  float sp = 1.6f + gameScore * 0.05f;  // mas viva segun avanzas
+  ballX = SX(150) + random(SX(166));
+  ballY = SY(96);
+  float sp = 1.6f + gameScore * 0.05f;  // livelier as you progress
   if (sp > 4.0f) sp = 4.0f;
   ballVX = random(2) ? sp : -sp;
   ballVY = 0;
@@ -1140,15 +1752,15 @@ void respawnBall() {
 
 void gameTap(int16_t x, int16_t y) {
   if (gameOverUntil) return;
-  if (y < 72) {  // tocar la cabecera = abandonar sin premio
+  if (y < SY(72)) {  // touching the header = quit with no reward
     gameOpen = false;
     return;
   }
   float dx = ballX - x, dy = ballY - y;
-  if (dx * dx + dy * dy < 74 * 74) {  // toque a la bola!
+  if (dx * dx + dy * dy < 74 * 74) {  // the ball was hit!
     gameScore++;
     sfxPlay(SFX_PLAY);
-    // golpe mas suave: impulso moderado que crece poco a poco con la puntuacion
+    // softer hit: moderate impulse that grows little by little with the score
     float lift = 6.6f + (gameScore > 16 ? 3.5f : gameScore * 0.22f);
     ballVY = -lift;
     ballVX += dx * 0.12f;
@@ -1162,55 +1774,67 @@ void gameTap(int16_t x, int16_t y) {
 
 void stepGame() {
   uint32_t now = millis();
-  // paso relativo a 85 ms, el periodo de frame con el que se afinaron estas
-  // constantes (ver el planificador de render en loop()): sin esto la fisica
-  // avanzaba "un paso por frame" y el juego iba mas rapido o mas lento segun
-  // lo que tardara en dibujarse el frame anterior, que depende del tamano del
-  // sprite cargado. Con un Charizard la bola caia mas despacio que con un
-  // Diglett, asi que el record no era comparable entre especies.
+  // step relative to 85 ms, the frame period these constants were tuned at
+  // (see the render scheduler in loop()): without this the physics advanced
+  // "one step per frame" and the game ran faster or slower depending on how
+  // long the previous frame took to draw, which depends on the size of the
+  // loaded sprite. With a Charizard the ball fell slower than with a
+  // Diglett, so the record was not comparable across species.
   float k = lastGameStep ? (now - lastGameStep) / 85.0f : 1.0f;
-  if (k > 3.0f) k = 3.0f;  // frame anormalmente tardio: no dar un salto enorme
+  if (k > 3.0f) k = 3.0f;  // abnormally late frame: do not take a huge jump
   lastGameStep = now;
 
-  float grav = 0.40f + gameScore * 0.013f;  // cae un poco mas rapido cada vez
+  float grav = 0.40f + gameScore * 0.013f;  // falls a bit faster each time
   if (grav > 0.80f) grav = 0.80f;
   ballVY += grav * k;
   ballX += ballVX * k;
   ballY += ballVY * k;
-  // rebote en la pared circular
+#if BOARD_IS_ROUND
+  // bounce off the circular wall (physical round bezel)
   float dx = ballX - CX, dy = ballY - CY;
   float d = sqrtf(dx * dx + dy * dy);
-  if (d > 205) {
+  if (d > ARENA_WALL_R) {
     float nx = dx / d, ny = dy / d;
     float dot = ballVX * nx + ballVY * ny;
     if (dot > 0) {
       ballVX = (ballVX - 2 * dot * nx) * 0.85f;
       ballVY = (ballVY - 2 * dot * ny) * 0.85f;
     }
-    ballX = CX + nx * 205;
-    ballY = CY + ny * 205;
+    ballX = CX + nx * ARENA_WALL_R;
+    ballY = CY + ny * ARENA_WALL_R;
   }
-  if (ballY > 384) {  // al suelo
+#else
+  // no circular bezel in a rectangle: bounces off left/right/ceiling
+  if (ballX < ARENA_LEFT)  { ballX = ARENA_LEFT;  ballVX = fabsf(ballVX) * 0.85f; }
+  if (ballX > ARENA_RIGHT) { ballX = ARENA_RIGHT; ballVX = -fabsf(ballVX) * 0.85f; }
+  if (ballY < ARENA_TOP)   { ballY = ARENA_TOP;   ballVY = fabsf(ballVY) * 0.85f; }
+#endif
+  if (ballY > ARENA_GROUND_Y) {  // hit the ground
     if (++gameMisses >= 3) {
       gameNewHi = (gameScore > pet.gameHi);
-      pet.playResult(gameScore);  // actualiza el record y da felicidad
+      pet.playResult(gameScore);  // updates the record and gives happiness
       sfxPlay(gameNewHi && gameScore > 0 ? SFX_MEDAL : SFX_LEVEL);
       gameOverUntil = millis() + 4000;
     } else {
       respawnBall();
     }
   }
-  // el bicho la sigue por abajo
+  // the creature follows it from below
   float chase = (ballX - gamePetX) * 0.12f;
   if (chase > 7) chase = 7;
   if (chase < -7) chase = -7;
   gamePetX += chase * k;
 }
 
-// ---------- saco de entrenamiento (entrena la fuerza) ----------
+// ---------- training bag (trains strength) ----------
+
+// the bag can't start while the creature is an egg, asleep or in a ceremony
+bool canStartSack() {
+  return !pet.isEgg() && !pet.sleeping && !pet.ceremony;
+}
 
 void startSack() {
-  if (pet.isEgg() || pet.sleeping || pet.ceremony) return;
+  if (!canStartSack()) return;
   sackOpen = true;
   sackUntil = millis() + 10000;
   sackOverUntil = 0;
@@ -1220,51 +1844,44 @@ void startSack() {
 }
 
 void sackTap() {
-  if (!timeLeft(sackUntil)) return;  // ya termino el tiempo
+  if (!timeLeft(sackUntil)) return;  // time is already up
   sackHits++;
-  sackShake = 16;  // sacude el saco
+  sackShake = 16;  // shakes the bag
 }
 
-void drawGameScene();  // prototipo (definida mas abajo)
+void drawGameScene();  // prototype (defined further down)
 
 void renderSack() {
   uint32_t now = millis();
-  drawGameScene();  // fondo del habitat
+  drawGameScene();  // habitat background
   bool night = sceneHour() < 6 || sceneHour() >= 20;
   uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
 
-  // pantalla de resultado
+  // result screen
   if (sackOverUntil) {
     if (!timeLeft(sackOverUntil)) { sackOpen = false; return; }
     char b[20];
     snprintf(b, sizeof(b), T(S_HITS_FMT), sackHits);
     gfx->setTextColor(ink);
-    setSize(4);
-    setCur(centerX(b, 4), 150);
-    printT(b);
+    ctext(b, 4, SY(150));
     char g[18];
     snprintf(g, sizeof(g), T(S_STR_GAIN_FMT), sackGain);
     gfx->setTextColor(UI_BAR_BAD);
-    setSize(3);
-    setCur(centerX(g, 3), 210);
-    printT(g);
-    setSize(2);
+    ctext(g, 3, SY(210));
     if (sackNewHi && sackHits > 0) {
       gfx->setTextColor(UI_BAR_WARN);
-      setCur(centerX(T(S_NEW_RECORD), 2), 256);
-      printT(T(S_NEW_RECORD));
+      ctext(T(S_NEW_RECORD), 2, SY(256));
     } else {
       char r[18];
       snprintf(r, sizeof(r), T(S_RECORD_FMT), pet.strHi);
       gfx->setTextColor(ink);
-      setCur(centerX(r, 2), 256);
-      printT(r);
+      ctext(r, 2, SY(256));
     }
     gfx->flush();
     return;
   }
 
-  // se acabaron los 10 s: aplicar entrenamiento
+  // the 10 s are over: apply training
   if (!timeLeft(sackUntil)) {
     sackNewHi = (sackHits > pet.strHi);
     sackGain = pet.trainStrength(sackHits);
@@ -1274,39 +1891,34 @@ void renderSack() {
     return;
   }
 
-  // aporreo activo
+  // active mashing
   sackShake *= 0.84f;
   int off = (int)(sackShake * sinf(now * 0.05f));
-  int sx = CX + off, top = 86, sy = 150;
-  gfx->fillRect(CX - 3, 56, 6, top - 56, ink);          // gancho/cuerda
-  gfx->fillRect(sx - 4, top - 30, 8, 34, ink);          // cadena
-  gfx->fillRoundRect(sx - 42, top, 84, 150, 26, C565(0xb5, 0x3a, 0x3a));  // saco
-  gfx->fillRoundRect(sx - 42, top, 84, 22, 18, C565(0x7e, 0x28, 0x28));   // tapa
-  gfx->drawRoundRect(sx - 42, top, 84, 150, 26, ink);
-  gfx->fillRect(sx - 42, top + 70, 84, 4, C565(0x7e, 0x28, 0x28));        // costura
+  int sx = CX + off, top = SK(86);
+  gfx->fillRect(CX - SKM(6) / 2, SK(56), SKM(6), top - SK(56), ink);          // hook/rope
+  gfx->fillRect(sx - SKM(8) / 2, top - SK(30), SKM(8), SK(34), ink);          // chain
+  gfx->fillRoundRect(sx - SK(42), top, SK(84), SK(150), SK(26), C565(0xb5, 0x3a, 0x3a));  // bag
+  gfx->fillRoundRect(sx - SK(42), top, SK(84), SK(22), SK(18), C565(0x7e, 0x28, 0x28));   // cap
+  gfx->drawRoundRect(sx - SK(42), top, SK(84), SK(150), SK(26), ink);
+  gfx->fillRect(sx - SK(42), top + SK(70), SK(84), SKM(4), C565(0x7e, 0x28, 0x28));        // seam
 
-  // contador de golpes
+  // hit counter
   char buf[8];
   snprintf(buf, sizeof(buf), "%u", sackHits);
   gfx->setTextColor(ink);
-  setSize(6);
-  setCur(centerX(buf, 6), 268);
-  printT(buf);
+  ctext(buf, 6, SY(268));
+  ctext(T(S_HIT_FAST), 2, SY(322));
 
-  setSize(2);
-  setCur(centerX(T(S_HIT_FAST), 2), 322);
-  printT(T(S_HIT_FAST));
-
-  // barra de tiempo
+  // time bar
   uint32_t left = sackUntil - now;
-  int bw = 280, fw = (int)((uint32_t)bw * left / 10000);
-  gfx->fillRoundRect(CX - bw / 2, 350, bw, 16, 5, UI_TRACK);
-  if (fw > 2) gfx->fillRoundRect(CX - bw / 2, 350, fw, 16, 5, UI_BAR_OK);
+  int bw = SX(280), fw = (int)((uint32_t)bw * left / 10000);
+  gfx->fillRoundRect(CX - bw / 2, SY(350), bw, SKM(16), SKM(5), UI_TRACK);
+  if (fw > 2) gfx->fillRoundRect(CX - bw / 2, SY(350), fw, SKM(16), SKM(5), UI_BAR_OK);
 
   gfx->flush();
 }
 
-// fondo del minijuego: hatibat del bicho (cielo por hora + suelo del bioma)
+// minigame background: the creature's habitat (sky by time of day + biome ground)
 void drawGameScene() {
   int hh = sceneHour();
   bool night = hh < 6 || hh >= 20;
@@ -1315,21 +1927,21 @@ void drawGameScene() {
   else if (hh < 8) { top = C565(0xd1, 0x6a, 0x86); bot = C565(0xf3, 0xb8, 0x7c); }
   else if (hh < 18){ top = C565(0x8f, 0xc8, 0xea); bot = C565(0xdc, 0xee, 0xe6); }
   else             { top = C565(0xc7, 0x5a, 0x4a); bot = C565(0xf0, 0xae, 0x64); }
-  int hor = 376;
+  int hor = SY(376);  // minigame horizon (lower than HORIZON: leaves room for the ball)
   for (int y = 0; y < hor; y += 8)
-    gfx->fillRect(0, y, 466, 8, lerp565(top, bot, y, hor));
+    gfx->fillRect(0, y, LCD_WIDTH, 8, lerp565(top, bot, y, hor));
   if (night)
-    for (auto &st : STARS) gfx->fillRect(st[0], st[1], 4, 4, UI_WHITE);
+    drawNightStars(millis(), top, bot, hor);
   uint8_t bio = pet.isEgg() ? 0 : DEX_TBL[pet.speciesId].biome;
   uint16_t soil = BIOME_SOIL[bio < 6 ? bio : 0];
   if (night) soil = lerp565(soil, C565(0x16, 0x1c, 0x30), 9, 16);
-  gfx->fillRect(0, hor, 466, 466 - hor, soil);
+  gfx->fillRect(0, hor, LCD_WIDTH, LCD_HEIGHT - hor, soil);
 }
 
 void renderGame() {
-  // sin fillScreen(NEGRO): drawGameScene cubre los 466x466 completos. Si el
-  // DMA del flush anterior aun lee el buffer, vera contenido valido (no negro
-  // a medio pintar), que era el parpadeo a 25 fps.
+  // no fillScreen(BLACK): drawGameScene covers the full 466x466. If the
+  // previous flush's DMA is still reading the buffer, it sees valid content
+  // (not half-painted black), which was the flicker at 25 fps.
   bool night = sceneHour() < 6 || sceneHour() >= 20;
   uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
 
@@ -1342,25 +1954,19 @@ void renderGame() {
     char buf[22];
     snprintf(buf, sizeof(buf), T(S_SCORE_FMT), gameScore);
     gfx->setTextColor(ink);
-    setSize(4);
-    setCur(centerX(buf, 4), 160);
-    printT(buf);
-    setSize(2);
+    ctext(buf, 4, SY(160));
     if (gameNewHi && gameScore > 0) {
       gfx->setTextColor(UI_BAR_WARN);
-      setCur(centerX(T(S_NEW_RECORD), 2), 214);
-      printT(T(S_NEW_RECORD));
+      ctext(T(S_NEW_RECORD), 2, SY(214));
     } else {
       char rec[20];
       snprintf(rec, sizeof(rec), T(S_RECORD_FMT), pet.gameHi);
       gfx->setTextColor(ink);
-      setCur(centerX(rec, 2), 214);
-      printT(rec);
+      ctext(rec, 2, SY(214));
     }
     const char *msg = gameScore >= 10 ? T(S_GREAT_JOY) : T(S_PLUS_JOY);
     gfx->setTextColor(ink);
-    setCur(centerX(msg, 2), 250);
-    printT(msg);
+    ctext(msg, 2, SY(250));
     gfx->flush();
     return;
   }
@@ -1368,37 +1974,33 @@ void renderGame() {
   drawGameScene();
   stepGame();
 
-  // marcador, record y vidas
+  // score, record and lives
   char buf[8];
   snprintf(buf, sizeof(buf), "%u", gameScore);
   gfx->setTextColor(ink);
-  setSize(4);
-  setCur(centerX(buf, 4), 30);
-  printT(buf);
-  // 24 y no 12: en japones "きろく %u" son 10 bytes antes de la cifra y el
-  // record se quedaba en su primer digito ("きろく 2" con 219). Las tallas de
-  // los buffers de texto las vigila TestBuffersDeTexto en test/test_tools.py.
+  ctext(buf, 4, SY(30));
+  // 24 and not 12: in Japanese "きろく %u" is 10 bytes before the number and the
+  // record was cut to its first digit ("きろく 2" with 219). Text buffer sizes
+  // are watched by TestBuffersDeTexto in test/test_tools.py.
   char rec[24];
   snprintf(rec, sizeof(rec), T(S_REC_FMT), pet.gameHi);
-  setSize(2);
-  setCur(centerX(rec, 2), 76);
-  printT(rec);
+  ctext(rec, 2, SY(76));
   for (int i = 0; i < 3; i++) {
-    if (i < 3 - gameMisses) gfx->fillCircle(180 + i * 28, 104, 6, UI_BAR_BAD);
-    else gfx->drawCircle(180 + i * 28, 104, 6, UI_TRACK);
+    if (i < 3 - gameMisses) gfx->fillCircle(LIFE_X0 + i * LIFE_DX, LIFE_Y, LIFE_R, UI_BAR_BAD);
+    else gfx->drawCircle(LIFE_X0 + i * LIFE_DX, LIFE_Y, LIFE_R, UI_TRACK);
   }
 
   if (pmd.loaded) {
     uint8_t act = (ballX > gamePetX + 4) ? PMD_WALKR : (ballX < gamePetX - 4) ? PMD_WALKL : PMD_IDLE;
     if (!pmd.has(act)) act = PMD_IDLE;
-    drawPmdAct(act, (int)gamePetX, 394, millis(), true, false, 3);
+    drawPmdAct(act, (int)gamePetX, GAME_PET_Y, millis(), true, false, 3);
   } else if (mon.loaded) {
     int s = (mon.h * 2 > 130) ? 1 : 2;
     int w = mon.w * s, h = mon.h * s;
     uint16_t fm = mon.frameMs ? mon.frameMs : 100;
     uint16_t fi = (millis() / fm) % mon.frames;
     const uint8_t *fr = mon.data + (uint32_t)fi * mon.w * mon.h;
-    int px = (int)gamePetX - w / 2, py = 394 - h;
+    int px = (int)gamePetX - w / 2, py = GAME_PET_Y - h;
     for (int r = 0; r < mon.h; r++)
       for (int c = 0; c < mon.w; c++) {
         uint8_t idx = fr[r * mon.w + c];
@@ -1407,7 +2009,7 @@ void renderGame() {
       }
   }
 
-  // anillo de impacto que se expande y desvanece (feedback suave del golpe)
+  // impact ring that expands and fades (soft hit feedback)
   uint32_t ht = millis() - hitTime;
   if (hitTime && ht < 260) {
     int rad = 22 + (int)(ht / 6);
@@ -1415,20 +2017,20 @@ void renderGame() {
     gfx->drawCircle((int)hitX, (int)hitY, rad - 2, C565(0xff, 0xd9, 0x8a));
   }
 
-  // la pokeball
-  drawMap(SPR_ICON_PLAY, 16, (int)ballX - 24, (int)ballY - 24, 3, false);
+  // the pokeball
+  drawMap(SPR_ICON_PLAY, 16, (int)ballX - BALL_OFF, (int)ballY - BALL_OFF, BALL_S, false);
 
   gfx->flush();
 }
 
-// ---------- ficha del bicho (deslizar vertical) ----------
+// ---------- creature info card (vertical swipe) ----------
 
-// x donde arrancan las barras de la ficha. Estaba fijo en 150, que daba de sobra
-// para etiquetas latinas de 3 caracteres pero no para las japonesas, mas anchas:
-// こうげき se metia dentro de la barra. Se calcula a partir de la etiqueta mas
-// larga para que las cuatro barras sigan alineadas en cualquier idioma, con el
-// valor original como suelo (asi en los idiomas latinos no cambia nada).
-// Requiere tener ya puesto el tamano de texto 2, porque textW() lo necesita.
+// x where the info card bars start. It was fixed at 150, which was plenty for
+// 3-character Latin labels but not for the wider Japanese ones: こうげき ran
+// into the bar. It is computed from the longest label so the four bars stay
+// aligned in any language, with the original value as a floor (so nothing
+// changes in the Latin-script languages).
+// Requires text size 2 to already be set, because textW() needs it.
 static int statBarX() {
   const StrId ids[] = { S_STAT_ATK, S_STAT_DEF, S_STAT_SPE, S_STAT_WGT, S_VIN };
   int ancho = 0;
@@ -1436,155 +2038,413 @@ static int statBarX() {
     int w = textW(T(id), 2);
     if (w > ancho) ancho = w;
   }
-  int x = 96 + ancho + 12;   // 12 px de aire entre etiqueta y barra
-  return x < 150 ? 150 : x;
+  int x = SX(96) + ancho + 12;   // 12 px of space between label and bar
+  return x < SX(150) ? SX(150) : x;
 }
 
 void drawCardStat(int y, const char *label, uint16_t val, uint16_t maxBar, uint16_t color) {
   gfx->setTextColor(UI_INK);
   setSize(2);
-  setCur(96, y);
+  setCur(SX(96), y);
   printT(label);
   char num[8];
   snprintf(num, sizeof(num), "%u", val);
-  setCur(330, y);
+  setCur(SX(330), y);
   printT(num);
   int bx = statBarX();
-  int bw = 310 - bx;   // la barra siempre acaba en 310, dejando aire hasta el numero
+  int bw = SX(310) - bx;   // the bar always ends at SX(310), leaving space before the number
   int fw = (int)val * bw / maxBar;
   if (fw > bw) fw = bw;
   gfx->fillRoundRect(bx, y + 2, bw, 11, 3, UI_TRACK);
   if (fw > 2) gfx->fillRoundRect(bx, y + 2, fw, 11, 3, color);
 }
 
-// ---------- ajuste de hora en pantalla (deslizar abajo) ----------
-// El usuario pone su hora LOCAL a ojo; el firmware la usa tal cual, asi que
-// no hay que gestionar zona horaria. Preserva el dia (no rompe racha/edad).
+// ---------- on-screen time setting (settings menu > Time) ----------
+// The user sets their LOCAL time by eye; the firmware uses it as-is, so there
+// is no time zone to manage. Preserves the day (does not break streak/age).
 
 void openClock() {
   uint32_t e = pet.lastSeenEpoch ? pet.lastSeenEpoch : rtcEpoch();
   clockH = (e / 3600) % 24;
   clockM = (e / 60) % 60;
-  clockOpen = true;
+  settingsScreen = SETTINGS_TIME;
 }
 
+// OK: sets the time and goes back to the settings menu
 void applyClock() {
   uint32_t base = pet.lastSeenEpoch ? pet.lastSeenEpoch : rtcEpoch();
   uint32_t e = (base / 86400) * 86400 + (uint32_t)clockH * 3600 + (uint32_t)clockM * 60;
   rtcSetEpoch(e);
   pet.setClock(e);
-  clockOpen = false;
+  settingsScreen = SETTINGS_MENU;
 }
 
 void drawClockBtn(int x, int y, const char *l) {
-  gfx->fillRoundRect(x, y, 58, 58, 12, UI_WHITE);
-  gfx->drawRoundRect(x, y, 58, 58, 12, UI_INK);
+  gfx->fillRoundRect(x, y, CLK_BTN, CLK_BTN, CLK_BTN_R, UI_WHITE);
+  gfx->drawRoundRect(x, y, CLK_BTN, CLK_BTN, CLK_BTN_R, UI_INK);
   gfx->setTextColor(UI_INK);
-  setSize(4);
-  setCur(x + 17, y + 15);
+  setSize(TS(4));
+  setCur(x + CLK_GLYPH_DX, y + CLK_GLYPH_DY);
   printT(l);
 }
 
-// pildoras de idioma centradas en y; rellena la activa
-#define LANG_PILL_Y 296
-#define LANG_PILL_H 30
-#define LANG_PILL_X 336          // pildora de idioma (cicla LANG_COUNT al tocar)
-#define LANG_PILL_W 96
-static const char *const LANG_CODES[LANG_COUNT] = { "ES", "EN", "FR", "DE", "IT", "PT", "JA", "KO" };
+#pragma region Settings shared helpers
+// SETTINGS_*, CLK_*, CLOSE_BTN_*: boards/layout.h (one table per board, shared by
+// drawing and touch)
 
-void renderClock() {
+// Largest size <= preferredSize at which text fits maxWidth, on BOTH boards
+// (fitSize() only shrinks on the rect board, and these screens show translated
+// labels on the round one too). Leaves that size applied, like fitSize().
+int shrinkTextSizeToWidth(const char *text, int preferredSize, int maxWidth) {
+  int textSize = preferredSize;
+  for (; textSize > 1; textSize--) {
+    setSize(textSize);
+    if (textW(text, textSize) <= maxWidth) break;
+  }
+  setSize(textSize);
+  return textSize;
+}
+
+// Prints text centered on both axes inside a box, shrunk to the box width minus
+// SETTINGS_TEXT_SIDE_PAD per side. Height is taken as 8 px per size step: exact
+// for the classic font, close enough for the CJK one (16 px glyphs at half scale).
+void drawTextCenteredInBox(const char *text, int preferredSize, int boxLeft, int boxTop, int boxWidth, int boxHeight) {
+  int textSize = shrinkTextSizeToWidth(text, preferredSize, boxWidth - 2 * SETTINGS_TEXT_SIDE_PAD);
+  setCur(boxLeft + (boxWidth - (int)textW(text, textSize)) / 2, boxTop + (boxHeight - 8 * textSize) / 2);
+  printT(text);
+}
+
+// Line of text centered on CX in the title-wide box starting at top (titles and section labels)
+void drawSettingsLabel(const char *text, int top) {
+  drawTextCenteredInBox(text, TS(3), SETTINGS_TITLE_X, top, SETTINGS_TITLE_MAX_W, 8 * TS(3));
+}
+
+// Clears the screen and draws the title shared by every settings screen
+void beginSettingsScreen(const char *title) {
   gfx->fillScreen(RGB565_BLACK);
-  gfx->fillCircle(CX, CY, 231, UI_BG_DAY);
+  fillScreenBg(UI_BG_DAY);
   gfx->setTextColor(UI_INK);
-  setSize(3);
-  setCur(centerX(T(S_SET_TIME), 3), 44);
-  printT(T(S_SET_TIME));
+  drawSettingsLabel(title, SETTINGS_TITLE_Y);
+}
 
-  char t[8];
-  snprintf(t, sizeof(t), "%02d:%02d", clockH, clockM);
-  setSize(7);
-  setCur(CX - 105, 108);
-  printT(t);
+// Round X at the top right: the only way out of every settings screen
+void drawSettingsCloseButton() {
+  drawCloseButton(gfx, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_R, UI_INK, UI_BG_DAY);
+}
 
-  drawClockBtn(104, 190, "-");  // hora -
-  drawClockBtn(170, 190, "+");  // hora +
-  drawClockBtn(252, 190, "-");  // min -
-  drawClockBtn(318, 190, "+");  // min +
+bool isTouchOnSettingsCloseButton(int16_t touchX, int16_t touchY) {
+  return isTouchInsideCircle(touchX, touchY, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_HIT_R);
+}
+#pragma endregion
+
+#pragma region Settings menu screen
+// Title, three large rows (Audio / Video, Time, Language) and the firmware version
+#define SETTINGS_MENU_ROW_COUNT 3
+static const StrId SETTINGS_MENU_ROW_LABELS[SETTINGS_MENU_ROW_COUNT] = { S_MENU_AV, S_MENU_TIME, S_MENU_LANG };
+
+void openSettingsMenu() { settingsScreen = SETTINGS_MENU; }
+
+int settingsMenuRowTop(int rowIndex) {
+  return SETTINGS_MENU_ROW_Y + rowIndex * (SETTINGS_MENU_ROW_H + SETTINGS_MENU_ROW_GAP);
+}
+
+void renderSettingsMenu() {
+  beginSettingsScreen(T(S_MENU_TITLE));
+
+  #pragma region Rows: label centered, arrow at the right (equal margin on the left keeps it centered)
+  const int labelMargin = SETTINGS_MENU_ARROW_INSET + SETTINGS_MENU_ARROW_SIZE / 2;
+  for (int rowIndex = 0; rowIndex < SETTINGS_MENU_ROW_COUNT; rowIndex++) {
+    int rowTop = settingsMenuRowTop(rowIndex);
+    gfx->fillRoundRect(SETTINGS_MENU_ROW_X, rowTop, SETTINGS_MENU_ROW_W, SETTINGS_MENU_ROW_H, SETTINGS_MENU_ROW_R, UI_WHITE);
+    gfx->drawRoundRect(SETTINGS_MENU_ROW_X, rowTop, SETTINGS_MENU_ROW_W, SETTINGS_MENU_ROW_H, SETTINGS_MENU_ROW_R, UI_INK);
+    gfx->setTextColor(UI_INK);
+    drawTextCenteredInBox(T(SETTINGS_MENU_ROW_LABELS[rowIndex]), TS(3), SETTINGS_MENU_ROW_X + labelMargin, rowTop,
+                          SETTINGS_MENU_ROW_W - 2 * labelMargin, SETTINGS_MENU_ROW_H);
+    drawPageArrow(gfx, SETTINGS_MENU_ROW_X + SETTINGS_MENU_ROW_W - SETTINGS_MENU_ARROW_INSET, rowTop + SETTINGS_MENU_ROW_H / 2,
+                  SETTINGS_MENU_ARROW_SIZE, 1, UI_INK);
+  }
+  #pragma endregion
+
+  #pragma region Firmware version (discreet, at the very bottom)
+  char versionText[20];
+  snprintf(versionText, sizeof(versionText), "TamaPoke v%s", FW_VERSION);
+  gfx->setTextColor(UI_TRACK);
+  setSize(1);
+  setCur(centerX(versionText, 1), SETTINGS_MENU_VERSION_Y);
+  printT(versionText);
+  #pragma endregion
+
+  drawSettingsCloseButton();
+  gfx->flush();
+}
+
+void handleSettingsMenuTap(int16_t touchX, int16_t touchY) {
+  if (isTouchOnSettingsCloseButton(touchX, touchY)) {  // back to the main screen
+    settingsScreen = SETTINGS_CLOSED;
+    return;
+  }
+  for (int rowIndex = 0; rowIndex < SETTINGS_MENU_ROW_COUNT; rowIndex++) {
+    if (!isTouchInsideRect(touchX, touchY, SETTINGS_MENU_ROW_X, settingsMenuRowTop(rowIndex), SETTINGS_MENU_ROW_W, SETTINGS_MENU_ROW_H)) continue;
+    if (rowIndex == 0) settingsScreen = SETTINGS_AUDIO_VIDEO;
+    else if (rowIndex == 1) openClock();  // loads the current time into the editor
+    else settingsScreen = SETTINGS_LANGUAGE;
+    return;
+  }
+}
+#pragma endregion
+
+#pragma region Audio / video settings screen
+// Sound on/off pill and a brightness bar with -/+ buttons (same squares as the
+// time screen). Brightness is only an in-memory level for now: hooking it to
+// the backlight (boardSetBrightness) is pending.
+void renderAudioVideoSettings() {
+  beginSettingsScreen(T(S_MENU_AV));
+
+  #pragma region Sound: label and on/off pill
+  drawSettingsLabel(T(S_SOUND), SETTINGS_SOUND_LABEL_Y);
+  bool soundOn = audioEnabled();
+  gfx->fillRoundRect(SETTINGS_SOUND_PILL_X, SETTINGS_SOUND_PILL_Y, SETTINGS_SOUND_PILL_W, SETTINGS_SOUND_PILL_H, SETTINGS_PILL_R,
+                     soundOn ? UI_BAR_OK : UI_WHITE);
+  gfx->drawRoundRect(SETTINGS_SOUND_PILL_X, SETTINGS_SOUND_PILL_Y, SETTINGS_SOUND_PILL_W, SETTINGS_SOUND_PILL_H, SETTINGS_PILL_R, UI_INK);
+  gfx->setTextColor(soundOn ? UI_BG_DAY : UI_INK);
+  drawTextCenteredInBox(soundOn ? T(S_ON) : T(S_OFF), TS(3), SETTINGS_SOUND_PILL_X, SETTINGS_SOUND_PILL_Y,
+                        SETTINGS_SOUND_PILL_W, SETTINGS_SOUND_PILL_H);
+  #pragma endregion
+
+  #pragma region Brightness: label, -/+ buttons and the level bar between them
+  gfx->setTextColor(UI_INK);
+  drawSettingsLabel(T(S_BRIGHTNESS), SETTINGS_BRIGHTNESS_LABEL_Y);
+  drawClockBtn(SETTINGS_BRIGHTNESS_MINUS_X, SETTINGS_BRIGHTNESS_ROW_Y, "-");
+  drawClockBtn(SETTINGS_BRIGHTNESS_PLUS_X, SETTINGS_BRIGHTNESS_ROW_Y, "+");
+  const int barTop = SETTINGS_BRIGHTNESS_ROW_Y + (CLK_BTN - SETTINGS_BRIGHTNESS_BAR_H) / 2;
+  gfx->fillRoundRect(SETTINGS_BRIGHTNESS_BAR_X, barTop, SETTINGS_BRIGHTNESS_BAR_W, SETTINGS_BRIGHTNESS_BAR_H,
+                     SETTINGS_BRIGHTNESS_BAR_H / 2, UI_TRACK);
+  int fillWidth = (SETTINGS_BRIGHTNESS_BAR_W - 4) * settingsBrightnessLevel / SETTINGS_BRIGHTNESS_MAX;
+  if (fillWidth > 0)
+    gfx->fillRoundRect(SETTINGS_BRIGHTNESS_BAR_X + 2, barTop + 2, fillWidth, SETTINGS_BRIGHTNESS_BAR_H - 4,
+                       (SETTINGS_BRIGHTNESS_BAR_H - 4) / 2, UI_BAR_OK);
+  #pragma endregion
+
+  drawSettingsCloseButton();
+  gfx->flush();
+}
+
+void handleAudioVideoSettingsTap(int16_t touchX, int16_t touchY) {
+  if (isTouchOnSettingsCloseButton(touchX, touchY)) {  // back to the menu
+    settingsScreen = SETTINGS_MENU;
+    return;
+  }
+  if (isTouchInsideRect(touchX, touchY, SETTINGS_SOUND_PILL_X, SETTINGS_SOUND_PILL_Y, SETTINGS_SOUND_PILL_W, SETTINGS_SOUND_PILL_H)) {
+    audioSetEnabled(!audioEnabled());
+    if (audioEnabled()) sfxPlay(SFX_TAP);  // confirms when turning on
+    return;
+  }
+  if (isTouchInsideRect(touchX, touchY, SETTINGS_BRIGHTNESS_MINUS_X, SETTINGS_BRIGHTNESS_ROW_Y, CLK_BTN, CLK_BTN)) {
+    if (settingsBrightnessLevel > 0) settingsBrightnessLevel--;
+    return;
+  }
+  if (isTouchInsideRect(touchX, touchY, SETTINGS_BRIGHTNESS_PLUS_X, SETTINGS_BRIGHTNESS_ROW_Y, CLK_BTN, CLK_BTN)) {
+    if (settingsBrightnessLevel < SETTINGS_BRIGHTNESS_MAX) settingsBrightnessLevel++;
+  }
+}
+#pragma endregion
+
+#pragma region Time settings screen: 12h/24h format
+// The choice only changes how this screen shows and steps the hour: clockH is
+// always 0..23, so applyClock() is the same in both modes.
+void loadClockFormatFromNvs() {
+  Preferences preferences;
+  preferences.begin("tamapoke", true);  // read-only
+  clockUses24Hour = preferences.getBool("clk24h", true);
+  preferences.end();
+}
+
+void saveClockFormatToNvs() {
+  Preferences preferences;
+  preferences.begin("tamapoke", false);
+  preferences.putBool("clk24h", clockUses24Hour);
+  preferences.end();
+}
+
+// clockH as a 12-hour dial shows it: 0 -> 12, 13 -> 1
+int clockHourOn12HourDial() {
+  int hourInHalfDay = clockH % 12;
+  return hourInHalfDay == 0 ? 12 : hourInHalfDay;
+}
+
+// hour -/+ (hourStep -1 or +1). In 12h mode it cycles 12, 1..11 inside the
+// current half of the day: AM/PM only changes with its own toggle.
+void stepClockHour(int hourStep) {
+  if (clockUses24Hour) {
+    clockH = (clockH + 24 + hourStep) % 24;
+    return;
+  }
+  int halfDayOffset = clockH >= 12 ? 12 : 0;
+  clockH = (clockH % 12 + 12 + hourStep) % 12 + halfDayOffset;
+}
+
+// Two-segment switch on the CLK_MODE row (12h|24h, AM|PM): the selected segment
+// is filled. Disabled = track color with nothing selected (AM/PM in 24h mode).
+void drawClockModeSwitch(int switchLeft, const char *firstLabel, const char *secondLabel, bool secondSelected, bool enabled) {
+  const uint16_t outlineColor = enabled ? UI_INK : UI_TRACK;
+  gfx->fillRoundRect(switchLeft, CLK_MODE_Y, 2 * CLK_MODE_SEG_W, CLK_MODE_H, CLK_MODE_R, UI_WHITE);
+  if (enabled)
+    gfx->fillRoundRect(switchLeft + (secondSelected ? CLK_MODE_SEG_W : 0), CLK_MODE_Y, CLK_MODE_SEG_W, CLK_MODE_H, CLK_MODE_R, UI_BAR_OK);
+  gfx->drawRoundRect(switchLeft, CLK_MODE_Y, 2 * CLK_MODE_SEG_W, CLK_MODE_H, CLK_MODE_R, outlineColor);
+  gfx->drawFastVLine(switchLeft + CLK_MODE_SEG_W, CLK_MODE_Y, CLK_MODE_H, outlineColor);
+  for (int segmentIndex = 0; segmentIndex < 2; segmentIndex++) {
+    bool segmentSelected = enabled && ((segmentIndex == 1) == secondSelected);
+    gfx->setTextColor(!enabled ? UI_TRACK : segmentSelected ? UI_BG_DAY : UI_INK);
+    drawTextCenteredInBox(segmentIndex == 0 ? firstLabel : secondLabel, TS(3), switchLeft + segmentIndex * CLK_MODE_SEG_W, CLK_MODE_Y,
+                          CLK_MODE_SEG_W, CLK_MODE_H);
+  }
+}
+#pragma endregion
+
+#pragma region Time settings screen
+void renderClock() {
+  beginSettingsScreen(T(S_SET_TIME));
+
+  gfx->setTextColor(UI_INK);
+  char timeText[8];
+  if (clockUses24Hour) snprintf(timeText, sizeof(timeText), "%02d:%02d", clockH, clockM);
+  else snprintf(timeText, sizeof(timeText), "%2d:%02d", clockHourOn12HourDial(), clockM);  // same 5 chars: stays centered
+  setSize(TS(7));
+  setCur(CX - CLK_DIG_HALF, CLK_DIG_Y);
+  printT(timeText);
+
+  drawClockBtn(CLK_HM_X, CLK_BTN_Y, "-");  // hour -
+  drawClockBtn(CLK_HP_X, CLK_BTN_Y, "+");  // hour +
+  drawClockBtn(CLK_MM_X, CLK_BTN_Y, "-");  // min -
+  drawClockBtn(CLK_MP_X, CLK_BTN_Y, "+");  // min +
   setSize(2);
   gfx->setTextColor(UI_TRACK);
-  setCur(120, 256);
+  setCur(CLK_HLBL_X, CLK_LBL_Y);
   printT(T(S_HOUR));
-  setCur(276, 256);
+  setCur(CLK_MLBL_X, CLK_LBL_Y);
   printT(T(S_MIN));
 
-  // interruptor de sonido (izquierda de la fila de idioma)
-  bool snd = audioEnabled();
-  const char *sl = snd ? T(S_SND_ON) : T(S_SND_OFF);
-  gfx->fillRoundRect(34, LANG_PILL_Y, 96, LANG_PILL_H, 8, snd ? UI_BAR_OK : UI_WHITE);
-  gfx->drawRoundRect(34, LANG_PILL_Y, 96, LANG_PILL_H, 8, UI_INK);
-  gfx->setTextColor(snd ? UI_BG_DAY : UI_INK);
-  setSize(2);
-  setCur(34 + (96 - textW(sl, 2)) / 2, LANG_PILL_Y + 8);
-  printT(sl);
+  #pragma region 12h/24h switch and AM/PM toggle (language-neutral literals)
+  drawClockModeSwitch(CLK_FORMAT_X, "12h", "24h", clockUses24Hour, true);
+  drawClockModeSwitch(CLK_AMPM_X, "AM", "PM", clockH >= 12, !clockUses24Hour);
+  #pragma endregion
 
-  // selector de idioma: una pildora que cicla los 6 idiomas al tocar
-  gfx->fillRoundRect(LANG_PILL_X, LANG_PILL_Y, LANG_PILL_W, LANG_PILL_H, 8, UI_WHITE);
-  gfx->drawRoundRect(LANG_PILL_X, LANG_PILL_Y, LANG_PILL_W, LANG_PILL_H, 8, UI_INK);
-  char lp[10];
-  snprintf(lp, sizeof(lp), "%s >", LANG_CODES[gLang]);
-  gfx->setTextColor(UI_INK);
-  setSize(2);
-  setCur(LANG_PILL_X + (LANG_PILL_W - textW(lp, 2)) / 2, LANG_PILL_Y + 8);
-  printT(lp);
-
-  gfx->fillRoundRect(133, 340, 200, 48, 14, UI_BAR_OK);
+  gfx->fillRoundRect(CLK_OK_X, CLK_OK_Y, CLK_OK_W, CLK_OK_H, CLK_OK_R, UI_BAR_OK);
   gfx->setTextColor(UI_BG_DAY);
-  setSize(3);
-  setCur(CX - 18, 352);
+  setSize(TS(3));
+  setCur(CX - CLK_OK_TX, CLK_OK_TY);
   printT("OK");
 
-  gfx->setTextColor(UI_TRACK);
-  setSize(2);
-  setCur(centerX(T(S_CLOCK_CANCEL), 2), 410);
-  printT(T(S_CLOCK_CANCEL));
-
-  // version del firmware (discreta, abajo del todo)
-  char ver[20];
-  snprintf(ver, sizeof(ver), "TamaPoke v%s", FW_VERSION);
-  setSize(1);
-  setCur(centerX(ver, 1), 436);
-  printT(ver);
+  drawSettingsCloseButton();
   gfx->flush();
 }
 
 void clockTap(int16_t x, int16_t y) {
-  if (y >= 190 && y <= 248) {  // fila de botones +/-
-    if (x >= 104 && x < 162) clockH = (clockH + 23) % 24;
-    else if (x >= 170 && x < 228) clockH = (clockH + 1) % 24;
-    else if (x >= 252 && x < 310) clockM = (clockM + 59) % 60;
-    else if (x >= 318 && x < 376) clockM = (clockM + 1) % 60;
+  if (isTouchOnSettingsCloseButton(x, y)) {  // back to the menu WITHOUT applying
+    settingsScreen = SETTINGS_MENU;
     return;
   }
-  if (y >= LANG_PILL_Y && y <= LANG_PILL_Y + LANG_PILL_H) {
-    if (x >= 34 && x < 130) {                  // interruptor de sonido
-      audioSetEnabled(!audioEnabled());
-      if (audioEnabled()) sfxPlay(SFX_TAP);    // confirma al encender
-      return;
-    }
-    if (x >= LANG_PILL_X && x < LANG_PILL_X + LANG_PILL_W) {  // cicla idioma
-      setLang((Lang)((gLang + 1) % LANG_COUNT));
-      applyLangFont();  // la fuente cambia con el idioma
-      sfxPlay(SFX_TAP);
-      return;
-    }
+  if (y >= CLK_BTN_Y && y <= CLK_BTN_Y + CLK_BTN) {  // row of +/- buttons
+    if (x >= CLK_HM_X && x < CLK_HM_X + CLK_BTN) stepClockHour(-1);
+    else if (x >= CLK_HP_X && x < CLK_HP_X + CLK_BTN) stepClockHour(1);
+    else if (x >= CLK_MM_X && x < CLK_MM_X + CLK_BTN) clockM = (clockM + 59) % 60;
+    else if (x >= CLK_MP_X && x < CLK_MP_X + CLK_BTN) clockM = (clockM + 1) % 60;
+    return;
   }
-  if (y >= 340 && y <= 388 && x >= 133 && x <= 333) { applyClock(); return; }
+  #pragma region 12h/24h switch (tap anywhere on it flips and persists) and AM/PM toggle (12h only)
+  if (isTouchInsideRect(x, y, CLK_FORMAT_X, CLK_MODE_Y, 2 * CLK_MODE_SEG_W, CLK_MODE_H)) {
+    clockUses24Hour = !clockUses24Hour;
+    saveClockFormatToNvs();
+    return;
+  }
+  if (!clockUses24Hour && isTouchInsideRect(x, y, CLK_AMPM_X, CLK_MODE_Y, 2 * CLK_MODE_SEG_W, CLK_MODE_H)) {
+    clockH = (clockH + 12) % 24;  // same hour on the dial, other half of the day
+    return;
+  }
+  #pragma endregion
+  if (y >= CLK_OK_Y && y <= CLK_OK_Y + CLK_OK_H && x >= CLK_OK_X && x <= CLK_OK_X + CLK_OK_W) { applyClock(); return; }
+}
+#pragma endregion
+
+#pragma region Language settings screen
+// One tappable cell per language, 2 columns (row-major, in Lang order). Names
+// are ASCII-only so they render under the CP437 font AND the CJK U8g2 fonts.
+static const char *const LANGUAGE_NATIVE_NAMES[LANG_COUNT] = {
+  "Espanol", "English", "Francais", "Deutsch", "Italiano", "Portugues", "Nihongo", "Hangugeo"
+};
+
+int languageCellLeft(int languageIndex) { return SETTINGS_LANG_CELL_X0 + (languageIndex % 2) * SETTINGS_LANG_CELL_COL_STEP; }
+int languageCellTop(int languageIndex) { return SETTINGS_LANG_CELL_Y0 + (languageIndex / 2) * SETTINGS_LANG_CELL_ROW_STEP; }
+
+void renderLanguageSettings() {
+  beginSettingsScreen(T(S_MENU_LANG));
+
+  #pragma region One text size for every cell: the largest at which all names fit
+  int sharedTextSize = TS(3);
+  for (int languageIndex = 0; languageIndex < LANG_COUNT; languageIndex++) {
+    sharedTextSize = shrinkTextSizeToWidth(LANGUAGE_NATIVE_NAMES[languageIndex], sharedTextSize,
+                                           SETTINGS_LANG_CELL_W - 2 * SETTINGS_TEXT_SIDE_PAD);
+  }
+  #pragma endregion
+
+  #pragma region Cells (the active language is filled)
+  for (int languageIndex = 0; languageIndex < LANG_COUNT; languageIndex++) {
+    bool isActiveLanguage = (languageIndex == gLang);
+    int cellLeft = languageCellLeft(languageIndex), cellTop = languageCellTop(languageIndex);
+    gfx->fillRoundRect(cellLeft, cellTop, SETTINGS_LANG_CELL_W, SETTINGS_LANG_CELL_H, SETTINGS_LANG_CELL_R,
+                       isActiveLanguage ? UI_BAR_OK : UI_WHITE);
+    gfx->drawRoundRect(cellLeft, cellTop, SETTINGS_LANG_CELL_W, SETTINGS_LANG_CELL_H, SETTINGS_LANG_CELL_R, UI_INK);
+    gfx->setTextColor(isActiveLanguage ? UI_BG_DAY : UI_INK);
+    drawTextCenteredInBox(LANGUAGE_NATIVE_NAMES[languageIndex], sharedTextSize, cellLeft, cellTop,
+                          SETTINGS_LANG_CELL_W, SETTINGS_LANG_CELL_H);
+  }
+  #pragma endregion
+
+  drawSettingsCloseButton();
+  gfx->flush();
 }
 
-// llama + numero de racha arriba a la izquierda
+void handleLanguageSettingsTap(int16_t touchX, int16_t touchY) {
+  if (isTouchOnSettingsCloseButton(touchX, touchY)) {  // back to the menu
+    settingsScreen = SETTINGS_MENU;
+    return;
+  }
+  for (int languageIndex = 0; languageIndex < LANG_COUNT; languageIndex++) {
+    if (!isTouchInsideRect(touchX, touchY, languageCellLeft(languageIndex), languageCellTop(languageIndex),
+                           SETTINGS_LANG_CELL_W, SETTINGS_LANG_CELL_H)) continue;
+    setLang((Lang)languageIndex);
+    applyLangFont();  // the font changes with the language
+    sfxPlay(SFX_TAP);
+    settingsScreen = SETTINGS_MENU;
+    return;
+  }
+}
+#pragma endregion
+
+#pragma region Settings dispatch (render and tap for whichever settings screen is open)
+void renderSettingsScreen() {
+  switch (settingsScreen) {
+    case SETTINGS_AUDIO_VIDEO: renderAudioVideoSettings(); break;
+    case SETTINGS_TIME: renderClock(); break;
+    case SETTINGS_LANGUAGE: renderLanguageSettings(); break;
+    default: renderSettingsMenu(); break;
+  }
+}
+
+void handleSettingsTap(int16_t touchX, int16_t touchY) {
+  switch (settingsScreen) {
+    case SETTINGS_AUDIO_VIDEO: handleAudioVideoSettingsTap(touchX, touchY); break;
+    case SETTINGS_TIME: clockTap(touchX, touchY); break;
+    case SETTINGS_LANGUAGE: handleLanguageSettingsTap(touchX, touchY); break;
+    default: handleSettingsMenuTap(touchX, touchY); break;
+  }
+}
+#pragma endregion
+
+// flame + streak number at the top left
 void drawStreakBadge() {
   if (pet.streak < 1) return;
-  int x = 26, y = 16;
+  int x = STREAK_X, y = STREAK_Y;
   gfx->fillTriangle(x + 8, y, x + 1, y + 17, x + 15, y + 17, UI_BAR_BAD);
   gfx->fillTriangle(x + 8, y + 7, x + 4, y + 17, x + 12, y + 17, UI_BAR_WARN);
   char s[6];
@@ -1595,11 +2455,11 @@ void drawStreakBadge() {
   printT(s);
 }
 
-// banner temporal: medalla nueva o hito de racha
+// temporary banner: new medal or streak milestone
 void drawCelebration() {
   const char *l1 = nullptr, *l2 = nullptr;
-  // 32 y no 20: "%u にちれんぞく！" ya pasa de 20 con una sola cifra, y snprintf
-  // cortaba a mitad de un caracter de 3 bytes.
+  // 32 and not 20: "%u にちれんぞく！" already exceeds 20 with a single digit, and
+  // snprintf cut in the middle of a 3-byte character.
   char buf[32];
   if (pet.showMedal()) {
     for (int i = 0; i < MED_COUNT; i++)
@@ -1611,18 +2471,14 @@ void drawCelebration() {
     l2 = buf;
   }
   if (!l1) return;
-  gfx->fillRoundRect(73, 150, 320, 96, 16, UI_BAR_WARN);
-  gfx->drawRoundRect(73, 150, 320, 96, 16, UI_INK);
+  gfx->fillRoundRect(CEL_X, CEL_Y, CEL_W, CEL_H, CEL_R, UI_BAR_WARN);
+  gfx->drawRoundRect(CEL_X, CEL_Y, CEL_W, CEL_H, CEL_R, UI_INK);
   gfx->setTextColor(UI_INK);
-  setSize(3);
-  setCur(centerX(l1, 3), 176);
-  printT(l1);
-  setSize(2);
-  setCur(centerX(l2, 2), 212);
-  printT(l2);
+  ctext(l1, 3, CEL_L1Y, CEL_W - 16);
+  ctext(l2, 2, CEL_L2Y, CEL_W - 16);
 }
 
-// medallas en la ficha: badge con etiqueta, color si conseguida
+// medals on the info card: labeled badge, colored if earned
 void drawMedalBadge(int x, int y, int i) {
   bool got = pet.hasMedal(1 << i);
   gfx->fillRoundRect(x, y, 100, 24, 6, got ? UI_BAR_OK : UI_TRACK);
@@ -1633,88 +2489,163 @@ void drawMedalBadge(int x, int y, int i) {
   printT(medalLabel(i));
 }
 
-// pagina 0: perfil (retrato grande, identidad, racha, vinculo, baya)
+// pencil next to the card name: as tall as the text line, never below the minimum
+int cardPencilSizeForTextSize(int textSize) {
+  return 8 * textSize < CARD_PENCIL_MIN_SIZE ? CARD_PENCIL_MIN_SIZE : 8 * textSize;
+}
+
+//#region Info card page 0: portrait and stat row helpers (CARD_PROFILE_* in boards/layout.h)
+// Height of one text line at the scale setSize() last applied: 8 px per step
+// with the classic font, 16 px per step with the CJK unifont (whose scale is
+// already the requested size halved, so sizes 2 and up match the classic font).
+int cardTextLineHeight() {
+  return (gCjkFont ? 16 : 8) * gTextSize;
+}
+
+// Idle portrait at the largest whole scale that fits the portrait box (capped),
+// with its canvas centered in the box. Not drawPmdAct(): its minimum scale of 2
+// on the round board would push the widest sprites (96 px canvas) out of the column.
+void drawCardProfilePortrait() {
+  const PmdAct &idle = pmd.acts[PMD_IDLE];
+  if (!pmd.loaded || !idle.frames) return;
+  int scale = CARD_PROFILE_PORTRAIT_W / idle.w;
+  if (CARD_PROFILE_PORTRAIT_H / idle.h < scale) scale = CARD_PROFILE_PORTRAIT_H / idle.h;
+  if (scale > CARD_PROFILE_PORTRAIT_MAX_SCALE) scale = CARD_PROFILE_PORTRAIT_MAX_SCALE;
+  if (scale < 1) scale = 1;
+  int canvasLeft = CARD_PROFILE_PORTRAIT_X + (CARD_PROFILE_PORTRAIT_W - idle.w * scale) / 2;
+  int canvasTop = CARD_PROFILE_PORTRAIT_Y + (CARD_PROFILE_PORTRAIT_H - idle.h * scale) / 2;
+  drawPmdFrameAtScale(pmd, PMD_IDLE, canvasLeft, canvasTop, millis(), true, false, scale);
+}
+
+// Label of a stat row, left-justified in the stats column and shrunk to its
+// width on both boards. Returns the top of the value line under it.
+int drawCardProfileRowLabel(int rowTop, const char *label) {
+  gfx->setTextColor(UI_TRACK);
+  shrinkTextSizeToWidth(label, CARD_PROFILE_LABEL_SIZE, CARD_PROFILE_STATS_W);
+  setCur(CARD_PROFILE_STATS_LEFT, rowTop);
+  printT(label);
+  return rowTop + cardTextLineHeight() + CARD_PROFILE_VALUE_GAP;
+}
+
+// Stat row whose value is text, right-justified on the line under the label
+void drawCardProfileTextRow(int rowTop, const char *label, const char *value) {
+  int valueTop = drawCardProfileRowLabel(rowTop, label);
+  gfx->setTextColor(UI_INK);
+  int valueSize = shrinkTextSizeToWidth(value, CARD_PROFILE_VALUE_SIZE, CARD_PROFILE_STATS_W);
+  setCur(CARD_PROFILE_STATS_RIGHT - textW(value, valueSize), valueTop);
+  printT(value);
+}
+
+// Stat row whose value is a bar and its number: the number right-justified, the
+// bar filling the rest of the line. The number's slot is measured on maxValue,
+// so the bar keeps the same length whatever the value.
+void drawCardProfileBarRow(int rowTop, const char *label, uint16_t value, uint16_t maxValue, uint16_t barColor) {
+  int valueTop = drawCardProfileRowLabel(rowTop, label);
+  char valueText[8], maxValueText[8];
+  snprintf(valueText, sizeof(valueText), "%u", value);
+  snprintf(maxValueText, sizeof(maxValueText), "%u", maxValue);
+  int valueSize = shrinkTextSizeToWidth(maxValueText, CARD_PROFILE_VALUE_SIZE, CARD_PROFILE_STATS_W);
+  int numberSlotWidth = textW(maxValueText, valueSize);
+  int lineHeight = cardTextLineHeight();
+  gfx->setTextColor(UI_INK);
+  setCur(CARD_PROFILE_STATS_RIGHT - textW(valueText, valueSize), valueTop);
+  printT(valueText);
+  //#region Bar track and fill, vertically centered on the value line
+  int barWidth = CARD_PROFILE_STATS_W - numberSlotWidth - CARD_PROFILE_BAR_GAP;
+  int barTop = valueTop + (lineHeight - CARD_PROFILE_BAR_H) / 2;
+  int fillWidth = (int)value * barWidth / maxValue;
+  if (fillWidth > barWidth) fillWidth = barWidth;
+  gfx->fillRoundRect(CARD_PROFILE_STATS_LEFT, barTop, barWidth, CARD_PROFILE_BAR_H, 3, UI_TRACK);
+  if (fillWidth > 2) gfx->fillRoundRect(CARD_PROFILE_STATS_LEFT, barTop, fillWidth, CARD_PROFILE_BAR_H, 3, barColor);
+  //#endregion
+}
+//#endregion
+
+// page 0: profile (name, portrait on the left, stat rows on the right: level,
+// streak (best), bond, favorite food, age)
 void renderCardProfile() {
   const DexEntry &d = DEX_TBL[pet.speciesId];
   const char *nm = pet.nick[0] ? pet.nick : dexName(pet.speciesId);
   char head[32];
-  snprintf(head, sizeof(head), T(S_NAME_FMT), pet.shiny ? "*" : "", nm, pet.level());
+  // no level here: it has its own stat row below
+  snprintf(head, sizeof(head), "%s%s", pet.shiny ? "*" : "", nm);
   gfx->setTextColor(d.accent);
-  // auto-encoge: a tamano 3 los nombres largos no caben en la franja estrecha de
-  // arriba de la pantalla redonda, asi que se cortaban por el borde. El ancho se
-  // MIDE con textW(): strlen() cuenta bytes, y en una fila UTF-8 no hay un byte
-  // por caracter ni todos miden lo mismo. Con la fuente clasica textW() devuelve
-  // strlen()*6*size, o sea exactamente la cuenta anterior: no mueve un pixel en
-  // los seis idiomas latinos (11 caracteres a tamano 3 son esos 198 px).
-  setSize(3);
-  int hts = (textW(head, 3) <= 198) ? 3 : 2;
+  // auto-shrink: long names do not fit at the large size. The width is MEASURED
+  // with textW() (strlen() counts bytes). On the round one: size 3 when the name
+  // plus the pencil fit in 198 px, otherwise 2; on the rectangular one the large size is TS(3).
+  const int big = TS(3);
+  setSize(big);
+  int hts = (textW(head, big) + CARD_PENCIL_GAP + cardPencilSizeForTextSize(big) <= CARD_HEAD_MAXW) ? big : big - 1;
   setSize(hts);
-  setCur(centerX(head, hts), hts == 3 ? 34 : 40);
+  //#region Name and rename pencil, centered together as one group
+  int headWidth = textW(head, hts);
+  int pencilSize = cardPencilSizeForTextSize(hts);
+  int groupLeft = CX - (headWidth + CARD_PENCIL_GAP + pencilSize) / 2;
+  int headTop = hts == big ? SY(34) : SY(40);
+  setCur(groupLeft, headTop);
   printT(head);
-  if (pet.nick[0]) {  // especie real bajo el apodo
+  cardPencilLeft = groupLeft + headWidth + CARD_PENCIL_GAP;
+  cardPencilTop = headTop + (8 * hts - pencilSize) / 2;  // centered on the text line
+  cardPencilSize = pencilSize;
+  drawPencilIcon(gfx, cardPencilLeft, cardPencilTop, cardPencilSize, UI_INK);
+  //#endregion
+  if (pet.nick[0]) {  // real species under the nickname
     const char *sp = dexName(pet.speciesId);
     char par[32];
     snprintf(par, sizeof(par), "(%s)", sp);
     gfx->setTextColor(UI_TRACK);
-    setSize(2);
-    setCur(centerX(par, 2), 64);   // medido, no contado en bytes
-    printT(par);
+    ctext(par, 2, SY(64));   // measured, not counted in bytes
   }
 
-  // retrato grande animado
-  if (pmd.loaded) drawPmdAct(PMD_IDLE, CX, 206, millis(), true, false, 4);
+  //#region Animated portrait (left column)
+  drawCardProfilePortrait();
+  //#endregion
 
-  // racha con llama
-  int sx = 138, sy = 224;
-  gfx->fillTriangle(sx + 8, sy, sx + 1, sy + 18, sx + 15, sy + 18, UI_BAR_BAD);
-  gfx->fillTriangle(sx + 8, sy + 7, sx + 4, sy + 18, sx + 12, sy + 18, UI_BAR_WARN);
-  char rl[40];  // en japones pierde cifras con 30 a partir de 100 dias
-  snprintf(rl, sizeof(rl), T(S_STREAK_FMT), pet.streak, pet.bestStreak);
-  gfx->setTextColor(UI_INK);
-  setSize(2);
-  setCur(sx + 24, sy + 2);
-  printT(rl);
+  //#region Stat rows (right column): level, streak (best), bond, favorite food, age
+  int rowTop = CARD_PROFILE_ROW_Y0;
+  char levelText[8];
+  snprintf(levelText, sizeof(levelText), "%u", pet.level());
+  drawCardProfileTextRow(rowTop, T(S_CARD_LEVEL), levelText);
+  rowTop += CARD_PROFILE_ROW_STEP;
 
-  drawCardStat(258, T(S_VIN), pet.bond, 100, C565(0xd4, 0x52, 0x7e));
+  char streakText[16];  // "65535 (65535)" at most
+  snprintf(streakText, sizeof(streakText), "%u (%u)", pet.streak, pet.bestStreak);
+  drawCardProfileTextRow(rowTop, T(S_CARD_STREAK_BEST), streakText);
+  rowTop += CARD_PROFILE_ROW_STEP;
+
+  drawCardProfileBarRow(rowTop, T(S_CARD_BOND), pet.bond, 100, C565(0xd4, 0x52, 0x7e));
+  rowTop += CARD_PROFILE_ROW_STEP;
 
   const char *berry = !pet.berryKnown ? T(S_BERRY_UNK)
                       : pet.lovesBerry(0) ? T(S_BERRY_RED)
                       : pet.lovesBerry(1) ? T(S_BERRY_BLUE)
                                           : T(S_BERRY_GREEN);
-  char info[48];
-  snprintf(info, sizeof(info), T(S_INFO_FMT), berry,
-           (unsigned long)(pet.ageMinutes / 1440));
-  gfx->setTextColor(UI_INK);
-  setSize(2);
-  setCur(centerX(info, 2), 296);
-  printT(info);
+  drawCardProfileTextRow(rowTop, T(S_CARD_FAV_FOOD), berry);
+  rowTop += CARD_PROFILE_ROW_STEP;
 
-  gfx->setTextColor(UI_TRACK);
-  setCur(centerX(T(S_RENAME_HINT), 2), 332);
-  printT(T(S_RENAME_HINT));
+  char ageText[24];
+  snprintf(ageText, sizeof(ageText), T(S_CARD_AGE_FMT), (unsigned long)(pet.ageMinutes / 1440));
+  drawCardProfileTextRow(rowTop, T(S_CARD_AGE), ageText);
+  //#endregion
 }
 
-// pagina 1: combate (4 barras + boton de entrenar)
+// page 1: battle (4 bars + train button)
 void renderCardStats() {
   gfx->setTextColor(UI_INK);
-  setSize(3);
-  setCur(centerX(T(S_BATTLE), 3), 48);
-  printT(T(S_BATTLE));
+  ctext(T(S_BATTLE), 3, SY(48));
 
-  drawCardStat(118, T(S_STAT_ATK), pet.atkStat(), 260, UI_BAR_BAD);
-  drawCardStat(160, T(S_STAT_DEF), pet.defStat(), 260, 0x4C98);
-  drawCardStat(202, T(S_STAT_SPE), pet.speStat(), 260, UI_BAR_WARN);
-  drawCardStat(244, T(S_STAT_WGT), pet.weight, 100, 0xB3C8);
+  drawCardStat(SY(118), T(S_STAT_ATK), pet.atkStat(), 260, UI_BAR_BAD);
+  drawCardStat(SY(160), T(S_STAT_DEF), pet.defStat(), 260, 0x4C98);
+  drawCardStat(SY(202), T(S_STAT_SPE), pet.speStat(), 260, UI_BAR_WARN);
+  drawCardStat(SY(244), T(S_STAT_WGT), pet.weight, 100, 0xB3C8);
 
-  // boton: saco de entrenamiento de fuerza
-  gfx->fillRoundRect(96, 300, 274, 40, 12, UI_BAR_BAD);
+  // button: strength training bag (greyed out while it can't start, e.g. asleep)
+  gfx->fillRoundRect(TRAIN_X, TRAIN_Y, TRAIN_W, TRAIN_H, 12, canStartSack() ? UI_BAR_BAD : UI_TRACK);
   gfx->setTextColor(UI_BG_DAY);
-  setSize(2);
-  setCur(centerX(T(S_TRAIN_STR), 2), 311);
-  printT(T(S_TRAIN_STR));
+  ctext(T(S_TRAIN_STR), 2, TRAIN_Y + TRAIN_TY, TRAIN_W - 8);
 }
 
-// pagina 2: medallas con etiqueta descriptiva
+// page 2: medals with descriptive labels
 void renderCardMedals() {
   int got = 0;
   for (int i = 0; i < MED_COUNT; i++)
@@ -1722,61 +2653,53 @@ void renderCardMedals() {
   char head[24];
   snprintf(head, sizeof(head), T(S_MEDALS_FMT), got, MED_COUNT);
   gfx->setTextColor(UI_INK);
-  setSize(3);
-  setCur(centerX(head, 3), 48);
-  printT(head);
+  ctext(head, 3, SY(48));
 
   for (int i = 0; i < MED_COUNT; i++) {
-    int x = 28 + (i % 2) * 206, y = 104 + (i / 2) * 54;
+    int x = MED_X0 + (i % 2) * MED_COLSTEP, y = MED_Y0 + (i / 2) * MED_STEP;
     bool g = pet.hasMedal(1 << i);
-    gfx->fillRoundRect(x, y, 196, 44, 10, g ? UI_BAR_OK : UI_TRACK);
-    if (g) {  // marca de conseguida
-      gfx->fillCircle(x + 22, y + 22, 11, UI_BG_DAY);
+    gfx->fillRoundRect(x, y, MED_W, MED_H, 10, g ? UI_BAR_OK : UI_TRACK);
+    if (g) {  // earned mark
+      gfx->fillCircle(x + MED_MARK_CX, y + MED_H / 2, MED_MARK_R, UI_BG_DAY);
       gfx->setTextColor(UI_BAR_OK);
       setSize(2);
-      setCur(x + 16, y + 13);
+      setCur(x + MED_MARK_CX - 6, y + MED_H / 2 - 9);
       printT("v");
     }
     gfx->setTextColor(g ? UI_BG_DAY : 0x8410);
-    setSize(2);
-    setCur(x + 44, y + 14);
+    int fs = fitSize(medalDesc(i), TS(2), MED_W - MED_TXT_X - 6);
+    setSize(fs);
+    setCur(x + MED_TXT_X, y + (MED_H - 8 * fs) / 2);
     printT(medalDesc(i));
   }
 }
 
-// pagina 3: progreso (nivel, evolucion, descuidos) — saca a la luz mecanicas
-// que antes eran invisibles (cuanto falta para subir/evolucionar y por que)
+// page 3: progress (level, evolution, care mistakes) - surfaces mechanics that
+// used to be invisible (how long until leveling up/evolving and why)
 void renderCardProgress() {
   const DexEntry &d = DEX_TBL[pet.speciesId];
   gfx->setTextColor(UI_INK);
-  setSize(3);
-  setCur(centerX(T(S_PROGRESS), 3), 44);
-  printT(T(S_PROGRESS));
+  ctext(T(S_PROGRESS), 3, SY(44));
 
-  // nivel grande
+  // large level
   char lv[10];
   snprintf(lv, sizeof(lv), T(S_LVL_FMT), pet.level());
-  setSize(5);
-  setCur(centerX(lv, 5), 86);
-  printT(lv);
+  ctext(lv, 5, SY(86));
 
-  // barra de progreso al siguiente nivel (1 nivel = 60 min de juego)
+  // progress bar to the next level (1 level = 60 min of play)
   uint8_t into = pet.ageMinutes % MINUTES_PER_LEVEL;
-  int bx = 93, bw = 280, by = 158, bh = 22;
+  int bx = SX(93), bw = SX(280), by = SY(158), bh = BAR_H_CARD;
   gfx->fillRoundRect(bx, by, bw, bh, 6, UI_TRACK);
   int fw = (bw - 4) * into / MINUTES_PER_LEVEL;
   if (fw > 0) gfx->fillRoundRect(bx + 2, by + 2, fw, bh - 4, 5, UI_BAR_OK);
   char nx[32];
   snprintf(nx, sizeof(nx), T(S_NEXT_LVL_FMT), MINUTES_PER_LEVEL - into, pet.level() + 1);
   gfx->setTextColor(UI_INK);
-  setSize(2);
-  setCur(centerX(nx, 2), by + 32);
-  printT(nx);
+  ctext(nx, 2, by + SY(32), LCD_WIDTH - 2 * CARD_SIDE_MARGIN);  // clear of the page arrows
 
-  // estado de evolucion
+  // evolution status (these lines sit level with the page arrows)
   gfx->setTextColor(UI_TRACK);
-  setCur(centerX(T(S_EVO_LABEL), 2), 230);
-  printT(T(S_EVO_LABEL));
+  ctext(T(S_EVO_LABEL), 2, SY(230), LCD_WIDTH - 2 * CARD_SIDE_MARGIN);
   char evoBuf[32];
   const char *evo;
   uint16_t evoCol = UI_INK;
@@ -1793,45 +2716,96 @@ void renderCardProgress() {
     }
   }
   gfx->setTextColor(evoCol);
-  setCur(centerX(evo, 2), 256);
-  printT(evo);
+  ctext(evo, 2, SY(256), LCD_WIDTH - 2 * CARD_SIDE_MARGIN);
 
-  // descuidos (retrasan la evolucion)
+  // care mistakes (delay evolution)
   char ms[24];
   snprintf(ms, sizeof(ms), T(S_MISTAKES_FMT), pet.careMistakes);
   gfx->setTextColor(pet.careMistakes > 0 ? UI_BAR_BAD : UI_INK);
-  setCur(centerX(ms, 2), 312);
-  printT(ms);
+  ctext(ms, 2, SY(312));
 }
 
 void renderCard() {
   gfx->fillScreen(RGB565_BLACK);
-  gfx->fillCircle(CX, CY, 231, UI_BG_DAY);
+  fillScreenBg(UI_BG_DAY);
   if (cardPage == 0) renderCardProfile();
   else if (cardPage == 1) renderCardStats();
   else if (cardPage == 2) renderCardMedals();
   else renderCardProgress();
 
-  // indicador de 4 paginas + ayuda
-  for (int i = 0; i < 4; i++) {
-    if (i == cardPage) gfx->fillCircle(194 + i * 26, 374, 5, UI_INK);
-    else gfx->drawCircle(194 + i * 26, 374, 4, UI_INK);
+  //#region Close button (top-right)
+  drawCloseButton(gfx, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_R, UI_INK, UI_BG_DAY);
+  //#endregion
+
+  //#region Page arrows on the side edges (none past the first or the last page)
+  if (cardPage > 0) drawPageArrow(gfx, CARD_ARROW_LEFT_CX, CARD_ARROW_CY, CARD_ARROW_SIZE, -1, UI_INK);
+  if (cardPage < CARD_PAGE_COUNT - 1) drawPageArrow(gfx, CARD_ARROW_RIGHT_CX, CARD_ARROW_CY, CARD_ARROW_SIZE, 1, UI_INK);
+  //#endregion
+
+  //#region Page indicator dots at the bottom, centered on CX
+  for (int i = 0; i < CARD_PAGE_COUNT; i++) {
+    int dotCenterX = CX + (2 * i - (CARD_PAGE_COUNT - 1)) * CARD_DOT_STEP / 2;
+    if (i == cardPage) gfx->fillCircle(dotCenterX, CARD_DOTS_Y, 5, UI_INK);
+    else gfx->drawCircle(dotCenterX, CARD_DOTS_Y, 4, UI_INK);
   }
-  gfx->setTextColor(UI_TRACK);
-  setSize(2);
-  setCur(centerX(T(S_BACK), 2), 398);
-  printT(T(S_BACK));
+  //#endregion
   gfx->flush();
 }
 
-// ---------- teclado para renombrar ----------
+// taps on the info card: close button, rename pencil (page 0), page arrows and
+// the TRAIN STRENGTH button (page 1). Anywhere else does nothing.
+void handleInfoCardTap(int16_t x, int16_t y) {
+  //#region Close button, drawn circle (wins over the pencil's padded box)
+  if (isTouchInsideCircle(x, y, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_R)) {
+    cardOpen = false;
+    return;
+  }
+  //#endregion
+
+  //#region Rename pencil next to the name (page 0)
+  if (cardPage == 0 && cardPencilSize > 0 &&
+      isTouchInsideRect(x, y, cardPencilLeft - CARD_PENCIL_HIT_PAD, cardPencilTop - CARD_PENCIL_HIT_PAD,
+                        cardPencilSize + 2 * CARD_PENCIL_HIT_PAD, cardPencilSize + 2 * CARD_PENCIL_HIT_PAD)) {
+    openKeyboard();
+    return;
+  }
+  //#endregion
+
+  //#region Close button, generous finger radius
+  if (isTouchInsideCircle(x, y, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_HIT_R)) {
+    cardOpen = false;
+    return;
+  }
+  //#endregion
+
+  //#region Page arrows (a hidden arrow ignores taps)
+  const int16_t arrowHitTop = CARD_ARROW_CY - CARD_ARROW_HIT_H / 2;
+  if (cardPage > 0 && isTouchInsideRect(x, y, 0, arrowHitTop, CARD_ARROW_HIT_W, CARD_ARROW_HIT_H)) {
+    cardPage--;
+    return;
+  }
+  if (cardPage < CARD_PAGE_COUNT - 1 &&
+      isTouchInsideRect(x, y, LCD_WIDTH - CARD_ARROW_HIT_W, arrowHitTop, CARD_ARROW_HIT_W, CARD_ARROW_HIT_H)) {
+    cardPage++;
+    return;
+  }
+  //#endregion
+
+  //#region TRAIN STRENGTH button (page 1)
+  // the card only closes when the bag can actually open (not while asleep)
+  if (cardPage == 1 && y >= TRAIN_Y && y <= TRAIN_Y + TRAIN_H && x >= TRAIN_X && x <= TRAIN_X + TRAIN_W &&
+      canStartSack()) {
+    cardOpen = false;
+    startSack();
+  }
+  //#endregion
+}
+
+// ---------- rename keyboard ----------
 
 static const char KB_KEYS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ.-";  // 28 + DEL + OK = 30
 #define KB_COLS 6
-#define KB_X 40
-#define KB_Y 150
-#define KB_W 64
-#define KB_H 52
+// KB_X/Y/W/H and the rest: boards/layout.h
 
 void openKeyboard() {
   kbOpen = true;
@@ -1842,16 +2816,14 @@ void openKeyboard() {
 
 void renderKeyboard() {
   gfx->fillScreen(RGB565_BLACK);
-  gfx->fillCircle(CX, CY, 231, UI_BG_DAY);
+  fillScreenBg(UI_BG_DAY);
   gfx->setTextColor(UI_INK);
-  setSize(2);
-  setCur(centerX(T(S_NAME), 2), 56);
-  printT(T(S_NAME));
-  // buffer actual
-  gfx->fillRoundRect(83, 84, 300, 40, 8, UI_WHITE);
-  gfx->drawRoundRect(83, 84, 300, 40, 8, UI_INK);
-  setSize(3);
-  setCur(95, 94);
+  ctext(T(S_NAME), 2, KB_TITLE_Y);
+  // current buffer
+  gfx->fillRoundRect(KB_BOX_X, KB_BOX_Y, KB_BOX_W, KB_BOX_H, KB_BOX_R, UI_WHITE);
+  gfx->drawRoundRect(KB_BOX_X, KB_BOX_Y, KB_BOX_W, KB_BOX_H, KB_BOX_R, UI_INK);
+  setSize(TS(3));
+  setCur(KB_BOX_TX, KB_BOX_TY);
   printT(nameLen ? nameBuf : "_");
 
   for (int i = 0; i < 30; i++) {
@@ -1862,11 +2834,11 @@ void renderKeyboard() {
     gfx->setTextColor(UI_INK);
     setSize(2);
     if (i < 28) {
-      setCur(x + KB_W / 2 - 9, y + KB_H / 2 - 10);
+      setCur(x + KB_W / 2 - KB_CH_DX, y + KB_H / 2 - KB_CH_DY);
       printT(KB_KEYS[i]);
     } else {
       const char *lab = (i == 28) ? "<-" : "OK";
-      setCur(x + KB_W / 2 - 15, y + KB_H / 2 - 10);
+      setCur(x + KB_W / 2 - KB_OK_DX, y + KB_H / 2 - KB_CH_DY);
       printT(lab);
     }
   }
@@ -1874,15 +2846,15 @@ void renderKeyboard() {
 }
 
 void keyboardTap(int16_t x, int16_t y) {
-  // filtra ANTES de dividir: con x/y menores que KB_X/KB_Y la resta da negativo
-  // y la division entera trunca hacia cero (no hacia -inf), asi que col/row
-  // saldria 0 en vez de negativo y el filtro de abajo no lo detectaria
+  // filter BEFORE dividing: with x/y below KB_X/KB_Y the subtraction is negative
+  // and integer division truncates toward zero (not toward -inf), so col/row
+  // would come out 0 instead of negative and the filter below would not catch it
   if (x < KB_X || y < KB_Y) return;
   int col = (x - KB_X) / KB_W, row = (y - KB_Y) / KB_H;
   if (col >= KB_COLS || row >= 5) return;
   int i = row * KB_COLS + col;
   if (i >= 30) return;
-  if (i == 28) {  // borrar
+  if (i == 28) {  // delete
     if (nameLen) nameBuf[--nameLen] = 0;
   } else if (i == 29) {  // OK
     pet.rename(nameBuf);
@@ -1893,19 +2865,24 @@ void keyboardTap(int16_t x, int16_t y) {
   }
 }
 
-// ---------- galeria pokedex ----------
+// ---------- pokedex gallery ----------
 
-#define GAL_X 73
-#define GAL_Y 84
-#define GAL_CELL 80
+// The 4x4 grid takes 393x404 px on 466x466. GAL_CELL uses the SMALLER of the
+// X/Y scale factors so the whole grid always fits on screen.
+#define GAL_CELL (SX(80) < SY(80) ? SX(80) : SY(80))
+#define GAL_X ((LCD_WIDTH - 4 * GAL_CELL) / 2)
+#define GAL_Y SY(84)
 
-// dibuja una miniatura centrada en su celda; sil=true la pinta en tinta
-void drawThumb(const uint8_t *b, int x, int y, int s, bool sil) {
+// draws a thumbnail centered in its cell; sil=true paints it in ink
+void drawThumbCell(const uint8_t *b, int x, int y, int s, bool sil, int cell) {
   uint8_t w = b[0], h = b[1], n = b[2];
   const uint8_t *pal = b + 3;
   const uint8_t *d = pal + n * 2;
-  int ox = x + (GAL_CELL - w * s) / 2;
-  int oy = y + (GAL_CELL - h * s) / 2;
+#if !BOARD_IS_ROUND
+  while (s > 1 && (w * s > cell || h * s > cell)) s--;  // make it fit in the cell
+#endif
+  int ox = x + (cell - w * s) / 2;
+  int oy = y + (cell - h * s) / 2;
   for (int r = 0; r < h; r++) {
     for (int c = 0; c < w; c++) {
       uint8_t idx = d[r * w + c];
@@ -1916,48 +2893,52 @@ void drawThumb(const uint8_t *b, int x, int y, int s, bool sil) {
   }
 }
 
+void drawThumb(const uint8_t *b, int x, int y, int s, bool sil) {
+  drawThumbCell(b, x, y, s, sil, GAL_CELL);
+}
+
 void renderGallery() {
-  if (galleryDetail) {  // vista detalle: se redibuja siempre (animada)
+  if (galleryDetail) {  // detail view: always redrawn (animated)
     gfx->fillScreen(RGB565_BLACK);
-    gfx->fillCircle(CX, CY, 231, UI_BG_DAY);
+    fillScreenBg(UI_BG_DAY);
     const DexEntry &d = DEX_TBL[galleryDetail];
     bool reg = pet.isRegistered(galleryDetail);
     char head[32];
     snprintf(head, sizeof(head), "N.%03d %s%s", galleryDetail,
              pet.isShinyRegistered(galleryDetail) ? "*" : "", reg ? dexName(galleryDetail) : "???");
     gfx->setTextColor(reg ? d.accent : UI_INK);
-    // auto-encoge nombres largos (no caben a t3), midiendo en vez de contar
-    // bytes; 13 caracteres a tamano 3 son los 234 px de antes.
+    // auto-shrinks long names (they do not fit at size 3), measuring instead of
+    // counting bytes; 13 characters at size 3 are the 234 px from before.
     setSize(3);
     int gts = (textW(head, 3) <= 234) ? 3 : 2;
     setSize(gts);
-    setCur(centerX(head, gts), gts == 3 ? 56 : 60);
+    setCur(centerX(head, gts), gts == 3 ? SY(56) : SY(60));
     printT(head);
     if (galleryPmd.loaded) {
-      // animado y a color si esta registrado; silueta estatica si no (estilo "?")
-      drawPmdActM(galleryPmd, PMD_IDLE, CX, 300, reg ? millis() : 0, true, !reg, 6);
+      // animated and in color if registered; static silhouette if not ("?" style)
+      drawPmdActM(galleryPmd, PMD_IDLE, CX, SY(300), reg ? millis() : 0, true, !reg, 6);
     } else {
       const uint8_t *t = thumbs.get(galleryDetail);
-      if (t) drawThumb(t, CX - GAL_CELL, 135, 4, !reg);
+      if (t) drawThumb(t, CX - GAL_CELL, SY(135), 4, !reg);
     }
     gfx->setTextColor(UI_INK);
     setSize(2);
-    setCur(centerX(T(S_DETAIL_BACK), 2), 408);
+    setCur(centerX(T(S_DETAIL_BACK), 2), SY(408));
     printT(T(S_DETAIL_BACK));
     gfx->flush();
     return;
   }
 
-  if (!galleryDirty) return;  // la rejilla es estatica
+  if (!galleryDirty) return;  // the grid is static
   galleryDirty = false;
 
   gfx->fillScreen(RGB565_BLACK);
-  gfx->fillCircle(CX, CY, 231, UI_BG_DAY);
+  fillScreenBg(UI_BG_DAY);
   char head[24];
   snprintf(head, sizeof(head), T(S_POKEDEX_FMT), pet.registeredCount());
   gfx->setTextColor(UI_INK);
   setSize(3);
-  setCur(centerX(head, 3), 36);
+  setCur(centerX(head, 3), SY(36));
   printT(head);
 
   for (int r = 0; r < 4; r++) {
@@ -1971,7 +2952,7 @@ void renderGallery() {
         if (pet.isShinyRegistered(dex)) {
           gfx->setTextColor(UI_BAR_WARN);
           setSize(2);
-          setCur(x + 62, y + 4);
+          setCur(x + GAL_CELL * 62 / 80, y + GAL_CELL * 4 / 80);  // offsets tuned for an 80 px cell
           printT("*");
         }
       } else {
@@ -1979,32 +2960,33 @@ void renderGallery() {
         snprintf(num, sizeof(num), "%d", dex);
         gfx->setTextColor(UI_TRACK);
         setSize(2);
-        setCur(x + 24, y + 32);
+        setCur(x + GAL_CELL * 24 / 80, y + GAL_CELL * 32 / 80);
         printT(num);
       }
     }
   }
-  // puntos de pagina
+  // page dots: centered (the original's fixed x=170 only fit at 466 px)
+  int dotsX0 = CX - (9 * SX(14)) / 2;
   for (int i = 0; i < 10; i++) {
-    if (i == galleryPage) gfx->fillCircle(170 + i * 14, 436, 4, UI_INK);
-    else gfx->drawCircle(170 + i * 14, 436, 3, UI_INK);
+    if (i == galleryPage) gfx->fillCircle(dotsX0 + i * SX(14), SY(436), 4, UI_INK);
+    else gfx->drawCircle(dotsX0 + i * SX(14), SY(436), 3, UI_INK);
   }
   gfx->flush();
 }
 
 void galleryTap(int16_t x, int16_t y) {
-  if (galleryDetail) {  // volver a la rejilla
+  if (galleryDetail) {  // back to the grid
     galleryDetail = 0;
     galleryPmd.unload();
     galleryDirty = true;
     return;
   }
-  if (y < 72) {  // tocar la cabecera = salir
+  if (y < SY(72)) {  // touching the header = exit
     galleryOpen = false;
     galleryPmd.unload();
     return;
   }
-  // mismo motivo que en el teclado: filtrar antes de dividir
+  // same reason as in the keyboard: filter before dividing
   if (x < GAL_X || y < GAL_Y) return;
   int c = (x - GAL_X) / GAL_CELL, r = (y - GAL_Y) / GAL_CELL;
   if (c > 3 || r > 3) return;
@@ -2016,17 +2998,17 @@ void galleryTap(int16_t x, int16_t y) {
 
 void drawBattery() {
   int pc = batPercent();
-  if (pc < 0) return;  // sin bateria conectada
-  int x = CX - 14, y = 12, w = 24, h = 11;
+  if (pc < 0) return;  // no battery connected
+  int x = BAT_X, y = BAT_Y, w = 24, h = 11;
   bool charging = batCharging();
   uint16_t col = charging ? UI_BAR_OK
                  : (pc >= 40) ? inkColor()
                  : (pc >= 15) ? UI_BAR_WARN
                               : UI_BAR_BAD;
   gfx->drawRoundRect(x, y, w, h, 2, col);
-  gfx->fillRect(x + w, y + 3, 3, 5, col);  // borne
+  gfx->fillRect(x + w, y + 3, 3, 5, col);  // terminal
   if (charging) {
-    // rayo de carga (zigzag) en vez de la barra de nivel
+    // charging bolt (zigzag) instead of the level bar
     uint16_t bolt = C565(0xff, 0xd9, 0x4a);
     int bx = x + w / 2;
     gfx->fillTriangle(bx + 3, y + 1, bx - 4, y + 6, bx + 1, y + 6, bolt);
@@ -2040,183 +3022,184 @@ void drawBattery() {
 void drawHeader(const char *name, uint16_t nameColor, const char *msg) {
   drawBattery();
   gfx->setTextColor(nameColor);
-  setSize(3);
-  setCur(centerX(name, 3), 52);
-  printT(name);
+  ctext(name, 3, HDR_NAME_Y, LCD_WIDTH - 80);   // leaves room for the battery and the streak
+  //#region Remember where the name landed (tapping it opens the info card)
+  // ctext() left the size it actually used set; textW() measures with it
+  headerNameWidth = textW(name, gTextSize);
+  headerNameLeft = CX - headerNameWidth / 2;
+  //#endregion
   gfx->setTextColor(inkColor());
-  setSize(2);
-  setCur(centerX(msg, 2), 90);
-  printT(msg);
+  ctext(msg, 2, HDR_MSG_Y);
 }
 
-// animacion de la ceremonia (10s): despedida = reverencia con corazones y se
-// aleja caminando; escapada = se asusta y sale corriendo. Sustituye al idle.
+// ceremony animation (10s): farewell = a bow with hearts and it walks away;
+// runaway = it gets scared and runs off. Replaces the idle.
 void drawCeremony() {
-  if (!pmd.loaded) { drawPet(); return; }  // respaldo si no hay sprite PMD
+  if (!pmd.loaded) { drawPet(); return; }  // fallback if there is no PMD sprite
   uint32_t now = millis();
-  float t = pet.ceremonyT();               // 0..1 a lo largo de los 10s
+  float t = pet.ceremonyT();               // 0..1 over the 10s
   bool panic = (pet.ceremony == CER_RUNAWAY);
   int x = CX, y = PET_GROUND;
   uint8_t act = PMD_IDLE;
 
   if (panic) {
-    // final triste: penumbra azulada + lluvia
+    // sad ending: bluish gloom + rain
     for (int i = 0; i < 46; i++) {
-      int rx = (i * 47 + now / 3) % 466;
-      int ry = (i * 91 + now / 2) % 470;
+      int rx = (i * 47 + now / 3) % LCD_WIDTH;
+      int ry = (i * 91 + now / 2) % (LCD_HEIGHT + 4);
       gfx->drawLine(rx, ry, rx - 3, ry + 12, C565(0x6a, 0x84, 0xb0));
     }
     bool fade = false;
-    if (t < 0.30f) {                       // cabizbajo, temblando
+    if (t < 0.30f) {                       // head down, trembling
       act = pmd.has(PMD_HURT) ? PMD_HURT : PMD_IDLE;
       x = CX + (int)(4 * sinf(now * 0.04f));
-    } else {                               // se aleja despacio y se desvanece
+    } else {                               // walks away slowly and fades out
       act = pmd.has(PMD_WALKL) ? PMD_WALKL : PMD_IDLE;
       x = CX - (int)(((t - 0.30f) / 0.70f) * (CX + 120));
-      fade = (t > 0.6f) && ((now / 160) % 2 == 0);  // parpadea hacia la silueta
+      fade = (t > 0.6f) && ((now / 160) % 2 == 0);  // flickers toward the silhouette
     }
-    drawPmdAct(act, x, y, now, true, fade, 5);  // fade=silueta: se difumina al irse
-    // lagrima cayendo del bicho
+    drawPmdAct(act, x, y, now, true, fade, 5);  // fade=silhouette: it blurs as it leaves
+    // tear falling from the creature
     if (t < 0.55f) {
-      int ty = y - 150 + (int)((now / 6) % 40);
+      int ty = y - SY(150) + (int)((now / 6) % 40);
       gfx->fillRect(x + 6, ty, 3, 6, C565(0x9a, 0xc4, 0xe8));
     }
     return;
   }
 
-  // despedida epica: halo dorado pulsante + chispas y corazones que ascienden
-  int gcy = PET_GROUND - 96;
+  // epic farewell: pulsing golden halo + rising sparks and hearts
+  int gcy = PET_GROUND - SY(96);
   for (int k = 0; k < 4; k++) {
-    int r = 60 + k * 34 + (int)(10 * sinf(now * 0.02f));
+    int r = SY(60) + k * SY(34) + (int)(10 * sinf(now * 0.02f));
     gfx->drawCircle(CX, gcy, r, C565(0xff, 0xdf, 0x8a));
   }
   for (int i = 0; i < 16; i++) {
-    int px = (i * 71 + 28) % 466;
-    int py = 410 - (int)((now / 8 + i * 70) % 360);   // suben y reaparecen abajo
+    int px = (i * 71 + 28) % LCD_WIDTH;
+    int py = SY(410) - (int)((now / 8 + i * 70) % SY(360));   // rise and reappear at the bottom
     if (py < 30) continue;
-    if (i % 4 == 0) drawMap(SPR_HEART, 32, px - 8, py - 8, 1, false);  // corazoncito
+    if (i % 4 == 0) drawMap(SPR_HEART, 32, px - 8, py - 8, 1, false);  // little heart
     else gfx->fillRect(px, py, 4, 4, (i % 2) ? C565(0xff, 0xe7, 0x9f) : C565(0xff, 0x9a, 0xc0));
   }
 
-  if (t < 0.45f) {                         // reverencia / pose de despedida
+  if (t < 0.45f) {                         // bow / farewell pose
     act = pmd.has(PMD_POSE) ? PMD_POSE : (pmd.has(PMD_NOD) ? PMD_NOD : PMD_IDLE);
-  } else {                                 // se aleja por la derecha
+  } else {                                 // walks off to the right
     act = pmd.has(PMD_WALKR) ? PMD_WALKR : PMD_IDLE;
     x = CX + (int)(((t - 0.45f) / 0.55f) * (CX + 140));
   }
   drawPmdAct(act, x, y, now, true, false, 5);
-  if (pet.showHeart())                     // corazon grande siguiendo al bicho
+  if (pet.showHeart())                     // big heart following the creature
     drawMap(SPR_HEART, 32, x + 50, y - 190, 2, false);
 }
 
-// dialogo de decision (2 botones apilados): evolucionar/mantener o despedirse/quedaros
+// decision dialog (2 stacked buttons): evolve/keep or say goodbye/stay together
 void drawChoiceDialog() {
   const char *q, *o1, *o2;
   uint16_t c1, c2, t1, t2;
-  if (choiceKind == 1) {  // evolucion
+  if (choiceKind == 1) {  // evolution
     q = T(S_EVO_Q); o1 = T(S_EVO_TAP); o2 = T(S_EVO_KEEP);
     c1 = UI_BAR_BAD; t1 = UI_WHITE; c2 = UI_TRACK; t2 = UI_INK;
-  } else {                // despedida
+  } else {                // farewell
     q = T(S_FAR_Q); o1 = T(S_FAR_GO); o2 = T(S_FAR_STAY);
     c1 = UI_BAR_WARN; t1 = UI_INK; c2 = UI_BAR_OK; t2 = UI_WHITE;
   }
-  gfx->fillRoundRect(73, 156, 320, 188, 16, UI_WHITE);
-  gfx->drawRoundRect(73, 156, 320, 188, 16, UI_INK);
+  const int b1y = CH_Y + CH_B1_REL_Y, b2y = CH_Y + CH_B2_REL_Y;
+  gfx->fillRoundRect(CH_X, CH_Y, CH_W, CH_H, CH_R, UI_WHITE);
+  gfx->drawRoundRect(CH_X, CH_Y, CH_W, CH_H, CH_R, UI_INK);
   gfx->setTextColor(UI_INK);
-  setSize(2);
-  setCur(centerX(q, 2), 176);
-  printT(q);
-  gfx->fillRoundRect(93, 206, 280, 52, 12, c1);     // boton accion
+  ctext(q, 2, CH_Y + CH_QY, CH_W - 16);
+  gfx->fillRoundRect(CH_BX, b1y, CH_BW, CH_BH, 12, c1);     // action button
   gfx->setTextColor(t1);
-  setCur(centerX(o1, 2), 224);
-  printT(o1);
-  gfx->fillRoundRect(93, 268, 280, 52, 12, c2);     // boton mantener/quedaros
+  ctext(o1, 2, b1y + CH_BTY, CH_BW - 12);
+  gfx->fillRoundRect(CH_BX, b2y, CH_BW, CH_BH, 12, c2);     // keep/stay together button
   gfx->setTextColor(t2);
-  setCur(centerX(o2, 2), 286);
-  printT(o2);
+  ctext(o2, 2, b2y + CH_BTY, CH_BW - 12);
 }
 
-// boton-CTA rojo y grande para evolucionar (pulsa para llamar la atencion)
+// big red CTA button to evolve (pulses to draw attention)
 void drawEvolveButton() {
   uint32_t now = millis();
-  int p = (int)(5 * sinf(now * 0.006f));  // late: -5..5
+  int p = (int)(5 * sinf(now * 0.006f));  // beats: -5..5
   int x = EVO_BTN_X - p, y = EVO_BTN_Y - p, w = EVO_BTN_W + 2 * p, h = EVO_BTN_H + 2 * p;
-  gfx->fillRoundRect(x, y, w, h, 18, UI_BAR_BAD);
-  gfx->drawRoundRect(x, y, w, h, 18, UI_WHITE);
-  gfx->drawRoundRect(x + 2, y + 2, w - 4, h - 4, 16, UI_WHITE);
+  gfx->fillRoundRect(x, y, w, h, EVO_R, UI_BAR_BAD);
+  gfx->drawRoundRect(x, y, w, h, EVO_R, UI_WHITE);
+  gfx->drawRoundRect(x + 2, y + 2, w - 4, h - 4, EVO_R - 2, UI_WHITE);
   gfx->setTextColor(UI_WHITE);
-  setSize(3);
   const char *t = T(S_EVO_TAP);
-  setCur(centerX(t, 3), y + h / 2 - 11);
+  int fs = fitSize(t, TS(3), EVO_BTN_W - 16);
+  setSize(fs);
+  setCur(centerX(t, fs), y + h / 2 - (fs == 3 ? 11 : 4 * fs));
   printT(t);
 }
 
-// boton-CTA dorado de despedida: "<nombre> quiere decirte algo..."
+// gold farewell CTA button: "<name> wants to tell you something..."
 void drawFarewellButton() {
   uint32_t now = millis();
   int p = (int)(4 * sinf(now * 0.005f));
   int x = FAR_BTN_X - p, y = FAR_BTN_Y - p, w = FAR_BTN_W + 2 * p, h = FAR_BTN_H + 2 * p;
-  gfx->fillRoundRect(x, y, w, h, 16, UI_BAR_WARN);
-  gfx->drawRoundRect(x, y, w, h, 16, UI_INK);
+  gfx->fillRoundRect(x, y, w, h, FAR_R, UI_BAR_WARN);
+  gfx->drawRoundRect(x, y, w, h, FAR_R, UI_INK);
   char buf[52];
   const char *nm = pet.nick[0] ? pet.nick : dexName(pet.speciesId);
   snprintf(buf, sizeof(buf), T(S_FAREWELL_BTN), nm);
   gfx->setTextColor(UI_INK);
-  setSize(2);
-  setCur(centerX(buf, 2), y + h / 2 - 8);
+  int fs = fitSize(buf, TS(2), FAR_BTN_W - 16);
+  setSize(fs);
+  setCur(centerX(buf, fs), y + h / 2 - 4 * fs);
   printT(buf);
 }
 
-// boton-CTA sombrio de escapada por abandono: "<nombre> se siente abandonado..."
-// (final triste: azul-gris oscuro, latido lento y apagado)
+// somber runaway-from-neglect CTA button: "<name> feels abandoned..."
+// (sad ending: dark blue-gray, slow and muted pulse)
 void drawRunawayButton() {
   uint32_t now = millis();
   int p = (int)(3 * sinf(now * 0.003f));
   int x = FAR_BTN_X - p, y = FAR_BTN_Y - p, w = FAR_BTN_W + 2 * p, h = FAR_BTN_H + 2 * p;
-  gfx->fillRoundRect(x, y, w, h, 16, C565(0x3a, 0x44, 0x5a));
-  gfx->drawRoundRect(x, y, w, h, 16, C565(0x70, 0x80, 0x98));
+  gfx->fillRoundRect(x, y, w, h, FAR_R, C565(0x3a, 0x44, 0x5a));
+  gfx->drawRoundRect(x, y, w, h, FAR_R, C565(0x70, 0x80, 0x98));
   char buf[52];
   const char *nm = pet.nick[0] ? pet.nick : dexName(pet.speciesId);
   snprintf(buf, sizeof(buf), T(S_RUNAWAY_BTN), nm);
   gfx->setTextColor(C565(0xc8, 0xd2, 0xe0));
-  setSize(2);
-  setCur(centerX(buf, 2), y + h / 2 - 8);
+  int fs = fitSize(buf, TS(2), FAR_BTN_W - 16);
+  setSize(fs);
+  setCur(centerX(buf, fs), y + h / 2 - 4 * fs);
   printT(buf);
 }
 
-// animacion epica de evolucion: halo radial + rayos giratorios + parpadeo del
-// sprite acelerando + chispas que salen disparadas + fogonazo final
+// epic evolution animation: radial halo + spinning rays + accelerating sprite
+// flashing + sparks shooting out + final flash
 void drawEvolveFX(uint32_t now) {
   float t = pet.evolveT();          // 0..1
   int cx = CX, cy = PET_GROUND - 96;
 
-  // halo radial que crece y pulsa
+  // radial halo that grows and pulses
   int halo = 36 + (int)(t * 150) + (int)(8 * sinf(now * 0.02f));
   for (int k = 0; k < 4; k++) {
     int r = halo - k * 7;
     if (r > 0) gfx->drawCircle(cx, cy, r, UI_WHITE);
   }
-  // rayos giratorios desde el centro del bicho
+  // spinning rays from the creature's center
   float base = now * 0.004f;
   for (int i = 0; i < 12; i++) {
     float a = base + i * (float)(PI / 6);
     int len = 90 + (int)(70 * (0.5f + 0.5f * sinf(now * 0.012f + i)));
     gfx->drawLine(cx, cy, cx + (int)(cosf(a) * len), cy + (int)(sinf(a) * len), UI_WHITE);
   }
-  // parpadeo entre la forma ANTERIOR y la NUEVA (siluetas), acelerando; al
-  // final (t>0.9) se queda fija en la nueva para el fogonazo de revelado
+  // flashing between the PREVIOUS and the NEW form (silhouettes), accelerating;
+  // at the end (t>0.9) it stays on the new one for the reveal flash
   int period = 60 + (int)(220 * (1.0f - t));
   bool showOld = t < 0.9f && evoPmd.loaded && ((now / period) % 2) == 0;
   if (showOld) drawPmdActM(evoPmd, PMD_IDLE, cx, PET_GROUND, 0, true, true, 5);
   else drawPmdAct(PMD_IDLE, cx, PET_GROUND, 0, true, true, 5);
-  // chispas que salen disparadas
+  // sparks shooting out
   for (int i = 0; i < 10; i++) {
     float a = i * (float)(PI / 5) + t * 4.0f;
     int d = (int)((now / 14 + i * 33) % 200);
     int sx = cx + (int)(cosf(a) * d), sy = cy + (int)(sinf(a) * d);
     gfx->fillRect(sx - 2, sy - 2, 5, 5, (i & 1) ? C565(0xff, 0xe0, 0x70) : UI_WHITE);
   }
-  // fogonazo final antes de revelar la forma nueva
+  // final flash before revealing the new form
   if (t > 0.9f) gfx->fillCircle(cx, cy, (int)(300 * (t - 0.9f) / 0.1f), UI_WHITE);
 }
 
@@ -2231,7 +3214,7 @@ void drawPet() {
   }
   int fi = flashIdxForDex(pet.speciesId);
   if (fi < 0) {
-    // sin SD y sin sprite de flash: aviso claro de que faltan sprites
+    // no SD and no flash sprite: clear notice that sprites are missing
     gfx->setTextColor(inkColor());
     setSize(6);
     setCur(CX - 18, PET_CY - 80);
@@ -2250,7 +3233,7 @@ void drawPet() {
   int x = CX - 16 * s;
   int y = PET_CY - 16 * s;
 
-  // animacion de evolucion: alterna la silueta de la forma anterior y la nueva
+  // evolution animation: alternates the silhouette of the previous and the new form
   if (pet.evolving()) {
     bool flash = (millis() / 300) % 2;
     int16_t showDex = (flash && pet.prevSpeciesId >= 0) ? pet.prevSpeciesId : pet.speciesId;
@@ -2263,11 +3246,11 @@ void drawPet() {
   }
 
   PetMood m = pet.mood();
-  if (m == MOOD_HAPPY && (millis() / 500) % 2) y -= 6;  // saltito
+  if (m == MOOD_HAPPY && (millis() / 500) % 2) y -= 6;  // little hop
 
   drawMap(sp.sprite, SPRITE_H, x, y, s, false);
 
-  // expresiones superpuestas usando las anclas de la especie
+  // overlaid expressions using the species' anchors
   bool blink = (millis() % 3500 < 300);
   if (m == MOOD_SLEEPING || blink) {
     overlayEye(sp, x, y, s, sp.eyeColL);
@@ -2279,7 +3262,7 @@ void drawPet() {
   if (pet.showHeart()) drawMap(SPR_HEART, 32, x + 20 * s, y - 2 * s, 2, false);
 }
 
-// ---------- escena de bano ----------
+// ---------- bath scene ----------
 
 void startBath() {
   if (pet.isEgg() || pet.sleeping || pet.ceremony || bathUntil) return;
@@ -2301,7 +3284,7 @@ void drawBath() {
     if (bathPending) {
       bathPending = false;
       pet.clean();
-      // pose de alegria al quedar limpio
+      // happy pose when clean
       if (pmd.has(PMD_POSE)) {
         beh.mode = 2;
         beh.act = PMD_POSE;
@@ -2313,7 +3296,7 @@ void drawBath() {
   }
   uint32_t left = bathUntil - now;
   if (left > 800) {
-    // espuma: pompas meciendose y subiendo poco a poco
+    // foam: bubbles swaying and slowly rising
     float t = now / 220.0f;
     for (auto &b : bubbles) {
       int bx = b.x + (int)(sinf(t + b.ph) * 6);
@@ -2323,7 +3306,7 @@ void drawBath() {
       gfx->fillCircle(bx - b.r / 3, by - b.r / 3, b.r / 4, UI_BG_DAY);
     }
   } else {
-    // las pompas revientan: destellos
+    // the bubbles pop: sparkles
     for (int i = 0; i < 8; i++) {
       auto &b = bubbles[i];
       int sx = b.x + (i % 3) * 6 - 6, sy = b.y - 18;
@@ -2334,7 +3317,7 @@ void drawBath() {
   }
 }
 
-// ---------- mascota PMD: comportamiento ----------
+// ---------- PMD pet: behavior ----------
 
 uint32_t pmdActTotalMs(const PmdAct &a) {
   uint32_t t = 0;
@@ -2347,8 +3330,8 @@ uint8_t pmdFrameAt(const PmdAct &a, uint32_t t, bool loop) {
   if (!loop && t >= total) return a.frames - 1;
   t %= total;
   uint8_t i = 0;
-  // guarda: nunca mas vueltas que frames, por si un .bin corrupto trae ms[]=0
-  // pese al saneo de la carga (defensa en profundidad)
+  // guard: never more iterations than frames, in case a corrupt .bin has ms[]=0
+  // despite the sanitizing on load (defense in depth)
   for (uint8_t guard = 0; guard < a.frames && t >= a.ms[i]; guard++) {
     t -= a.ms[i];
     i = (i + 1) % a.frames;
@@ -2356,46 +3339,56 @@ uint8_t pmdFrameAt(const PmdAct &a, uint32_t t, bool loop) {
   return i;
 }
 
-// dibuja una accion anclada por la base (centro-x, suelo) y devuelve su escala
-// dibuja una accion de un PmdMon concreto (m); drawPmdAct usa el global pmd
+// draws an action anchored at its base (center-x, ground) and returns its scale
+// draws an action of a specific PmdMon (m); drawPmdAct uses the global pmd
 void drawPmdActM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS) {
   const PmdAct &a = m.acts[actId];
   if (!a.frames) return;
-  uint8_t sBase = m.acts[PMD_IDLE].h ? 170 / m.acts[PMD_IDLE].h : 5;
-  if (sBase < 2) sBase = 2;
+  uint8_t sBase = m.acts[PMD_IDLE].h ? SY(170) / m.acts[PMD_IDLE].h : 5;
+  const uint8_t minS = BOARD_IS_ROUND ? 2 : 1;  // at 320x240 a x2 zoom is already half the screen
+  if (sBase < minS) sBase = minS;
   if (sBase > maxS) sBase = maxS;
   uint8_t s = sBase;
-  while (s > 2 && a.h * s > 250) s--;  // acciones con frame grande (ataque)
-  uint8_t fi = pmdFrameAt(a, t, loop);
-  const uint8_t *fr = a.data + (uint32_t)fi * a.w * a.h;
-  // anclar por los pies (a.base), no por el alto del lienzo: asi las acciones
-  // con padding distinto (Hurt, Eat...) quedan todas a la misma altura de suelo
+  while (s > minS && a.h * s > SY(250)) s--;  // actions with a large frame (attack)
+  // anchor by the feet (a.base), not by the canvas height: that way actions
+  // with different padding (Hurt, Eat...) all sit at the same ground height
   int x0 = cx - a.w * s / 2, y0 = groundY - (a.base ? a.base : a.h) * s;
+  drawPmdFrameAtScale(m, actId, x0, y0, t, loop, sil, s);
+}
+
+//#region Draw the current frame of an action, canvas top-left at (canvasLeft, canvasTop), at a fixed scale
+void drawPmdFrameAtScale(PmdMon &m, uint8_t actId, int canvasLeft, int canvasTop, uint32_t t, bool loop, bool sil, uint8_t scale) {
+  const PmdAct &a = m.acts[actId];
+  if (!a.frames) return;
+  uint8_t fi = pmdFrameAt(a, t, loop);
+  const uint8_t *fr = m.frame(actId, fi);  // blob: direct pointer; streaming: reads 1 frame from the SD
+  if (!fr) return;
   for (int r = 0; r < a.h; r++) {
     const uint8_t *row = fr + r * a.w;
     for (int c = 0; c < a.w; c++) {
       uint8_t idx = row[c];
       if (idx == 0xFF) continue;
-      gfx->fillRect(x0 + c * s, y0 + r * s, s, s, sil ? INK_K : m.pal[idx]);
+      gfx->fillRect(canvasLeft + c * scale, canvasTop + r * scale, scale, scale, sil ? INK_K : m.pal[idx]);
     }
   }
 }
+//#endregion
 void drawPmdAct(uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS) {
   drawPmdActM(pmd, actId, cx, groundY, t, loop, sil, maxS);
 }
 
-// elige el siguiente capricho del bicho cuando esta contento
+// picks the creature's next whim when it is happy
 void behNext() {
   uint32_t now = millis();
   beh.t0 = now;
   int r = random(100);
   if (r < 35 && (pmd.has(PMD_WALKL) || pmd.has(PMD_WALKR))) {
-    beh.mode = 1;  // paseo
+    beh.mode = 1;  // walk
     beh.targetX = 150 + random(176);
     beh.until = now + 15000;
   } else if (r < 60) {
-    // gesto aleatorio entre los disponibles
-    // (Hop fuera: salta demasiado alto; Sit fuera: mira hacia atras)
+    // random gesture among the available ones
+    // (Hop excluded: jumps too high; Sit excluded: faces backwards)
     static const uint8_t flair[] = { PMD_POSE, PMD_NOD, PMD_BREATH };
     uint8_t pick[3], n = 0;
     for (uint8_t f : flair)
@@ -2409,7 +3402,7 @@ void behNext() {
     beh.mode = 0;
     beh.until = now + 2000 + random(3000);
   } else {
-    beh.mode = 0;  // mirar al frente
+    beh.mode = 0;  // face forward
     beh.until = now + 2000 + random(3000);
   }
 }
@@ -2421,7 +3414,7 @@ void drawPetPMD() {
     drawEvolveFX(now);
     return;
   }
-  if (evoPmd.loaded) evoPmd.unload();  // termino la evolucion: libera la forma anterior
+  if (evoPmd.loaded) evoPmd.unload();  // evolution finished: free the previous form
 
   PetMood m = pet.mood();
   uint8_t act;
@@ -2435,7 +3428,7 @@ void drawPetPMD() {
   } else if (m == MOOD_SAD && pmd.has(PMD_HURT)) {
     act = PMD_HURT;
   } else {
-    // contento: el planificador decide (idle / paseo / gesto)
+    // happy: the scheduler decides (idle / walk / gesture)
     if (now > beh.until) behNext();
     if (beh.mode == 1) {
       float d = beh.targetX - beh.x;
@@ -2458,7 +3451,7 @@ void drawPetPMD() {
   if (pet.showHeart()) drawMap(SPR_HEART, 32, (int)beh.x + 50, PET_GROUND - 190, 2, false);
 }
 
-// sprite animado desde la SD: zoom entero por pixel, frames a su ritmo
+// animated sprite from the SD: integer per-pixel zoom, frames at their own pace
 void drawPetSD() {
   int s = mon.scale;
   int w = mon.w * s, h = mon.h * s;
@@ -2469,7 +3462,7 @@ void drawPetSD() {
   if (pet.evolving()) {
     sil = (millis() / 300) % 2;
   } else if (pet.mood() == MOOD_HAPPY && (millis() / 500) % 2) {
-    y -= 6;  // saltito
+    y -= 6;  // little hop
   }
 
   uint16_t fm = mon.frameMs ? mon.frameMs : 100;
@@ -2484,17 +3477,17 @@ void drawPetSD() {
     }
   }
 
-  // emotes en vez de expresiones (los sprites importados no tienen anclas)
+  // emotes instead of expressions (imported sprites have no anchors)
   if (pet.showHeart()) drawMap(SPR_HEART, 32, x + w - 30, y - 50, 2, false);
 }
 
-// ojo cerrado: borra el ojo 3x4 y dibuja el parpado
+// closed eye: erases the 3x4 eye and draws the eyelid
 void overlayEye(const Species &sp, int x, int y, int s, int col) {
   gfx->fillRect(x + col * s, y + sp.eyeRow * s, 3 * s, 4 * s, sp.bodyColor);
   gfx->fillRect(x + col * s, y + (sp.eyeRow + 2) * s, 3 * s, s, INK_K);
 }
 
-// borra la sonrisa base y pinta boca abierta (comer) o ceno (triste)
+// erases the base smile and draws an open mouth (eating) or a frown (sad)
 void overlayMouth(const Species &sp, int x, int y, int s, bool open) {
   int mc = sp.mouthCol, mr = sp.mouthRow;
   gfx->fillRect(x + (mc - 3) * s, y + mr * s, 7 * s, 2 * s, sp.bodyColor);
@@ -2509,23 +3502,23 @@ void overlayMouth(const Species &sp, int x, int y, int s, bool open) {
 
 void drawPoops() {
   for (int i = 0; i < pet.poops; i++) {
-    drawMap(SPR_POOP, 32, 36 + i * 46, 244, 2, false);
+    drawMap(SPR_POOP, 32, POOP_X0 + i * POOP_DX, POOP_Y, POOP_S, false);
   }
 }
 
 void drawBars() {
-  drawBar(78, 318, T(S_BAR_FOOD), pet.fullness);
-  drawBar(244, 318, T(S_BAR_JOY), pet.joy);
-  drawBar(78, 346, T(S_BAR_ENE), pet.energy);
-  drawBar(244, 346, T(S_BAR_HYG), pet.hygiene);
+  drawBar(SX(78), SY(318), T(S_BAR_FOOD), pet.fullness);
+  drawBar(SX(244), SY(318), T(S_BAR_JOY), pet.joy);
+  drawBar(SX(78), SY(346), T(S_BAR_ENE), pet.energy);
+  drawBar(SX(244), SY(346), T(S_BAR_HYG), pet.hygiene);
 }
 
-// Separacion entre la etiqueta y su barra en la fila de necesidades. Estaba fija
-// en 48 px, justo lo que ocupan 4 letras latinas a escala 2, sin margen. Las
-// etiquetas japonesas son mas anchas (ごきげん son 4 kana, ~64 px) y se metian
-// dentro de la barra. Se deriva de la etiqueta mas larga, con el 48 de suelo
-// para que en los idiomas latinos no cambie nada.
-// Requiere el tamano de texto 2 ya puesto, porque textW() lo necesita.
+// Gap between the label and its bar in the needs row. It was fixed at 48 px,
+// exactly what 4 Latin letters take at scale 2, with no margin. Japanese
+// labels are wider (ごきげん is 4 kana, ~64 px) and ran into the bar. It is
+// derived from the longest label, with 48 as a floor so nothing changes in
+// the Latin-script languages.
+// Requires text size 2 to already be set, because textW() needs it.
 static int barLabelGap() {
   const StrId ids[] = { S_BAR_FOOD, S_BAR_JOY, S_BAR_ENE, S_BAR_HYG };
   int ancho = 0;
@@ -2533,8 +3526,8 @@ static int barLabelGap() {
     int w = textW(T(id), 2);
     if (w > ancho) ancho = w;
   }
-  // por debajo del umbral original se deja EXACTAMENTE 48, para no mover nada en
-  // los idiomas latinos; por encima se anade aire para que la etiqueta respire
+  // below the original threshold it stays EXACTLY 48, so nothing moves in the
+  // Latin-script languages; above it, space is added so the label can breathe
   return ancho <= 48 ? 48 : ancho + 8;
 }
 
@@ -2544,10 +3537,15 @@ void drawBar(int x, int y, const char *label, uint8_t val) {
   setCur(x, y);
   printT(label);
   int gap = barLabelGap();
-  // las dos columnas empiezan en 78 y 244: la barra de la primera tiene que
-  // acabar antes de la etiqueta de la segunda, y ambas se pintan igual de anchas
-  int bw = 232 - (78 + gap);
-  if (bw > 100) bw = 100;   // con etiquetas latinas sale 100, como estaba
+  // the two columns start at 78 and 244 (see SX() in drawBars): the first
+  // one's bar has to end before the second one's label, and both are drawn
+  // the same width
+  int bw = SX(232) - (SX(78) + gap);
+  int bwMax = SX(100) > 40 ? SX(100) : 40;  // proportional ceiling (100 on the round one)
+  if (bw > bwMax) bw = bwMax;
+#if !BOARD_IS_ROUND
+  if (bw < 40) bw = 40;                     // floor (CYD only): keep the bar from disappearing
+#endif
   int bx = x + gap, bh = 15;
   uint16_t fill = (val >= 50) ? UI_BAR_OK : (val >= 25) ? UI_BAR_WARN : UI_BAR_BAD;
   gfx->fillRoundRect(bx, y, bw, bh, 4, UI_TRACK);
@@ -2557,7 +3555,7 @@ void drawBar(int x, int y, const char *label, uint8_t val) {
 
 void drawButtons() {
   for (int i = 0; i < 4; i++) {
-    bool off = pet.sleeping && i != 2;  // durmiendo solo funciona LUZ
+    bool off = pet.sleeping && i != 2;  // while asleep only LIGHT works
     int bx = buttons[i].cx - BTN_HALF, by = buttons[i].cy - BTN_HALF;
     if (!pet.sleeping) gfx->fillRoundRect(bx, by, 2 * BTN_HALF, 2 * BTN_HALF, 14, UI_WHITE);
     gfx->drawRoundRect(bx, by, 2 * BTN_HALF, 2 * BTN_HALF, 14, inkColor());
@@ -2575,7 +3573,7 @@ const char *eggMsg() {
 
 const char *statusMsg() {
   if (pet.evolving()) return T(S_EVOLVING);
-  if (bathUntil) return "Splish splash!";  // onomatopeya universal
+  if (bathUntil) return "Splish splash!";  // universal onomatopoeia
   if (pet.sleeping) return "Zzz...";
   if (pet.eating()) return T(S_EATING);
   if (pet.showHeart()) return T(S_LIKES);
@@ -2588,7 +3586,7 @@ const char *statusMsg() {
   return T(S_HAPPY);
 }
 
-// dibuja un mapa de n x n pixeles escalado; silhouette=true lo pinta en tinta
+// draws a scaled n x n pixel map; silhouette=true paints it in ink
 void drawMap(const char *const *map, int n, int x, int y, int s, bool silhouette) {
   for (int r = 0; r < n; r++) {
     for (int c = 0; c < n; c++) {

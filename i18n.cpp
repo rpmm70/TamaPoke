@@ -4,8 +4,8 @@
 
 Lang gLang = LANG_DEFAULT;
 
-// Tabla de cadenas [idioma][id]. Sin acentos ni enes: la fuente bitmap del
-// firmware no los tiene (por eso el espanol ya iba "Esta", "bano", etc.).
+// String table [language][id]. No accents or n-tildes: the firmware's bitmap
+// font does not have them (that is why the Spanish already read "Esta", "bano", etc.).
 static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
   // ---------------- ES ----------------
   {
@@ -18,12 +18,13 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Soltar a %s?", "SI", "NO",
     "%u GOLPES", "FUERZA +%u", "NUEVO RECORD!", "RECORD: %u", "APORREA RAPIDO!",
     "PUNTOS: %u", "Qu\202 felicidad!", "+felicidad",
-    "AJUSTAR HORA", "HORA", "MIN", "desliza arriba: cancelar", "Idioma",
+    "AJUSTAR HORA", "HORA", "MIN", "Idioma",
     "MEDALLA!", "GENIAL!", "RACHA %u DIAS!",
-    "RACHA %u  rec %u", "VIN", "BAYA ???", "BAYA ROJA", "BAYA AZUL", "BAYA VERDE",
-    "%s   EDAD %lud", "toca el nombre: renombrar",
+    "VIN", "???", "MANZANA", "HAMBURGUESA", "PIZZA",
+    "Nivel", "Racha (r\202cord)", "V\241nculo", "Comida favorita", "Edad",
+    "%lud",
     "COMBATE", "FUE", "DEF", "VEL", "PES", "ENTRENAR FUERZA",
-    "MEDALLAS %d/%d", "toca: volver",
+    "MEDALLAS %d/%d",
     "NOMBRE:", "toca para volver",
     "COM", "FEL", "ENE", "LIM",
     "REC %u",
@@ -35,6 +36,8 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolucionar?", "Mantener forma", "Despedirse?", "Despedirse", "Quedaros juntos",
     "Elige tu inicial",
     "Sin sprites", "C\240rgalos en la SD",
+    "AJUSTES", "Audio / V\241deo", "Hora", "Idioma",
+    "Sonido", "Brillo", "On", "Off",
   },
   // ---------------- EN ----------------
   {
@@ -47,12 +50,13 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Release %s?", "YES", "NO",
     "%u HITS", "STR +%u", "NEW RECORD!", "BEST: %u", "HIT FAST!",
     "SCORE: %u", "So much fun!", "+happiness",
-    "SET TIME", "HOUR", "MIN", "swipe up: cancel", "Lang",
+    "SET TIME", "HOUR", "MIN", "Lang",
     "MEDAL!", "AWESOME!", "%u DAY STREAK!",
-    "STREAK %u  best %u", "BOND", "BERRY ???", "RED BERRY", "BLUE BERRY", "GREEN BERRY",
-    "%s   AGE %lud", "tap name: rename",
+    "BOND", "???", "APPLE", "HAMBURGER", "PIZZA",
+    "Level", "Streak (Best)", "Bond", "Fav Food", "Age",
+    "%lud",
     "BATTLE", "ATK", "DEF", "SPD", "WGT", "TRAIN STRENGTH",
-    "MEDALS %d/%d", "tap: back",
+    "MEDALS %d/%d",
     "NAME:", "tap to go back",
     "FOOD", "JOY", "ENE", "HYG",
     "BEST %u",
@@ -64,6 +68,8 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolve?", "Keep form", "Say goodbye?", "Goodbye", "Stay together",
     "Choose your starter",
     "No sprites", "Load them onto the SD",
+    "SETTINGS", "Audio / Video", "Time", "Language",
+    "Sound", "Brightness", "On", "Off",
   },
   // ---------------- FR ----------------
   {
@@ -76,12 +82,13 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Rel\203cher %s?", "OUI", "NON",
     "%u COUPS", "FORCE +%u", "NOUVEAU RECORD!", "RECORD: %u", "FRAPPE VITE!",
     "SCORE: %u", "Trop bien!", "+bonheur",
-    "R\220GLER L'HEURE", "HEURE", "MIN", "glisse haut: annuler", "Langue",
+    "R\220GLER L'HEURE", "HEURE", "MIN", "Langue",
     "M\220DAILLE!", "SUPER!", "S\220RIE %u JOURS!",
-    "S\220RIE %u  rec %u", "LIEN", "BAIE ???", "BAIE ROUGE", "BAIE BLEUE", "BAIE VERTE",
-    "%s   AGE %lud", "touche le nom: renommer",
+    "LIEN", "???", "POMME", "HAMBURGER", "PIZZA",
+    "Niveau", "S\202rie (record)", "Lien", "Plat pr\202f\202r\202", "Age",
+    "%luj",
     "COMBAT", "ATQ", "DEF", "VIT", "PDS", "ENTRAINER FORCE",
-    "M\220DAILLES %d/%d", "touche: retour",
+    "M\220DAILLES %d/%d",
     "NOM:", "touche pour revenir",
     "NOUR", "JOIE", "ENE", "HYG",
     "REC %u",
@@ -93,13 +100,15 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "\220voluer?", "Garder forme", "Dire adieu?", "Adieu", "Rester ensemble",
     "Choisis ton starter",
     "Pas de sprites", "Charge-les sur la SD",
+    "R\220GLAGES", "Audio / Vid\202o", "Heure", "Langue",
+    "Son", "Luminosit\202", "On", "Off",
   },
   // ---------------- DE ----------------
-  // El aleman si lleva dieresis: la fuente 5x7 del firmware es una tabla CP437
-  // completa (256 glifos), asi que basta con el byte suelto de cada caracter.
-  // Van en octal para no depender de la codificacion del fichero fuente:
+  // German does use umlauts: the firmware's 5x7 font is a full CP437 table
+  // (256 glyphs), so the single byte for each character is enough.
+  // They are written in octal so they do not depend on the source file encoding:
   //   \204 a   \224 o   \201 u   \216 A   \231 O   \232 U   \341 ss
-  // Un byte por caracter: strlen() sigue midiendo bien y el centrado no cambia.
+  // One byte per character: strlen() still measures correctly and centering does not change.
   {
     "Entwickelt sich!", "Mampf mampf!", "Gef\204llt ihm!", "Hat Hunger!", "Braucht ein Bad!",
     "Ersch\224pft...", "Traurig...", "Etwas rundlich...", "Es ist SHINY!!", "Es ist froh",
@@ -110,12 +119,13 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "%s freilassen?", "JA", "NEIN",
     "%u TREFFER", "KRAFT +%u", "NEUER REKORD!", "REKORD: %u", "SCHNELL HAUEN!",
     "PUNKTE: %u", "Wie sch\224n!", "+Freude",
-    "ZEIT STELLEN", "STD", "MIN", "hoch wischen: Abbruch", "Sprache",
+    "ZEIT STELLEN", "STD", "MIN", "Sprache",
     "MEDAILLE!", "TOLL!", "%u TAGE SERIE!",
-    "SERIE %u  rek %u", "BND", "BEERE ???", "ROTE BEERE", "BLAUE BEERE", "GR\232NE BEERE",
-    "%s   ALTER %lud", "Name tippen: umbenennen",
+    "BND", "???", "APFEL", "HAMBURGER", "PIZZA",
+    "Level", "Serie (Rekord)", "Bindung", "Lieblingsessen", "Alter",
+    "%luT",
     "KAMPF", "ANG", "VER", "INI", "GEW", "KRAFT TRAINIEREN",
-    "MEDAILLEN %d/%d", "tippen: zur\201ck",
+    "MEDAILLEN %d/%d",
     "NAME:", "tippen: zur\201ck",
     "ESS", "FRO", "ENE", "HYG",
     "REK %u",
@@ -127,6 +137,8 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Entwickeln?", "Form behalten", "Abschied?", "Leb wohl", "Zusammen bleiben",
     "W\204hle deinen Starter",
     "Keine Sprites", "Auf die SD laden",
+    "EINSTELLUNGEN", "Audio / Video", "Uhrzeit", "Sprache",
+    "Ton", "Helligkeit", "An", "Aus",
   },
   // ---------------- IT ----------------
   {
@@ -139,12 +151,13 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Liberare %s?", "SI", "NO",
     "%u COLPI", "FORZA +%u", "NUOVO RECORD!", "RECORD: %u", "COLPISCI VELOCE!",
     "PUNTI: %u", "Che gioia!", "+felicit\205",
-    "IMPOSTA ORA", "ORA", "MIN", "scorri su: annulla", "Lingua",
+    "IMPOSTA ORA", "ORA", "MIN", "Lingua",
     "MEDAGLIA!", "GRANDE!", "SERIE %u GIORNI!",
-    "SERIE %u  rec %u", "LEG", "BACCA ???", "BACCA ROSSA", "BACCA BLU", "BACCA VERDE",
-    "%s   ETA %lud", "tocca il nome: rinomina",
+    "LEG", "???", "MELA", "HAMBURGER", "PIZZA",
+    "Livello", "Serie (record)", "Legame", "Cibo preferito", "Et\205",
+    "%lug",
     "LOTTA", "ATT", "DIF", "VEL", "PES", "ALLENA FORZA",
-    "MEDAGLIE %d/%d", "tocca: indietro",
+    "MEDAGLIE %d/%d",
     "NOME:", "tocca per tornare",
     "CIB", "GIO", "ENE", "IGI",
     "REC %u",
@@ -156,6 +169,8 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolvere?", "Mantieni forma", "Salutare?", "Addio", "Restare insieme",
     "Scegli l'iniziale",
     "Senza sprite", "Caricali sulla SD",
+    "IMPOSTAZIONI", "Audio / Video", "Ora", "Lingua",
+    "Suono", "Luminosit\205", "On", "Off",
   },
   // ---------------- PT ----------------
   {
@@ -168,12 +183,13 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Soltar %s?", "SIM", "NAO",
     "%u GOLPES", "FOR\200A +%u", "NOVO RECORDE!", "RECORDE: %u", "BATA RAPIDO!",
     "PONTOS: %u", "Que alegria!", "+alegria",
-    "AJUSTAR HORA", "HORA", "MIN", "deslize cima: cancelar", "Idioma",
+    "AJUSTAR HORA", "HORA", "MIN", "Idioma",
     "MEDALHA!", "OTIMO!", "%u DIAS SEGUIDOS!",
-    "SEQ %u  rec %u", "LA\200O", "BAGA ???", "BAGA VERMELHA", "BAGA AZUL", "BAGA VERDE",
-    "%s   IDADE %lud", "toque no nome: renomear",
+    "LA\200O", "???", "MA\200A", "HAMBURGUER", "PIZZA",
+    "N\241vel", "Sequ\210ncia (rec.)", "La\207o", "Comida favorita", "Idade",
+    "%lud",
     "COMBATE", "ATQ", "DEF", "VEL", "PES", "TREINAR FOR\200A",
-    "MEDALHAS %d/%d", "toque: voltar",
+    "MEDALHAS %d/%d",
     "NOME:", "toque para voltar",
     "COM", "ALE", "ENE", "HIG",
     "REC %u",
@@ -185,6 +201,8 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evoluir?", "Manter forma", "Despedir?", "Adeus", "Ficar juntos",
     "Escolhe o inicial",
     "Sem sprites", "Carrega-os no SD",
+    "AJUSTES", "Audio / V\241deo", "Hora", "Idioma",
+    "Som", "Brilho", "On", "Off",
   },
   // ---------------- JA ----------------
   {
@@ -204,17 +222,19 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
 
     "スコア: %u", "たのしい！", "+ごきげん",
 
-    "じかんせってい", "じ", "ふん", "うえスワイプ: もどる", "ことば",
+    "じかんせってい", "じ", "ふん", "ことば",
 
     "メダル！", "すごい！", "%u にちれんぞく！",
 
-    "れんぞく %u  きろく %u", "なかよし", "きのみ ???", "あかいきのみ", "あおいきのみ", "みどりのきのみ",
+    "なかよし", "???", "りんご", "ハンバーガー", "ピザ",
 
-    "%s   %luにち", "なまえをタッチ: へんこう",
+    "レベル", "れんぞく(きろく)", "なかよし", "すきなごはん", "ねんれい",
+
+    "%luにち",
 
     "バトル", "こうげき", "ぼうぎょ", "すばやさ", "たいじゅう", "ちからトレーニング",
 
-    "メダル %d/%d", "タッチ: もどる",
+    "メダル %d/%d",
 
     "なまえ:", "タッチでもどる",
 
@@ -237,13 +257,17 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "さいしょのポケモンをえらぶ",
 
     "スプライトなし", "SDにいれてください",
+
+    "せってい", "おと / がめん", "じかん", "ことば",
+
+    "おと", "あかるさ", "オン", "オフ",
   },
   // ---------------- KO ----------------
-  // Los especificadores van en el MISMO ORDEN que en la fila inglesa aunque
-  // el coreano natural los colocaria de otra manera (p. ej. S_NEXT_LVL_FMT):
-  // T(id) se rellena con varargs en un orden fijo en cada llamada, asi que
-  // reordenar %u/%s aqui sin tocar el punto de llamada intercambiaria en
-  // silencio que valor cae en que hueco.
+  // The specifiers go in the SAME ORDER as in the English row even though
+  // natural Korean would place them differently (e.g. S_NEXT_LVL_FMT):
+  // T(id) is filled with varargs in a fixed order at each call, so reordering
+  // %u/%s here without touching the call site would silently swap which value
+  // lands in which slot.
   {
     "진화 중!", "냠냠!", "마음에 들어해요!", "배고파요!", "목욕이 필요해요!",
     "지쳤어요...", "슬퍼해요...", "조금 통통해요...", "이로치예요!!", "행복해요",
@@ -254,12 +278,13 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "%s 놓아줄까요?", "예", "아니오",
     "%u회 명중", "힘 +%u", "신기록!", "최고: %u", "빠르게!",
     "점수: %u", "정말 즐거워요!", "+행복",
-    "시간 설정", "시", "분", "위로 스와이프: 취소", "언어",
+    "시간 설정", "시", "분", "언어",
     "메달!", "최고예요!", "%u일 연속!",
-    "연속 %u  최고 %u", "유대감", "열매 ???", "빨간 열매", "파란 열매", "초록 열매",
-    "%s   나이 %lud", "이름 탭: 이름변경",
+    "유대감", "???", "사과", "햄버거", "피자",
+    "레벨", "연속 (최고)", "유대감", "좋아하는 음식", "나이",
+    "%lu일",
     "배틀", "공격", "방어", "속도", "무게", "힘 훈련",
-    "메달 %d/%d", "탭: 뒤로",
+    "메달 %d/%d",
     "이름:", "탭하면 뒤로",
     "포만", "기분", "기력", "청결",
     "최고 %u",
@@ -271,46 +296,48 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "진화할까요?", "형태 유지", "작별할까요?", "작별", "계속 함께",
     "스타터를 선택하세요",
     "스프라이트 없음", "SD 카드에 넣어주세요",
+    "설정", "소리 / 화면", "시간", "언어",
+    "소리", "밝기", "켬", "끔",
   },
 };
 
-// Nombres de medalla en sus tres longitudes [idioma][medalla].
+// Medal names in their three lengths [language][medal].
 static const char *const MED_NAME[LANG_COUNT][MED_COUNT] = {
-  { "Nv.10", "Nv.25", "Nv.50", "BAYA", "RACHA 7", "VINCULO", "FORMA TOPE", "EN FORMA" },
-  { "Lv.10", "Lv.25", "Lv.50", "BERRY", "7 STREAK", "BOND", "TOP FORM", "IN SHAPE" },
-  { "Niv.10", "Niv.25", "Niv.50", "BAIE", "SERIE 7", "LIEN", "FORME MAX", "EN FORME" },
-  { "Lv.10", "Lv.25", "Lv.50", "BEERE", "7 SERIE", "BINDUNG", "ENDFORM", "FIT" },
-  { "Lv.10", "Lv.25", "Lv.50", "BACCA", "SERIE 7", "LEGAME", "FORMA MAX", "IN FORMA" },
-  { "Niv.10", "Niv.25", "Niv.50", "BAGA", "SEQ 7", "LACO", "FORMA MAX", "EM FORMA" },
-  { "Lv.10", "Lv.25", "Lv.50", "きのみ", "7にち", "なかよし", "さいしゅう", "げんき" },
-  { "Lv.10", "Lv.25", "Lv.50", "열매", "연속 7일", "유대", "최고 컨디션", "건강함" },
+  { "Nv.10", "Nv.25", "Nv.50", "COMIDA", "RACHA 7", "VINCULO", "FORMA TOPE", "EN FORMA" },
+  { "Lv.10", "Lv.25", "Lv.50", "FOOD", "7 STREAK", "BOND", "TOP FORM", "IN SHAPE" },
+  { "Niv.10", "Niv.25", "Niv.50", "PLAT", "SERIE 7", "LIEN", "FORME MAX", "EN FORME" },
+  { "Lv.10", "Lv.25", "Lv.50", "ESSEN", "7 SERIE", "BINDUNG", "ENDFORM", "FIT" },
+  { "Lv.10", "Lv.25", "Lv.50", "CIBO", "SERIE 7", "LEGAME", "FORMA MAX", "IN FORMA" },
+  { "Niv.10", "Niv.25", "Niv.50", "COMIDA", "SEQ 7", "LACO", "FORMA MAX", "EM FORMA" },
+  { "Lv.10", "Lv.25", "Lv.50", "ごはん", "7にち", "なかよし", "さいしゅう", "げんき" },
+  { "Lv.10", "Lv.25", "Lv.50", "음식", "연속 7일", "유대", "최고 컨디션", "건강함" },
 };
 static const char *const MED_LBL[LANG_COUNT][MED_COUNT] = {
-  { "Nv10", "Nv25", "Nv50", "BAYA", "7DIAS", "VINC", "TOPE", "SANO" },
-  { "Lv10", "Lv25", "Lv50", "BERRY", "7DAYS", "BOND", "TOP", "FIT" },
-  { "Niv10", "Niv25", "Niv50", "BAIE", "7JRS", "LIEN", "MAX", "FORME" },
-  { "Lv10", "Lv25", "Lv50", "BEERE", "7TAGE", "BND", "END", "FIT" },
-  { "Lv10", "Lv25", "Lv50", "BACCA", "7GG", "LEG", "MAX", "FIT" },
-  { "Niv10", "Niv25", "Niv50", "BAGA", "7DIAS", "LACO", "MAX", "FIT" },
-  { "Lv10", "Lv25", "Lv50", "きのみ", "7にち", "なかよし", "しんか", "げんき" },
-  { "Lv10", "Lv25", "Lv50", "열매", "7일", "유대", "최고", "건강" },
+  { "Nv10", "Nv25", "Nv50", "COMIDA", "7DIAS", "VINC", "TOPE", "SANO" },
+  { "Lv10", "Lv25", "Lv50", "FOOD", "7DAYS", "BOND", "TOP", "FIT" },
+  { "Niv10", "Niv25", "Niv50", "PLAT", "7JRS", "LIEN", "MAX", "FORME" },
+  { "Lv10", "Lv25", "Lv50", "ESSEN", "7TAGE", "BND", "END", "FIT" },
+  { "Lv10", "Lv25", "Lv50", "CIBO", "7GG", "LEG", "MAX", "FIT" },
+  { "Niv10", "Niv25", "Niv50", "COMIDA", "7DIAS", "LACO", "MAX", "FIT" },
+  { "Lv10", "Lv25", "Lv50", "ごはん", "7にち", "なかよし", "しんか", "げんき" },
+  { "Lv10", "Lv25", "Lv50", "음식", "7일", "유대", "최고", "건강" },
 };
 static const char *const MED_DSC[LANG_COUNT][MED_COUNT] = {
-  { "NIVEL 10", "NIVEL 25", "NIVEL 50", "BAYA HALLADA",
+  { "NIVEL 10", "NIVEL 25", "NIVEL 50", "COMIDA FAV",
     "RACHA 7 DIAS", "VINCULO MAX", "FORMA FINAL", "EN FORMA" },
-  { "LEVEL 10", "LEVEL 25", "LEVEL 50", "BERRY FOUND",
+  { "LEVEL 10", "LEVEL 25", "LEVEL 50", "FOOD FOUND",
     "7 DAY STREAK", "MAX BOND", "FINAL FORM", "IN SHAPE" },
-  { "NIVEAU 10", "NIVEAU 25", "NIVEAU 50", "BAIE TROUVEE",
+  { "NIVEAU 10", "NIVEAU 25", "NIVEAU 50", "PLAT TROUVE",
     "SERIE 7 JOURS", "LIEN MAX", "FORME FINALE", "EN FORME" },
-  { "LEVEL 10", "LEVEL 25", "LEVEL 50", "BEERE GEFUNDEN",
+  { "LEVEL 10", "LEVEL 25", "LEVEL 50", "ESSEN GEFUNDEN",
     "7 TAGE SERIE", "MAX BINDUNG", "ENDFORM", "FIT" },
-  { "LIVELLO 10", "LIVELLO 25", "LIVELLO 50", "BACCA TROVATA",
+  { "LIVELLO 10", "LIVELLO 25", "LIVELLO 50", "CIBO TROVATO",
     "SERIE 7 GIORNI", "LEGAME MAX", "FORMA FINALE", "IN FORMA" },
-  { "NIVEL 10", "NIVEL 25", "NIVEL 50", "BAGA ACHADA",
+  { "NIVEL 10", "NIVEL 25", "NIVEL 50", "COMIDA FAV",
     "SEQ 7 DIAS", "LACO MAX", "FORMA FINAL", "EM FORMA" },
-  { "レベル 10", "レベル 25", "レベル 50", "きのみ はっけん",
+  { "レベル 10", "レベル 25", "レベル 50", "ごはん はっけん",
     "7にち れんぞく", "なかよし MAX", "さいしゅうしんか", "げんきいっぱい" },
-  { "레벨 10", "레벨 25", "레벨 50", "열매 발견",
+  { "레벨 10", "레벨 25", "레벨 50", "음식 발견",
     "연속 7일", "유대감 최대", "최종 진화", "건강함" },
 };
 
@@ -321,7 +348,7 @@ const char *medalDesc(int i)  { return MED_DSC[gLang][i]; }
 
 void loadLang() {
   Preferences p;
-  p.begin("tamapoke", true);  // solo lectura
+  p.begin("tamapoke", true);  // read-only
   uint8_t v = p.getUChar("lang", LANG_DEFAULT);
   p.end();
   gLang = (v < LANG_COUNT) ? (Lang)v : LANG_DEFAULT;

@@ -1,0 +1,9 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "Build CYD (2.8\")", "type": "shell", "command": "pio run -e cyd-rect", "group": { "kind": "build", "isDefault": true }, "problemMatcher": ["$gcc"] },
+    { "label": "Upload CYD (2.8\")", "type": "shell", "command": "pio run -e cyd-rect -t upload", "problemMatcher": ["$gcc"] },
+    { "label": "Serial monitor", "type": "shell", "command": "pio device monitor", "isBackground": true, "problemMatcher": [] },
+    { "label": "Build Waveshare round", "type": "shell", "command": "pio run -e waveshare-round", "problemMatcher": ["$gcc"] }
+  ]
+}

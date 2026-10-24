@@ -60,7 +60,7 @@ While **awake**, per minute:
   Each slip-up **delays evolution by 1 level** and cools the bond.
 
 ### Actions
-- 🍎 **Berry** (3 flavors): +25 FOOD. Each species has a **hidden favorite flavor**
+- 🍎 **Apple / hamburger / pizza**: +25 FOOD. Each species has a **hidden favorite food**
   → +35 FOOD, +10 JOY, ♥, bond, and it gets revealed.
 - 🍬 **Candy:** +10 FOOD, +12 JOY, but **+12 weight** (fattening).
 - ⚽ **Play / minigame:** +JOY, −ENE; the minigame trains **SPEED** and burns weight.
@@ -113,7 +113,7 @@ After any ending, a **new egg** appears.
   at **3 / 7 / 30 / 100** days; skipping a day breaks it.
 - **Bond** (per pet, resets on hatch): grows with affection (**cap +8/day**), cools on
   neglect. Both streak & bond improve egg/shiny odds.
-- **8 medals** (Lv10/25/50, favorite berry found, 7-day streak, max bond, final form,
+- **8 medals** (Lv10/25/50, favorite food found, 7-day streak, max bond, final form,
   "fit" = weight 0 & no slip-ups), per-pet + a global counter.
 - **Pokédex:** raising a species registers it; **151 + shinies** to complete.
 
@@ -197,19 +197,20 @@ on, care for your companion:
 If one bottoms out it counts as a *slip-up*.
 
 **Buttons (bottom arc, icons):**
-- 🍎 **Feed** → food menu: 3 berries (each species has a hidden favourite that
-  gives a bonus) and a candy (+happiness but it fattens; weight makes it sluggish).
+- 🍴 **Feed** → food menu: apple, hamburger and pizza (each species has a hidden
+  favourite that gives a bonus) and a candy (+happiness but it fattens; weight makes it sluggish).
 - ⚽ **Play** → the pokeball minigame (trains SPEED).
 - 🌙 **Light** → sleep/wake (recovers energy, dims the screen). While asleep,
   needs decay much slower (rest).
-- 🫧 **Bath** → a foam scene that cleans up the poops.
+- 🛁 **Bath** → a foam scene that cleans up the poops.
 
 **Touch gestures:**
 - Tap the creature = pet it (+happiness, bond).
 - Horizontal swipe = open the **Pokédex / gallery**.
-- Vertical swipe up = open the **stat card** (4 pages: Profile / Battle / Medals /
-  Progress; swipe between them; tap the name on Profile to rename; on Battle the
-  "Train strength" button opens the bag).
+- Tap the creature's name = open the **stat card** (4 pages: Profile / Battle / Medals /
+  Progress; switch with the side arrows or a horizontal swipe; tap the pencil next to
+  the name on Profile to rename; on Battle the "Train strength" button opens the bag;
+  the X in the top-right corner closes it).
 - Swipe down = **set the clock** and pick the **language** + sound on/off.
 - Long press (3 s) on the creature = **release** dialog.
 
@@ -278,7 +279,7 @@ and burns off with training.
   real day advances the streak; 3/7/30/100 milestones are celebrated; skipping a
   day breaks it. Flame badge on the main screen.
 - **Bond** (the creature's): rises slowly with care and petting, drops with slip-ups.
-- **Medals** for the individual (level, berry, streak, bond, final form, fit) +
+- **Medals** for the individual (level, favorite food, streak, bond, final form, fit) +
   a global counter. Medals page of the stat card.
 - **Name**: touch keyboard; the nickname rules the header and the card.
 

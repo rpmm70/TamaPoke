@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests de las herramientas del taller (tools/) y de los ficheros generados.
+"""Tests for the workshop tools (tools/) and the generated files.
 
   python3 test/test_tools.py
 """
@@ -40,7 +40,7 @@ class TestToolsCompile(unittest.TestCase):
 
 
 class TestDexData(unittest.TestCase):
-    """Invariantes de la fuente de datos de la Pokedex."""
+    """Invariants of the Pokedex data source."""
 
     @classmethod
     def setUpClass(cls):
@@ -65,7 +65,7 @@ class TestDexData(unittest.TestCase):
             self.assertTrue(s.isascii(), f'slug no ASCII: {s}')
 
     def test_los_nombres_de_pantalla_son_ascii_en_mayusculas(self):
-        # la fuente GFX del firmware no tiene acentos ni minusculas
+        # the firmware's GFX font has no accents or lowercase
         for num, slug, display, *_ in self.DEX:
             self.assertTrue(display.isascii(), f'{num} {display} no es ASCII')
             self.assertEqual(display, display.upper(), f'{num} {display} lleva minusculas')
@@ -119,10 +119,10 @@ class TestDexData(unittest.TestCase):
                 self.assertTrue(0 < v <= 255, f'stat fuera de rango en {self.byNum[num][2]}: {v}')
 
     def test_los_nombres_traducidos_cuadran_con_su_fuente(self):
-        # Los latinos se pintan con la fuente CP437 (un byte por caracter, sin
-        # minusculas en los nombres); el japones y el coreano con una fuente
-        # U8g2 y van en UTF-8, asi que ni son ASCII ni tienen mayusculas que
-        # comprobar.
+        # Latin-script ones are drawn with the CP437 font (one byte per
+        # character, no lowercase in names); Japanese and Korean with a U8g2
+        # font and they are UTF-8, so they are neither ASCII nor have
+        # uppercase to check.
         LATINOS, CJK = ('fr', 'de'), ('ja', 'ko')
         for num, langs in self.NAMES.items():
             self.assertIn(num, self.byNum, f'nombre traducido de una especie inexistente: {num}')
@@ -134,12 +134,12 @@ class TestDexData(unittest.TestCase):
                     self.assertEqual(name, name.upper(), f'{num} {lang} lleva minusculas: {name}')
                     self.assertLessEqual(len(name), 12, f'{num} {lang} no cabe en pantalla: {name}')
                 else:
-                    # el limite util son CARACTERES, no bytes: en UTF-8 cada kana o silaba hangul ocupa 3
+                    # the useful limit is CHARACTERS, not bytes: in UTF-8 each kana or hangul syllable takes 3
                     self.assertLessEqual(len(name), 8, f'{num} {lang} no cabe en pantalla: {name}')
 
 
 class TestGeneratedFiles(unittest.TestCase):
-    """dex.h esta generado: si no coincide con su generador, alguien lo edito a mano."""
+    """dex.h is generated: if it does not match its generator, someone edited it by hand."""
 
     def test_gen_dex_reproduce_dex_h(self):
         tmp = tempfile.mkdtemp(prefix='tamapoke-gen-')
@@ -161,11 +161,11 @@ class TestGeneratedFiles(unittest.TestCase):
         for name in ('dex.h', 'species.h'):
             with open(os.path.join(ROOT, name)) as fh:
                 head = fh.read(400)
-            self.assertIn('GENERADO', head, f'{name} deberia decir que esta generado')
+            self.assertIn('GENERATED', head, f'{name} deberia decir que esta generado')
 
 
 class TestSketchSanity(unittest.TestCase):
-    """Comprobaciones baratas sobre el .ino que no necesitan compilarlo."""
+    """Cheap checks on the .ino that do not require compiling it."""
 
     @classmethod
     def setUpClass(cls):
@@ -173,8 +173,8 @@ class TestSketchSanity(unittest.TestCase):
             cls.ino = fh.read()
 
     def test_el_sketch_no_lleva_caracteres_no_ascii_en_literales_de_pantalla(self):
-        # los comentarios pueden llevar lo que quieran; los literales, no:
-        # la fuente GFX es ASCII y un acento sale como basura
+        # comments can contain anything; literals cannot:
+        # the GFX font is ASCII and an accent comes out as garbage
         for lineno, line in enumerate(self.ino.splitlines(), 1):
             code = line.split('//')[0]
             for chunk in code.split('"')[1::2]:
@@ -188,25 +188,24 @@ class TestSketchSanity(unittest.TestCase):
 
 
 class TestBuffersDeTexto(unittest.TestCase):
-    """Cada snprintf(buf, sizeof(buf), T(S_x), ...) cabe en su buffer en TODOS los idiomas.
+    """Every snprintf(buf, sizeof(buf), T(S_x), ...) fits its buffer in ALL languages.
 
-    Los buffers se dimensionaron cuando toda cadena era de un byte por
-    caracter. En UTF-8 un kana o una silaba hangul ocupan 3, y snprintf corta
-    en silencio: a veces se pierden cifras ("きろく 2" por "きろく 219") y a
-    veces corta a mitad de un caracter, que la fuente ya no sabe dibujar. No lo
-    avisa ni el compilador ni la pantalla, asi que se comprueba aqui con el
-    peor caso de cada argumento segun su tipo:
+    The buffers were sized when every string was one byte per character. In
+    UTF-8 a kana or a hangul syllable takes 3, and snprintf truncates
+    silently: sometimes digits are lost ("きろく 2" instead of "きろく 219") and
+    sometimes it cuts in the middle of a character, which the font can no
+    longer draw. Neither the compiler nor the screen warns about it, so it is
+    checked here with the worst case of each argument according to its type:
 
-      %u / %d  -> 5 cifras (todos los argumentos son de 16 bits o menos)
-      %lu      -> 10 cifras
-      %s       -> lo que declare ARGS_S; un %s sin declarar hace fallar el
-                  test, para que quien lo anada piense cuanto puede ocupar
+      %u / %d  -> 5 digits (all arguments are 16 bits or less)
+      %lu      -> 10 digits
+      %s       -> whatever ARGS_S declares; an undeclared %s fails the
+                  test, so whoever adds it thinks about how long it can be
     """
 
-    ARGS_S = {  # que puede llegar por cada %s, en orden
+    ARGS_S = {  # what can arrive for each %s, in order
         'S_NAME_FMT': ('estrella', 'nombre_o_apodo'),
         'S_RELEASE_FMT': ('nombre',),
-        'S_INFO_FMT': ('baya',),
         'S_FAREWELL_BTN': ('nombre_o_apodo',),
         'S_RUNAWAY_BTN': ('nombre_o_apodo',),
     }
@@ -238,11 +237,11 @@ class TestBuffersDeTexto(unittest.TestCase):
 
     @staticmethod
     def bytes_literal(literal):
-        """Bytes que ocupa en memoria un literal C escrito como en el fuente."""
+        """Bytes a C literal takes in memory, written as in the source."""
         cuerpo = literal[1:-1].encode('utf-8')
         n = i = 0
         while i < len(cuerpo):
-            if cuerpo[i] == 0x5C:  # barra invertida: \ooo octal, o \n \" \\ ...
+            if cuerpo[i] == 0x5C:  # backslash: \ooo octal, or \n \" \\ ...
                 j = i + 1
                 while j < len(cuerpo) and j < i + 4 and 0x30 <= cuerpo[j] <= 0x37:
                     j += 1
@@ -254,7 +253,7 @@ class TestBuffersDeTexto(unittest.TestCase):
 
     def peor_caso(self, sid, li):
         lang, lit = self.LANGS[li], self.LIT[sid][li]
-        total = self.bytes_literal(lit) + 1  # + terminador
+        total = self.bytes_literal(lit) + 1  # + terminator
         pendientes = list(self.ARGS_S.get(sid, ()))
         for m in self.ESPEC.finditer(lit):
             total -= len(m.group(0))

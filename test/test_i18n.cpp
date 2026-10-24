@@ -1,4 +1,4 @@
-// Consistencia de las traducciones (i18n.cpp).
+// Consistency of the translations (i18n.cpp).
 #include "framework.h"
 #include "shim/Arduino.h"
 #include "shim/Preferences.h"
@@ -10,19 +10,19 @@
 
 static const char *LANG_NAME[LANG_COUNT] = { "ES", "EN", "FR", "DE", "IT", "PT", "JA", "KO" };
 
-// extrae la firma de los especificadores de printf de una cadena: "%lud" -> "lu"
+// extracts the printf specifier signature of a string: "%lud" -> "lu"
 static std::vector<std::string> specs(const char *s) {
   std::vector<std::string> out;
   const char *p = s;
   while (*p) {
     if (*p != '%') { p++; continue; }
     p++;
-    if (*p == '%') { p++; continue; }   // %% es un literal
+    if (*p == '%') { p++; continue; }   // %% is a literal
     std::string sig;
-    while (*p && strchr("-+ #0", *p)) p++;             // banderas
-    while (*p && isdigit((unsigned char)*p)) p++;      // ancho
+    while (*p && strchr("-+ #0", *p)) p++;             // flags
+    while (*p && isdigit((unsigned char)*p)) p++;      // width
     if (*p == '.') { p++; while (*p && isdigit((unsigned char)*p)) p++; }
-    while (*p && strchr("lhzjt", *p)) { sig += *p; p++; }  // modificador
+    while (*p && strchr("lhzjt", *p)) { sig += *p; p++; }  // modifier
     if (!*p) { out.push_back(sig + "<incompleto>"); break; }
     sig += *p++;
     out.push_back(sig);
@@ -36,7 +36,7 @@ static std::string joinSpecs(const std::vector<std::string> &v) {
   return s.empty() ? "(sin formato)" : s;
 }
 
-// firma esperada de cada cadena con formato, sacada de las llamadas del sketch
+// expected signature of each format string, taken from the sketch's calls
 struct ExpectedFmt { StrId id; const char *sig; };
 static const ExpectedFmt EXPECTED[] = {
   { S_POKEDEX_FMT,     "%u" },
@@ -47,8 +47,7 @@ static const ExpectedFmt EXPECTED[] = {
   { S_RECORD_FMT,      "%u" },
   { S_SCORE_FMT,       "%u" },
   { S_STREAK_DAYS_FMT, "%u" },
-  { S_STREAK_FMT,      "%u,%u" },
-  { S_INFO_FMT,        "%s,%lu" },
+  { S_CARD_AGE_FMT,    "%lu" },
   { S_MEDALS_FMT,      "%d,%d" },
   { S_REC_FMT,         "%u" },
   { S_LVL_FMT,         "%u" },
@@ -80,27 +79,27 @@ TEST(i18n, ningun_idioma_tiene_huecos) {
   gLang = LANG_DEFAULT;
 }
 
-// La fuente del firmware (glcdfont.h de Arduino_GFX) es una tabla CP437 de 256
-// glifos, asi que SI admite acentos, pero cada uno tiene que ocupar UN byte: la
-// UI centra con strlen(t)*6, y un caracter UTF-8 de dos bytes descuadraria la
-// etiqueta. Este test no prohibe los bytes altos, prohibe el UTF-8.
+// The firmware font (Arduino_GFX's glcdfont.h) is a 256-glyph CP437 table,
+// so it DOES support accents, but each one must take ONE byte: the UI
+// centers with strlen(t)*6, and a two-byte UTF-8 character would misalign the
+// label. This test does not forbid high bytes, it forbids UTF-8.
 TEST(i18n, los_acentos_van_en_un_solo_byte_no_en_utf8) {
-  // secuencias de arranque de UTF-8 multibyte: 0xC2-0xDF, 0xE0-0xEF, 0xF0-0xF4
+  // multibyte UTF-8 lead bytes: 0xC2-0xDF, 0xE0-0xEF, 0xF0-0xF4
   auto arranqueUtf8 = [](unsigned char c) {
     return (c >= 0xC2 && c <= 0xDF) || (c >= 0xE0 && c <= 0xEF) || (c >= 0xF0 && c <= 0xF4);
   };
   for (int lang = 0; lang < LANG_COUNT; lang++) {
-    if (LANG_IS_CJK(lang)) continue;  // los CJK van en UTF-8 a proposito, con fuente U8g2
+    if (LANG_IS_CJK(lang)) continue;  // CJK is UTF-8 on purpose, with a U8g2 font
     gLang = (Lang)lang;
     for (int id = 0; id < STR_COUNT; id++) {
       const char *s = T((StrId)id);
       if (!s) continue;
       for (const char *c = s; *c; c++) {
         unsigned char u = (unsigned char)*c;
-        if (u < 128) continue;                 // ASCII: siempre vale
-        if (!arranqueUtf8(u)) continue;        // byte alto suelto: es CP437, vale
-        // un arranque UTF-8 solo es sospechoso si le sigue un byte de
-        // continuacion (0x80-0xBF): entonces son dos glifos donde deberia ir uno
+        if (u < 128) continue;                 // ASCII: always fine
+        if (!arranqueUtf8(u)) continue;        // lone high byte: it is CP437, fine
+        // a UTF-8 lead byte is only suspicious if followed by a continuation
+        // byte (0x80-0xBF): then it is two glyphs where there should be one
         unsigned char sig = (unsigned char)*(c + 1);
         char msg[200];
         snprintf(msg, sizeof(msg),
@@ -113,7 +112,7 @@ TEST(i18n, los_acentos_van_en_un_solo_byte_no_en_utf8) {
   gLang = LANG_DEFAULT;
 }
 
-// un %u de mas o de menos en una traduccion es una lectura de basura de la pila
+// one %u too many or too few in a translation is a garbage read from the stack
 TEST(i18n, los_formatos_coinciden_en_todos_los_idiomas) {
   for (int id = 0; id < STR_COUNT; id++) {
     gLang = LANG_EN;
@@ -130,7 +129,7 @@ TEST(i18n, los_formatos_coinciden_en_todos_los_idiomas) {
   gLang = LANG_DEFAULT;
 }
 
-// ...y ademas tienen que cuadrar con lo que pasa el sketch en cada llamada
+// ...and they also have to match what the sketch passes at each call
 TEST(i18n, los_formatos_cuadran_con_las_llamadas_del_sketch) {
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     gLang = (Lang)lang;
@@ -149,9 +148,9 @@ TEST(i18n, los_formatos_cuadran_con_las_llamadas_del_sketch) {
 TEST(i18n, las_medallas_estan_en_todos_los_idiomas) {
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     gLang = (Lang)lang;
-    // los topes de longitud van en BYTES, que solo equivalen a caracteres con la
-    // fuente CP437. En CJK cada kana ocupa 3 bytes y el limite real es de anchura
-    // en pantalla, que aqui no se puede medir: eso se comprueba en la placa.
+    // the length caps are in BYTES, which only equal characters with the
+    // CP437 font. In CJK each kana takes 3 bytes and the real limit is on-screen
+    // width, which cannot be measured here: that is checked on the board.
     const bool cjk = LANG_IS_CJK(lang);
     for (int m = 0; m < MED_COUNT; m++) {
       const char *n = medalName(m), *l = medalLabel(m), *d = medalDesc(m);
@@ -160,7 +159,7 @@ TEST(i18n, las_medallas_estan_en_todos_los_idiomas) {
       CHECK_MSG(n && n[0], std::string("medalName vacio ") + where);
       CHECK_MSG(l && l[0], std::string("medalLabel vacio ") + where);
       CHECK_MSG(d && d[0], std::string("medalDesc vacio ") + where);
-      // la etiqueta corta va en una casilla de la cuadricula de medallas
+      // the short label goes in one cell of the medal grid
       if (!cjk && l) CHECK_MSG(strlen(l) <= 6, std::string("etiqueta demasiado larga ") + where + ": " + l);
       if (!cjk && n) CHECK_MSG(strlen(n) <= 12, std::string("nombre demasiado largo ") + where + ": " + n);
       if (!cjk && d) CHECK_MSG(strlen(d) <= 16, std::string("descripcion demasiado larga ") + where + ": " + d);
@@ -169,9 +168,36 @@ TEST(i18n, las_medallas_estan_en_todos_los_idiomas) {
   gLang = LANG_DEFAULT;
 }
 
+// Settings menu rows are drawn at text size 2 (12 px per CP437 glyph) on a
+// 320 px wide screen, so a row holds 26 characters at most. The On/Off values
+// sit at the right edge of a row next to its label and must stay very short.
+// CJK is skipped for the same reason as the medal caps: bytes are not width.
+TEST(i18n, el_menu_de_ajustes_cabe_en_pantalla) {
+  const StrId menuRowIds[] = { S_MENU_TITLE, S_MENU_AV, S_MENU_TIME, S_MENU_LANG,
+                               S_SOUND, S_BRIGHTNESS };
+  const StrId toggleValueIds[] = { S_ON, S_OFF };
+  for (int lang = 0; lang < LANG_COUNT; lang++) {
+    if (LANG_IS_CJK(lang)) continue;
+    gLang = (Lang)lang;
+    for (StrId rowId : menuRowIds) {
+      const char *rowText = T(rowId);
+      char where[64];
+      snprintf(where, sizeof(where), "[%s][id %d]", LANG_NAME[lang], (int)rowId);
+      CHECK_MSG(strlen(rowText) <= 26, std::string("fila de menu demasiado larga ") + where + ": " + rowText);
+    }
+    for (StrId valueId : toggleValueIds) {
+      const char *valueText = T(valueId);
+      char where[64];
+      snprintf(where, sizeof(where), "[%s][id %d]", LANG_NAME[lang], (int)valueId);
+      CHECK_MSG(strlen(valueText) <= 4, std::string("valor On/Off demasiado largo ") + where + ": " + valueText);
+    }
+  }
+  gLang = LANG_DEFAULT;
+}
+
 TEST(i18n, las_medallas_no_llevan_acentos) {
   for (int lang = 0; lang < LANG_COUNT; lang++) {
-    if (LANG_IS_CJK(lang)) continue;  // los CJK van en UTF-8 con fuente U8g2
+    if (LANG_IS_CJK(lang)) continue;  // CJK is UTF-8 with a U8g2 font
     gLang = (Lang)lang;
     for (int m = 0; m < MED_COUNT; m++) {
       const char *tab[3] = { medalName(m), medalLabel(m), medalDesc(m) };
@@ -205,7 +231,7 @@ TEST(i18n, un_idioma_invalido_en_la_nvs_no_rompe_nada) {
   mockNvsReset();
   Preferences p;
   p.begin("tamapoke", false);
-  p.putUChar("lang", 200);  // valor corrupto
+  p.putUChar("lang", 200);  // corrupt value
   p.end();
   gLang = LANG_ES;
   loadLang();
