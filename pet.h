@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <Preferences.h>
+#include "dex.h"  // DEX_COUNT, DEX_BITMAP_BYTES (dex.h only includes i18n.h: no cycle)
 
 // 1 tick = 1 game minute. Lower this value to test faster
 // (e.g. 5000UL = stats drop 12x faster).
@@ -42,6 +43,15 @@ enum : uint16_t {
 };
 #define MED_COUNT 8
 
+#pragma region Wild battle rewards
+// training stat raised by a wild battle win
+enum BattleRewardStat : uint8_t { BATTLE_REWARD_NONE = 0, BATTLE_REWARD_ATK, BATTLE_REWARD_DEF, BATTLE_REWARD_SPE };
+struct BattleReward {
+  BattleRewardStat stat = BATTLE_REWARD_NONE;
+  uint8_t amount = 0;
+};
+#pragma endregion
+
 class Pet {
 public:
   // Stats 0..100
@@ -64,8 +74,13 @@ public:
   uint32_t lastSeenEpoch = 0;   // last RTC time seen (for offline progression)
   uint8_t ceremony = CER_NONE;  // farewell/runaway/release in progress
   uint8_t lastEnd = CER_NONE;   // how the previous one ended (affects the egg)
-  uint8_t dexReg[19] = { 0 };       // pokedex of raised species (151-bit bitmap)
-  uint8_t dexShinyReg[19] = { 0 };  // raised in shiny version
+  uint8_t dexReg[DEX_BITMAP_BYTES] = { 0 };       // pokedex of raised species (DEX_COUNT-bit bitmap)
+  uint8_t dexShinyReg[DEX_BITMAP_BYTES] = { 0 };  // raised or caught in shiny version
+  #pragma region Wild battle state
+  uint8_t dexCaught[DEX_BITMAP_BYTES] = { 0 };    // pokedex of caught wild species
+  uint16_t battleWins = 0, battleLosses = 0;      // the player's: persist across raisings
+  uint16_t battleStreak = 0, bestBattleStreak = 0;  // consecutive wins / best ever
+  #pragma endregion
   // daily care streak (the player's: persists across raisings)
   uint16_t streak = 0, bestStreak = 0;
   uint32_t lastCareDay = 0;
@@ -77,6 +92,7 @@ public:
   uint16_t newMedal = 0;   // just earned, to celebrate
   uint16_t lastMilestone = 0;  // streak milestone already celebrated
   uint16_t gameHi = 0;     // minigame record (the player's)
+  uint16_t coinHi = 0;     // coin chase record (the player's)
   uint16_t strHi = 0;      // punching bag hits record
 
   void begin();                 // loads state from NVS (or creates the first egg)
@@ -86,10 +102,12 @@ public:
   void feed();              // apple (compatibility)
   void feedBerry(uint8_t color);  // 0 apple, 1 hamburger, 2 pizza
   void feedCandy();
+  void feedCoffee();  // +energy, -food; never a favorite (lovesBerry only covers 0-2)
   bool lovesBerry(uint8_t color) const {
     return !isEgg() && (speciesId % 3) == color;  // hidden per-species taste
   }
-  void playResult(uint8_t score);  // minigame reward (trains SPE)
+  void playResult(uint8_t score);  // ball game reward (trains ATK, at most +2)
+  uint8_t coinChaseResult(uint8_t points);  // coin chase reward (trains SPE), returns the SPE gain
   uint8_t trainStrength(uint16_t hits);  // training bag (trains STR)
 
   // battle stats: real gen 1 base x genes + level + training
@@ -139,12 +157,37 @@ public:
     return lv > 999 ? 999 : (uint16_t)lv;
   }
   bool isRegistered(int16_t dex) const {
-    return dex >= 1 && dex <= 151 && (dexReg[(dex - 1) >> 3] & (1 << ((dex - 1) & 7)));
+    return dex >= 1 && dex <= DEX_COUNT && (dexReg[(dex - 1) >> 3] & (1 << ((dex - 1) & 7)));
   }
   bool isShinyRegistered(int16_t dex) const {
-    return dex >= 1 && dex <= 151 && (dexShinyReg[(dex - 1) >> 3] & (1 << ((dex - 1) & 7)));
+    return dex >= 1 && dex <= DEX_COUNT && (dexShinyReg[(dex - 1) >> 3] & (1 << ((dex - 1) & 7)));
   }
-  uint16_t registeredCount() const;
+  uint16_t registeredCount() const;  // raised species only (caught ones are separate)
+
+  #pragma region Wild battles and catching
+  bool isCaught(int16_t dex) const {
+    return dex >= 1 && dex <= DEX_COUNT && (dexCaught[(dex - 1) >> 3] & (1 << ((dex - 1) & 7)));
+  }
+  uint16_t caughtCount() const;
+  // marks a wild species as caught; a shiny catch also sets the shiny registry
+  void registerCaught(int16_t dex, bool shinyVariant = false);
+  // catch chance in percent after a win: 0 for legendaries, rare <= 60, otherwise 10..75.
+  // requestedBattle (started from the play menu, not a wild encounter) scales it
+  // by REQUESTED_BATTLE_CATCH_PCT (70 percent, pet.cpp).
+  uint8_t catchChanceForWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel, bool closeWin,
+                             bool requestedBattle = false) const;
+  // lower chance offered after a loss (the wild one respects the effort): 0 or 5..25
+  uint8_t respectCatchChanceForWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel,
+                                    bool requestedBattle = false) const;
+  // luckRoll is taken % 100 and compared with the chance; returns true if caught
+  bool tryCatchWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel, bool closeWin,
+                    uint8_t luckRoll, bool shinyVariant = false, bool requestedBattle = false);
+  bool tryRespectCatchWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel,
+                           uint8_t luckRoll, bool shinyVariant = false, bool requestedBattle = false);
+  // a win trains the stat opposite to the wild one's strongest base stat
+  BattleReward applyBattleWin(int16_t wildDex, bool closeWin);
+  void applyBattleLoss();
+  #pragma endregion
   bool lineHasUnregistered(int16_t base) const;
   uint8_t eggRarity() const;       // rarity of the current egg (without revealing the species)
   int16_t pickEggSpecies();        // public so rolls can be simulated (EGGS)
@@ -196,6 +239,7 @@ private:
   uint32_t today() const { return lastSeenEpoch ? lastSeenEpoch / 86400 : 0; }
   void registerCare();   // first care of the day: streak + bond
   void addBond(uint8_t amt);
+  void applyPlaySessionEffects(uint8_t score);  // shared by the ball game and the coin chase
   void checkMedals();
   void tick();
   void hatch();

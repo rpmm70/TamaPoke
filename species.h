@@ -526,6 +526,25 @@ static const char* const SPR_ICON_CANDY[16] = {  // 16x16
   "................",
 };
 
+static const char* const SPR_ICON_COFFEE[16] = {  // 16x16
+  "................",
+  "......s...s.....",
+  ".....s...s......",
+  "......s...s.....",
+  ".....s...s......",
+  "................",
+  "..kkkkkkkkkkk...",
+  "..kCCcccccCCk...",
+  "..kwwwwwwwwskkk.",
+  "..kwwwwwwwwsk.k.",
+  "..kwwwwwwwwsk.k.",
+  "..kwwwwwwwwskkk.",
+  "...kwwwwwwsk....",
+  "....kkkkkkk.....",
+  ".kkkkkkkkkkkkk..",
+  "................",
+};
+
 static const char* const SPR_ICON_APPLE[16] = {  // 16x16
   "................",
   "................",
@@ -543,6 +562,82 @@ static const char* const SPR_ICON_APPLE[16] = {  // 16x16
   ".....kRRkRRk....",
   "......kk.kk.....",
   "................",
+};
+
+static const char* const SPR_ICON_CONTROLLER[16] = {  // 16x16
+  "................",
+  "................",
+  "................",
+  "...kkkkkkkkkk...",
+  "..kssssssssssk..",
+  ".ksskssssssrssk.",
+  ".kskkkssssbsfsk.",
+  ".ksskssSSssgssk.",
+  ".ksssssssssssSk.",
+  "kssssSkkkkSsssSk",
+  "ksssSk....ksssSk",
+  "kssSk......kssSk",
+  ".kkk........kkk.",
+  "................",
+  "................",
+  "................",
+};
+
+static const char* const SPR_ICON_SWORDS[16] = {  // 16x16
+  "..k..........k..",
+  ".kSk........ksk.",
+  ".kSsk......kwsk.",
+  "..kSsk....kwsk..",
+  "...kSsk..kwsk...",
+  "....kSskkwsk....",
+  ".....kSswsk.....",
+  "..k...kSsk...k..",
+  ".kYk.kwsSsk.kYk.",
+  "..kYkwskkSskYk..",
+  "...kfkk..kkfk...",
+  "..kckYk..kYkck..",
+  ".kCk.kYkkYk.kCk.",
+  "kfk...k..k...kfk",
+  ".k............k.",
+  "................",
+};
+
+static const char* const SPR_ICON_COIN[16] = {  // 16x16
+  "................",
+  ".....kkkkkk.....",
+  "...kkYYYYYYkk...",
+  "..kYYffffffYYk..",
+  ".kYfwwfffffffYk.",
+  ".kYwwffYYffffYk.",
+  ".kYwfffYYffffYk.",
+  ".kYffffYYffffYk.",
+  ".kYffffYYfffYCk.",
+  ".kYffffYYfffYCk.",
+  ".kYffffYYffYYCk.",
+  ".kYfffffffYYYCk.",
+  "..kYYYYYYYYCCk..",
+  "...kkCCCCCCkk...",
+  ".....kkkkkk.....",
+  "................",
+};
+
+static const char* const SPR_ICON_POKEDEX[16] = {  // 16x16
+  "................",
+  ".kkkkkkkkkk.....",
+  ".krkkkrrrrrkkkk.",
+  ".kkwbbkrfrgrrRk.",
+  ".kkbbBkrrrrrrRk.",
+  ".krkkkrrRRRRRRk.",
+  ".krrrrrrrrrrrRk.",
+  ".krsssssssssrRk.",
+  ".krskkkkkkksrRk.",
+  ".krskkkkkkksrRk.",
+  ".krskkkkkkksrRk.",
+  ".krsssssssssrRk.",
+  ".krrrrrrrrrkrRk.",
+  ".krkkrgggrkkkRk.",
+  ".krrrrrrrrrkrRk.",
+  ".kkkkkkkkkkkkkk.",
 };
 
 static const char* const SPR_EGG[32] = {  // 32x32

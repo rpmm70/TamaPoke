@@ -33,6 +33,7 @@
 #include "i18n.h"
 #include "audio.h"
 #include "ui_icons.h"  // close button, pencil, page arrows and their hit tests
+#include "battle.h"    // wild battles: turn engine, wild species/level picks, day phase
 
 // Firmware version. Bump this number on every release (and manifest.json for
 // the web installer). Shown on the settings screen and over serial at boot.
@@ -111,7 +112,7 @@ bool galleryDirty = false;
 int galleryPage = 0;        // 10 pages of 16
 int16_t galleryDetail = 0;  // dex in detail view, 0 = grid
 
-bool screenOff = false;       // short press of the PWR button
+bool screenOff = false;       // short press of the PWR / BOOT button, or Screen Off in the settings menu
 bool cardOpen = false;        // creature info card (tap the name on the main screen)
 bool kbOpen = false;          // keyboard to rename the creature
 char nameBuf[12] = "";
@@ -153,16 +154,112 @@ uint32_t bathUntil = 0;
 bool bathPending = false;
 struct { int16_t x, y; uint8_t r, ph; } bubbles[14];
 uint32_t feedMenuUntil = 0;   // food picker open until this millis
+uint32_t playMenuUntil = 0;   // play picker (ball game / wild battle) open until this millis
 
 // "keepy-uppy" minigame: keep the pokeball in the air
 bool gameOpen = false;
-uint32_t gameOverUntil = 0;
+bool gameOver = false;        // results screen up (OK closes it)
+uint8_t gameAttackGain = 0;   // ATK training earned (results screen)
 float ballX, ballY, ballVX, ballVY, gamePetX;
 uint32_t lastGameStep = 0;  // last stepGame() call: physics by real time, not per frame
 uint8_t gameScore, gameMisses;
 float hitX, hitY;             // last hit (impact ring)
 uint32_t hitTime = 0;
+uint32_t ballLastHitAt = 0;   // last accepted hit (hit cooldown)
 bool gameNewHi = false;
+
+#pragma region Ball tuning
+// The fork's harder physics, tuned per frame at its 115 ms pace in 466 px units.
+// stepGame() multiplies by k = frame time / BALL_FRAME_MS, and every distance,
+// velocity and acceleration goes through SKF() (SK() without truncation), so the
+// round board gets the fork's numbers exactly and the CYD the same feel at 240 px.
+#define BALL_FRAME_MS 115.0f
+#define BALL_FRAME_FACTOR_MAX 3.0f
+// vertical tempo: vertical speeds are multiplied by this and gravity by its
+// square, so the ball rises and falls this many times faster while every
+// height (how high a tap sends it) stays the same. Horizontal motion is untouched.
+#define BALL_VERTICAL_SPEED 1.4f
+#define BALL_VERTICAL_ACCEL (BALL_VERTICAL_SPEED * BALL_VERTICAL_SPEED)
+// respawn: horizontal speed grows with the score, plus jitter; it starts falling
+#define BALL_RESPAWN_SPEED_BASE SKF(3.35f)
+#define BALL_RESPAWN_SPEED_PER_POINT SKF(0.14f)
+#define BALL_RESPAWN_SPEED_MAX SKF(8.4f)
+#define BALL_RESPAWN_JITTER_STEP SKF(0.28f)  // times (random(9) - 4)
+#define BALL_RESPAWN_VY (SKF(2.05f) * BALL_VERTICAL_SPEED)
+// gravity: base + per point, two step-ups, capped
+#define BALL_GRAVITY_BASE (SKF(1.14f) * BALL_VERTICAL_ACCEL)
+#define BALL_GRAVITY_PER_POINT (SKF(0.046f) * BALL_VERTICAL_ACCEL)
+#define BALL_GRAVITY_STEP1_SCORE 5
+#define BALL_GRAVITY_STEP1 (SKF(0.14f) * BALL_VERTICAL_ACCEL)
+#define BALL_GRAVITY_STEP2_SCORE 12
+#define BALL_GRAVITY_STEP2 (SKF(0.18f) * BALL_VERTICAL_ACCEL)
+#define BALL_GRAVITY_MAX (SKF(2.10f) * BALL_VERTICAL_ACCEL)
+// wind: sine sway every frame plus a random kick (7 percent per 115 ms frame)
+#define BALL_WIND_AMPLITUDE SKF(0.11f)
+#define BALL_WIND_RATE 0.018f       // radians per ms
+#define BALL_WIND_SCORE_PHASE_MS 97 // phase shift per point
+#define BALL_KICK_CHANCE_PCT 7.0f
+#define BALL_KICK_STEP SKF(0.22f)   // times (random(7) - 3)
+// touch: radius shrinks at 8 and 20 points, never below BALL_HIT_RADIUS_MIN (layout.h)
+#define BALL_HIT_RADIUS_START SK(50)
+#define BALL_HIT_RADIUS_MID SK(44)
+#define BALL_HIT_RADIUS_LATE SK(38)
+#define BALL_HIT_COOLDOWN_MS 450
+#define BALL_HIT_MIN_VY (SKF(-0.25f) * BALL_VERTICAL_SPEED)  // no hit while the ball still rises faster than this
+// hit response: lift, drift toward the side opposite the finger, chaos, random reversal
+// lift = base + per point * min(score, cap): each tap sends the ball a little
+// higher than the last, outpacing the rising gravity, until the cap
+#define BALL_LIFT_BASE (SKF(11.0f) * BALL_VERTICAL_SPEED)
+#define BALL_LIFT_PER_POINT (SKF(0.4f) * BALL_VERTICAL_SPEED)
+#define BALL_LIFT_SCORE_CAP 16
+#define BALL_DRIFT_BASE 0.38f       // ratio of the finger offset (px) added to vx
+#define BALL_DRIFT_STEP1_SCORE 6
+#define BALL_DRIFT_STEP1 0.08f
+#define BALL_DRIFT_STEP2_SCORE 14
+#define BALL_DRIFT_STEP2 0.10f
+#define BALL_CHAOS_STEP SKF(0.26f)  // times (random(17) - 8)
+#define BALL_REVERSE_CHANCE_PCT 28  // vx = -vx * (0.72 .. 1.16)
+#define BALL_MAX_VX SKF(11.5f)
+// walls: side walls (and the round bezel) push vx out by 1.05, vertical by 0.88, plus noise
+#define BALL_WALL_GAIN_X 1.05f
+#define BALL_WALL_GAIN_Y 0.88f
+#define BALL_WALL_NOISE_STEP SKF(0.18f)  // times (random(9) - 4)
+#pragma endregion
+
+#pragma region Coin chase minigame state
+// Tap a spot and the creature walks there; each coin it touches is +1 point and
+// +5 s. Ends at 0 s or 15 points. Layout (COIN_*): boards/layout.h
+bool coinOpen = false;
+bool coinOver = false;                     // results screen up (OK closes it)
+float coinX, coinY;                        // coin center
+uint32_t coinSpawnedAt = 0;                // millis when the current coin appeared
+// screen box of the opaque pixels the creature drew last frame (coin pickup =
+// the coin touching this box); filled by drawPmdFrameAtScale and drawMinigamePet
+struct SpriteDrawnBounds { int16_t left, top, right, bottom; bool valid; };
+SpriteDrawnBounds lastSpriteDrawnBounds = {};
+float coinPetX, coinPetFeetY;              // creature position (anchored by the feet)
+float coinTargetX, coinTargetFeetY;        // where the last tap sent it
+bool coinPetFacingLeft = false;
+int32_t coinTimeLeftMs = 0;
+uint32_t lastCoinStep = 0;                 // last stepCoinGame() call: movement by real time
+uint8_t coinPoints = 0;
+uint8_t coinSpeedGain = 0;                 // SPE training earned (results screen)
+bool coinNewHi = false;
+#pragma endregion
+
+#pragma region Coin chase tuning
+#define COIN_START_TIME_MS 30000L
+#define COIN_BONUS_TIME_MS 5000L
+#define COIN_MAX_TIME_MS 30000L    // the bonus never pushes the clock past 30 s
+#define COIN_WIN_POINTS 15
+#define COIN_STEP_MAX_MS 345       // abnormally late frame: do not take a huge jump
+// walking speed in px/s from speStat(): linear between MIN and MAX, stat clamped at STAT_CAP
+#define COIN_PET_SPEED_MIN SKF(110.0f)
+#define COIN_PET_SPEED_MAX SKF(340.0f)
+#define COIN_SPEED_STAT_CAP 250
+#define COIN_SPAWN_ATTEMPTS 20
+#define COIN_LIFETIME_MS 3000      // an untouched coin vanishes and another appears elsewhere
+#pragma endregion
 
 // training bag (trains strength)
 bool sackOpen = false;
@@ -171,6 +268,50 @@ uint16_t sackHits = 0;
 float sackShake = 0;
 uint8_t sackGain = 0;
 bool sackNewHi = false;
+
+#pragma region Wild battle state
+// Manual turn-based battle against a wild species (battle.h). The wild sprite
+// reuses galleryPmd: the gallery and a battle are never open together.
+bool battleOpen = false;
+bool battleResolved = false;        // the battle ended: result view
+int16_t battleDex = 0;
+uint8_t battleLevel = 1;
+bool battleShiny = false;
+BattleStats battlePlayer = {};
+BattleStats battleEnemy = {};
+BattleRuntime battleRun = {};
+BattleTurnResult battleTurn = {};
+BattleReward battleReward = {};
+// last turn's moves, drawn under each sprite. 64: a CJK label (3 bytes per
+// character) plus a number
+// true: accepted from the random wild prompt ("WILD BATTLE"); false: started
+// from the play menu swords or a serial command ("BATTLE", lower catch chance)
+bool battleFromWildEncounter = false;
+char battlePlayerMoveText[64] = "";
+char battleWildMoveText[64] = "";
+bool battleAttackMenuOpen = false;  // Quick / Heavy overlay over the action buttons
+bool battleCatchOffered = false;
+bool battleCatchTried = false;
+bool battleCatchDone = false;
+bool battleCatchSuccess = false;
+bool battleRespectCatch = false;    // catch offered after a close loss
+uint8_t battleCatchChance = 0;
+bool battleLowHpWarned = false;
+#define BATTLE_RENDER_INTERVAL_MS 120  // two animated sprites: a bit lighter than the main screen
+#pragma endregion
+
+#pragma region Wild encounter prompt state
+#define WILD_COOLDOWN_MS (20UL * 60UL * 1000UL)  // at most one prompt every 20 min
+#define WILD_PROMPT_MS 20000UL                   // the prompt closes on its own after 20 s
+#define WILD_CHECK_MS 60000UL                    // one roll per minute once the cooldown is over
+#define WILD_SHINY_ODDS 4096                     // fixed 1 in 4096 (no step system here)
+uint32_t wildPromptUntil = 0;   // prompt open until this millis (0 = closed)
+uint32_t nextWildEligible = 0;  // 0 = not scheduled yet (first loop schedules it)
+uint32_t lastWildCheck = 0;
+int16_t wildPromptDex = 0;
+uint8_t wildPromptLevel = 1;
+bool wildPromptShiny = false;
+#pragma endregion
 
 // the 9 species with their own sprite in flash (fallback without SD): dex -> index
 int flashIdxForDex(int16_t dex) {
@@ -191,22 +332,19 @@ struct Btn {
   const char *const *icon;
   int8_t iconOffsetX, iconOffsetY;  // screen pixels added to the icon position (optical centering); omitted = 0
 };
-// SPR_ICON_PLAY (16x16, drawn at 2x) fills columns 2..14 and rows 2..14: its
-// visual center is at 8.5 in both axes against the cell center 8.0, so it sits
-// half a bitmap pixel (= 1 screen pixel at 2x) right and down. Shift it back.
-#define PLAY_ICON_OFFSET_X (-1)
-#define PLAY_ICON_OFFSET_Y (-1)
+// SPR_ICON_CONTROLLER (16x16) fills columns 0..15 and rows 3..12: its visual
+// center matches the cell center, so it needs no optical offset.
 #if BOARD_IS_ROUND
 Btn buttons[4] = {
   { 140, 390, SPR_ICON_FOOD },   // eat
-  { 202, 404, SPR_ICON_PLAY, PLAY_ICON_OFFSET_X, PLAY_ICON_OFFSET_Y },   // play
+  { 202, 404, SPR_ICON_CONTROLLER },   // play (opens the play menu)
   { 264, 404, SPR_ICON_LIGHT },  // light
   { 326, 390, SPR_ICON_CLEAN },  // bath
 };
 #else
 Btn buttons[4] = {
   { (int16_t)(LCD_WIDTH * 1 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_FOOD },
-  { (int16_t)(LCD_WIDTH * 3 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_PLAY, PLAY_ICON_OFFSET_X, PLAY_ICON_OFFSET_Y },
+  { (int16_t)(LCD_WIDTH * 3 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_CONTROLLER },
   { (int16_t)(LCD_WIDTH * 5 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_LIGHT },
   { (int16_t)(LCD_WIDTH * 7 / 8), (int16_t)(LCD_HEIGHT - 22), SPR_ICON_CLEAN },
 };
@@ -243,11 +381,23 @@ static const int16_t STARTER_DEX[3] = { 1, 4, 7 };
 // STARTER_*, EVO_BTN_*, FAR_BTN_* and the rest of the menu boxes: boards/layout.h
 // (a single definition for both drawing and touch detection)
 void ctext(const char *s, int n, int y, int maxW = 0);
+void drawGlyphCenteredText(const char *text, int requestedSize, int y, int maxWidth = 0);
 void drawThumbCell(const uint8_t *b, int x, int y, int s, bool sil, int cell);
 int fitSize(const char *s, int n, int maxW);  // centered text (defined next to centerX)
 // PlatformIO does not generate the prototype for functions returning 'const char *'
 const char *eggMsg();
 const char *statusMsg();
+#pragma region Wild battle prototypes (defined after the minigame)
+void startBattleWith(int16_t forcedDex, uint8_t forcedLevel, int8_t forcedShiny = -1, bool fromWildEncounter = false);
+void startBattle();
+void openWildPrompt(int16_t wildDex, uint32_t now);
+void maybeOfferWildEncounter(uint32_t now);
+void battleTap(int16_t x, int16_t y);
+void renderBattle();
+void drawWildPrompt();
+void drawTextCenteredInBox(const char *text, int preferredSize, int boxLeft, int boxTop, int boxWidth, int boxHeight);
+int shrinkTextSizeToWidth(const char *text, int preferredSize, int maxWidth);
+#pragma endregion
 // the CST9217 signals on the INT pin when touch data is available; we use it to
 // avoid reading the I2C bus while the chip is asleep (that read hung for ~1s)
 // gTouchIrq/touchIsr (CST9217) and the XPT2046 polling live in touch_hal_*.cpp
@@ -390,14 +540,19 @@ void loop() {
   handleTouch();
   handleSerial();
   ensureMon();
+  maybeOfferWildEncounter(now);  // random wild prompt (only on the idle main screen)
 
-  // short PWR press: screen on/off
+  // short PWR press (BOOT button on the CYD): screen on/off
   static uint32_t lastPwr = 0;
   if (now - lastPwr > 250) {
     lastPwr = now;
     if (pwrShortPressed()) {
-      screenOff = !screenOff;
-      if (!screenOff) lastInteract = now;
+      if (screenOff) {
+        screenOff = false;
+        lastInteract = now;
+      } else {
+        turnScreenOff();
+      }
     }
   }
 
@@ -439,7 +594,8 @@ void loop() {
   // the flush). It is the board's biggest avoidable load. Each render repaints
   // the whole scene, so nothing is left half-done; and since lastRender stays
   // frozen, the first frame after waking comes out immediately.
-  if (!screenOff && now - lastRender >= (uint32_t)((gameOpen || sackOpen) ? 85 : 100)) {
+  uint32_t renderIntervalMs = (gameOpen || coinOpen || sackOpen) ? 85 : battleOpen ? BATTLE_RENDER_INTERVAL_MS : 100;
+  if (!screenOff && now - lastRender >= renderIntervalMs) {
     lastRender = now;
     render();
   }
@@ -453,8 +609,18 @@ uint8_t brightnessForSettingsLevel() {
 
 // true when render() draws the plain main screen: no other screen and no dialog/menu over it
 bool isMainScreenShowing() {
-  return !pet.awaitingStarter() && !galleryOpen && !gameOpen && !sackOpen && !kbOpen &&
-         settingsScreen == SETTINGS_CLOSED && !cardOpen && !feedMenuUntil && !confirmUntil && !choiceKind;
+  return !pet.awaitingStarter() && !galleryOpen && !gameOpen && !coinOpen && !battleOpen && !sackOpen && !kbOpen &&
+         settingsScreen == SETTINGS_CLOSED && !cardOpen && !feedMenuUntil && !playMenuUntil &&
+         !wildPromptUntil && !confirmUntil && !choiceKind;
+}
+
+// Screen Off (settings menu, or the PWR / BOOT button): the panel goes dark on the
+// next updateBrightness() and the creature goes to sleep (toggleLight already
+// skips eggs and ceremonies). Turning the screen back on does not wake it.
+// Round board: a touch or the PWR button wakes the screen. CYD: only the BOOT button.
+void turnScreenOff() {
+  screenOff = true;
+  if (!pet.sleeping) pet.toggleLight();
 }
 
 // brightness based on the user's level, sleep + inactivity (AMOLED protection)
@@ -550,6 +716,25 @@ void handleSerial() {
   } else if (line == "RUN") {
     pet.startRunaway();
     Serial.println("DONE");
+  } else if (line.startsWith("BATTLE ")) {  // battle against a forced species (testing)
+    int forcedDex = line.substring(7).toInt();
+    if (forcedDex >= 1 && forcedDex <= DEX_COUNT) startBattleWith((int16_t)forcedDex, battleLevelFor(pet.level()));
+    Serial.printf("battle=%d #%d %s lv=%u shiny=%d caught=%d\n", battleOpen, battleDex,
+                  (battleDex >= 1 && battleDex <= DEX_COUNT) ? DEX_TBL[battleDex].name : "?",
+                  battleLevel, battleShiny, pet.isCaught(battleDex));
+    Serial.println("DONE");
+  } else if (line == "BATTLE") {  // random wild battle (testing)
+    startBattle();
+    Serial.printf("battle=%d #%d %s lv=%u shiny=%d caught=%d\n", battleOpen, battleDex,
+                  (battleDex >= 1 && battleDex <= DEX_COUNT) ? DEX_TBL[battleDex].name : "?",
+                  battleLevel, battleShiny, pet.isCaught(battleDex));
+    Serial.println("DONE");
+  } else if (line == "WILD") {  // opens the wild encounter prompt now (testing)
+    if (canStartWildBattle(pet.isEgg(), pet.sleeping, pet.ceremony))
+      openWildPrompt(pickWildSpecies((uint8_t)random(100), dayPhaseFromHour(sceneHour())), millis());
+    Serial.printf("wild=%d #%d lv=%u shiny=%d\n", wildPromptUntil != 0, wildPromptDex,
+                  wildPromptLevel, wildPromptShiny);
+    Serial.println("DONE");
   } else if (line == "BEEP") {
     sfxPlay(SFX_HATCH);  // audio test
     Serial.println("DONE");
@@ -610,6 +795,16 @@ void handleTouch() {
   int16_t x, y;
   bool pressed = touchHalGetPoint(&x, &y);
 
+#if BOARD_CYD_RECT
+  #pragma region Screen off on the CYD: touch is ignored, only the BOOT button turns it back on
+  // (the resistive panel also reads stray presses, which must not light the screen)
+  if (screenOff) {
+    wasPressed = pressed;
+    return;
+  }
+  #pragma endregion
+#endif
+
   // training bag: each touch counts instantly (fast mashing)
   if (sackOpen) {
     if (pressed && !wasPressed) {
@@ -633,7 +828,8 @@ void handleTouch() {
     tXl = x;
     tYl = y;
     // long press without moving on the creature -> release dialog
-    if (!holdFired && !swallowGesture && !galleryOpen && !cardOpen && !kbOpen && settingsScreen == SETTINGS_CLOSED && millis() - tStart > 3000 &&
+    if (!holdFired && !swallowGesture && !galleryOpen && !cardOpen && !kbOpen && !battleOpen && !wildPromptUntil &&
+        settingsScreen == SETTINGS_CLOSED && millis() - tStart > 3000 &&
         abs(tXl - tX0) < 30 && abs(tYl - tY0) < 30 && inPetZone(tX0, tY0) &&
         !pet.isEgg() && !confirmUntil && !pet.ceremony) {
       confirmUntil = millis() + 10000;
@@ -659,7 +855,7 @@ void openSettingsMenu();  // prototype
 // swipe: dir +1 = to the right. Only acts inside the info card and the gallery.
 void onSwipe(int dir) {
   if (pet.awaitingStarter()) return;  // blocked during the starter choice
-  if (gameOpen || kbOpen || settingsScreen != SETTINGS_CLOSED) return;
+  if (gameOpen || coinOpen || battleOpen || kbOpen || settingsScreen != SETTINGS_CLOSED) return;
   if (cardOpen) {  // inside the card: switch between the 4 pages
     int p = (int)cardPage + (dir > 0 ? -1 : 1);  // left advances
     cardPage = p < 0 ? 0 : (p > 3 ? 3 : p);
@@ -669,7 +865,7 @@ void onSwipe(int dir) {
   if (galleryDetail) return;  // in detail: only the X goes back to the grid
   int np = galleryPage - dir;  // swiping left advances a page
   if (np < 0) {                // going back from the first = exit
-    galleryCloseToSettingsMenu();
+    closeGalleryToMainScreen();
     return;
   }
   if (np > 9) np = 9;
@@ -715,6 +911,27 @@ void onTap(int16_t x, int16_t y) {
     gameTap(x, y);
     return;
   }
+  if (coinOpen) {
+    coinGameTap(x, y);
+    return;
+  }
+  if (battleOpen) {
+    battleTap(x, y);
+    return;
+  }
+  #pragma region Wild encounter prompt: FIGHT starts the battle, LATER dismisses, elsewhere does nothing
+  if (wildPromptUntil) {
+    if (!timeLeft(wildPromptUntil)) {
+      wildPromptUntil = 0;
+    } else if (isTouchInsideRect(x, y, WILD_PROMPT_BTN_X, WILD_PROMPT_FIGHT_Y, WILD_PROMPT_BTN_W, WILD_PROMPT_BTN_H)) {
+      startBattleWith(wildPromptDex, wildPromptLevel, wildPromptShiny ? 1 : 0, true);
+    } else if (isTouchInsideRect(x, y, WILD_PROMPT_BTN_X, WILD_PROMPT_LATER_Y, WILD_PROMPT_BTN_W, WILD_PROMPT_BTN_H)) {
+      wildPromptUntil = 0;
+      sfxPlay(SFX_TAP);
+    }
+    return;
+  }
+  #pragma endregion
   if (choiceKind) {          // decision dialog: action button (top) / keep (bottom)
     bool b1 = (x >= CH_BX && x <= CH_BX + CH_BW && y >= CH_Y + CH_B1_REL_Y && y <= CH_Y + CH_B1_REL_Y + CH_BH);  // action
     bool b2 = (x >= CH_BX && x <= CH_BX + CH_BW && y >= CH_Y + CH_B2_REL_Y && y <= CH_Y + CH_B2_REL_Y + CH_BH);  // keep / stay together
@@ -739,14 +956,40 @@ void onTap(int16_t x, int16_t y) {
   if (feedMenuUntil) {       // food picker
     if (timeLeft(feedMenuUntil) && y >= FEED_Y && y <= FEED_Y + FEED_H && x >= FEED_X && x <= FEED_X + FEED_W) {
       int item = (x - FEED_X) / FEED_ITEM;
-      if (item > 3) item = 3;  // the exact right edge gave index 4
-      if (item == 3) pet.feedCandy();
+      if (item > FEED_ITEM_COUNT - 1) item = FEED_ITEM_COUNT - 1;  // the exact right edge gives one past the last
+      if (item == 4) pet.feedCoffee();
+      else if (item == 3) pet.feedCandy();
       else pet.feedBerry(item);
       sfxPlay(SFX_EAT);
     }
     feedMenuUntil = 0;
     return;
   }
+  #pragma region Play picker: item 0 = ball game, item 1 = coin chase, item 2 = wild battle; any other tap closes it
+  if (playMenuUntil) {
+    bool insideStrip = isTouchInsideRect(x, y, PLAY_MENU_X, PLAY_MENU_Y, PLAY_MENU_W, PLAY_MENU_H);
+    bool pickerStillOpen = timeLeft(playMenuUntil) > 0;
+    playMenuUntil = 0;
+    if (pickerStillOpen && insideStrip) {
+      int item = (x - PLAY_MENU_X) / PLAY_MENU_ITEM;
+      if (item > PLAY_MENU_ITEM_COUNT - 1) item = PLAY_MENU_ITEM_COUNT - 1;  // the exact right edge gives one past the last
+      sfxPlay(SFX_TAP);
+      if (item == 0) startGame();
+      else if (item == 1) startCoinGame();
+      else startBattle();
+    }
+    return;
+  }
+  #pragma endregion
+  //#region Tapping the Pokedex button (under the hamburger) opens the gallery
+  // Checked before the hamburger: their hit circles overlap a little, and a tap
+  // in that strip is closer to the Pokedex icon.
+  if (isTouchInsideCircle(x, y, POKEDEX_BTN_X + 8 * POKEDEX_BTN_S, POKEDEX_BTN_Y + 8 * POKEDEX_BTN_S, POKEDEX_BTN_HIT_R)) {
+    sfxPlay(SFX_TAP);
+    openGallery();
+    return;
+  }
+  //#endregion
   //#region Tapping the hamburger button (top left) opens the settings menu
   // Reached only with no dialog open: starter choice, ceremony, choice, release
   // and food picker all returned above. Checked before the egg tap and the name box.
@@ -798,7 +1041,7 @@ void onTap(int16_t x, int16_t y) {
       if (i == 0) {
         if (!pet.sleeping) feedMenuUntil = millis() + 6000;
       } else if (i == 1) {
-        startGame();
+        if (!pet.sleeping) playMenuUntil = millis() + 6000;  // picker: ball game / wild battle
       } else if (i == 2) {
         pet.toggleLight();
       } else {
@@ -817,7 +1060,7 @@ void onTap(int16_t x, int16_t y) {
 
 // ---------- render ----------
 
-bool gNight = false;  // real night (by the clock) or sleeping: set by render()
+bool gNight = false;  // real night (by the clock): set by render()
 uint16_t inkColor() { return gNight ? UI_INK_NIGHT : UI_INK; }
 
 // ---------- background scene: type's biome + real RTC time ----------
@@ -1583,6 +1826,17 @@ void ctext(const char *s, int n, int y, int maxW) {
   printT(s);
 }
 
+// Like ctext(), but centers the visible glyphs: the 5x7 font advances 6 px per
+// character including a blank trailing column, so ctext() leaves Latin text
+// half a column (size / 2 px) left of CX. CJK widths come from the real bounds.
+void drawGlyphCenteredText(const char *text, int requestedSize, int y, int maxWidth) {
+  int size = fitSize(text, TS(requestedSize), maxWidth);
+  setSize(size);
+  int trailingColumn = gCjkFont ? 0 : gTextSize;
+  setCur(centerX(text, size) + trailingColumn / 2, y);
+  printT(text);
+}
+
 // Prints honoring the active font. With CJK it redraws the text offset by
 // 1 px: unifont at a reduced scale leaves 1 px strokes and looks faint, and a
 // truly bold font at this size merges the strokes and ruins the kana.
@@ -1614,6 +1868,14 @@ void render() {
     renderGame();
     return;
   }
+  if (coinOpen) {
+    renderCoinGame();
+    return;
+  }
+  if (battleOpen) {
+    renderBattle();
+    return;
+  }
   if (sackOpen) {
     renderSack();
     return;
@@ -1631,7 +1893,8 @@ void render() {
     return;
   }
   int h = sceneHour();
-  gNight = pet.sleeping || h < 6 || h >= 20;
+  // by the clock only: a sleeping creature keeps the current sky (the panel still dims, see updateBrightness)
+  gNight = h < 6 || h >= 20;
   // drawScene covers the full 466x466: no prior fillScreen(BLACK), so an
   // overlapping DMA flush never captures half-drawn black (anti-flicker)
   drawScene(pet.isEgg() ? 0 : DEX_TBL[pet.speciesId].biome, millis(), gNight);
@@ -1650,6 +1913,7 @@ void render() {
   if (pet.isEgg()) {
     drawHeader(T(S_EGG_HDR), inkColor(), eggMsg());
     drawHamburgerButton();
+    drawPokedexButton();
     drawHeaderClock();
     int s = 5, x = CX - 16 * s, y = PET_CY - 16 * s;
     drawMap(SPR_EGG, SPRITE_H, x, y, s, false);
@@ -1679,6 +1943,7 @@ void render() {
     snprintf(name, sizeof(name), "%s%s", pet.shiny ? "*" : "", base);  // the level has its own line now
     drawHeaderWithLevel(name, gNight ? UI_INK_NIGHT : d.accent);
     drawHamburgerButton();
+    drawPokedexButton();
     drawHeaderClock();
     drawStreakBadge();
     drawPet();
@@ -1695,7 +1960,7 @@ void render() {
   }
 
   if (pet.sleeping) {
-    gfx->setTextColor(UI_INK_NIGHT);
+    gfx->setTextColor(inkColor());  // the sky can be daytime now: night ink would vanish on it
     setSize(TS(3));
     setCur(SX(320), SY(130));
     printT("Zz");
@@ -1714,8 +1979,32 @@ void render() {
       drawMap(SPR_ICON_BERRY_B, 16, fix + FEED_ITEM, fiy, FEED_ICON_S, false);  // hamburger
       drawMap(SPR_ICON_BERRY_G, 16, fix + 2 * FEED_ITEM, fiy, FEED_ICON_S, false);  // pizza
       drawMap(SPR_ICON_CANDY, 16, fix + 3 * FEED_ITEM, fiy, FEED_ICON_S, false);
+      drawMap(SPR_ICON_COFFEE, 16, fix + 4 * FEED_ITEM, fiy, FEED_ICON_S, false);
     }
   }
+
+  #pragma region Play picker: ball (minigame), coin (coin chase) and crossed swords (wild battle)
+  if (playMenuUntil) {
+    if (!timeLeft(playMenuUntil)) {
+      playMenuUntil = 0;
+    } else {
+      gfx->fillRoundRect(PLAY_MENU_X, PLAY_MENU_Y, PLAY_MENU_W, PLAY_MENU_H, PLAY_MENU_R, UI_WHITE);
+      gfx->drawRoundRect(PLAY_MENU_X, PLAY_MENU_Y, PLAY_MENU_W, PLAY_MENU_H, PLAY_MENU_R, inkColor());
+      const int playIconX = PLAY_MENU_X + (PLAY_MENU_ITEM - 16 * PLAY_MENU_ICON_S) / 2;
+      const int playIconY = PLAY_MENU_Y + (PLAY_MENU_H - 16 * PLAY_MENU_ICON_S) / 2;
+      drawMap(SPR_ICON_PLAY, 16, playIconX, playIconY, PLAY_MENU_ICON_S, false);
+      drawMap(SPR_ICON_COIN, 16, playIconX + PLAY_MENU_ITEM, playIconY, PLAY_MENU_ICON_S, false);
+      drawMap(SPR_ICON_SWORDS, 16, playIconX + 2 * PLAY_MENU_ITEM, playIconY, PLAY_MENU_ICON_S, false);
+    }
+  }
+  #pragma endregion
+
+  #pragma region Wild encounter prompt (closes on its own after WILD_PROMPT_MS)
+  if (wildPromptUntil) {
+    if (!timeLeft(wildPromptUntil)) wildPromptUntil = 0;
+    else drawWildPrompt();
+  }
+  #pragma endregion
 
   // "release?" dialog (long press on the creature)
   if (confirmUntil) {
@@ -1760,92 +2049,153 @@ void render() {
 void startGame() {
   if (pet.isEgg() || pet.sleeping || pet.ceremony) return;
   gameOpen = true;
-  gameOverUntil = 0;
+  gameOver = false;
+  gameAttackGain = 0;
   gameScore = 0;
   gameMisses = 0;
   gameNewHi = false;
   hitTime = 0;
+  ballLastHitAt = 0;
   gamePetX = CX;
   lastGameStep = millis();
   respawnBall();
 }
 
 void respawnBall() {
-  ballX = SX(150) + random(SX(166));
-  ballY = SY(96);
-  float sp = 1.6f + gameScore * 0.05f;  // livelier as you progress
-  if (sp > 4.0f) sp = 4.0f;
-  ballVX = random(2) ? sp : -sp;
-  ballVY = 0;
+  ballX = SX(112) + random(SX(242));
+  ballY = SY(82);
+  float respawnSpeed = BALL_RESPAWN_SPEED_BASE + gameScore * BALL_RESPAWN_SPEED_PER_POINT;  // livelier as you progress
+  if (respawnSpeed > BALL_RESPAWN_SPEED_MAX) respawnSpeed = BALL_RESPAWN_SPEED_MAX;
+  ballVX = random(2) ? respawnSpeed : -respawnSpeed;
+  ballVX += ((int)random(9) - 4) * BALL_RESPAWN_JITTER_STEP;
+  ballVY = BALL_RESPAWN_VY;
+}
+
+// touch radius around the ball: shrinks as the score grows, floored for resistive touch
+int ballHitRadius() {
+  int hitRadius = gameScore >= 20 ? BALL_HIT_RADIUS_LATE : gameScore >= 8 ? BALL_HIT_RADIUS_MID : BALL_HIT_RADIUS_START;
+  return hitRadius < BALL_HIT_RADIUS_MIN ? BALL_HIT_RADIUS_MIN : hitRadius;
 }
 
 void gameTap(int16_t x, int16_t y) {
-  if (gameOverUntil) return;
+  if (gameOver) {
+    if (isMinigameOkTapped(x, y)) {
+      gameOpen = false;
+      sfxPlay(SFX_TAP);
+    }
+    return;
+  }
   if (isTouchInsideCircle(x, y, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_HIT_R)) {  // X = quit with no reward
     gameOpen = false;
     return;
   }
   float dx = ballX - x, dy = ballY - y;
-  if (dx * dx + dy * dy < 74 * 74) {  // the ball was hit!
+  int hitRadius = ballHitRadius();
+  if (dx * dx + dy * dy < hitRadius * hitRadius) {  // the ball was hit!
+    #pragma region Ignore hits during the cooldown or while the ball still rises
+    uint32_t now = millis();
+    if (now - ballLastHitAt < BALL_HIT_COOLDOWN_MS || ballVY < BALL_HIT_MIN_VY) return;
+    #pragma endregion
+
+    #pragma region Lift, drift away from the finger, chaos and a random reversal
     gameScore++;
     sfxPlay(SFX_PLAY);
-    // softer hit: moderate impulse that grows little by little with the score
-    float lift = 6.6f + (gameScore > 16 ? 3.5f : gameScore * 0.22f);
+    uint16_t liftScore = gameScore > BALL_LIFT_SCORE_CAP ? BALL_LIFT_SCORE_CAP : gameScore;
+    float lift = BALL_LIFT_BASE + liftScore * BALL_LIFT_PER_POINT;
     ballVY = -lift;
-    ballVX += dx * 0.12f;
-    if (ballVX > 6.5f) ballVX = 6.5f;
-    if (ballVX < -6.5f) ballVX = -6.5f;
+    float drift = BALL_DRIFT_BASE + (gameScore >= BALL_DRIFT_STEP1_SCORE ? BALL_DRIFT_STEP1 : 0.0f) +
+                  (gameScore >= BALL_DRIFT_STEP2_SCORE ? BALL_DRIFT_STEP2 : 0.0f);
+    float chaos = ((int)random(17) - 8) * BALL_CHAOS_STEP;
+    ballVX += dx * drift + chaos;
+    if (random(100) < BALL_REVERSE_CHANCE_PCT) ballVX = -ballVX * (0.72f + random(45) * 0.01f);
+    if (ballVX > BALL_MAX_VX) ballVX = BALL_MAX_VX;
+    if (ballVX < -BALL_MAX_VX) ballVX = -BALL_MAX_VX;
+    #pragma endregion
+
     hitX = ballX;
     hitY = ballY;
-    hitTime = millis();
+    hitTime = now;
+    ballLastHitAt = now;
   }
+}
+
+// random sideways noise added on every wall bounce
+float ballWallNoise() {
+  return ((int)random(9) - 4) * BALL_WALL_NOISE_STEP;
 }
 
 void stepGame() {
   uint32_t now = millis();
-  // step relative to 85 ms, the frame period these constants were tuned at
-  // (see the render scheduler in loop()): without this the physics advanced
-  // "one step per frame" and the game ran faster or slower depending on how
-  // long the previous frame took to draw, which depends on the size of the
-  // loaded sprite. With a Charizard the ball fell slower than with a
-  // Diglett, so the record was not comparable across species.
-  float k = lastGameStep ? (now - lastGameStep) / 85.0f : 1.0f;
-  if (k > 3.0f) k = 3.0f;  // abnormally late frame: do not take a huge jump
+  #pragma region Frame-time factor (normalised to the 115 ms frame of the fork)
+  // without this the physics advanced "one step per frame" and the game ran
+  // faster or slower depending on how long the previous frame took to draw,
+  // which depends on the size of the loaded sprite
+  float k = lastGameStep ? (now - lastGameStep) / BALL_FRAME_MS : 1.0f;
+  if (k > BALL_FRAME_FACTOR_MAX) k = BALL_FRAME_FACTOR_MAX;  // abnormally late frame: do not take a huge jump
   lastGameStep = now;
+  #pragma endregion
 
-  float grav = 0.40f + gameScore * 0.013f;  // falls a bit faster each time
-  if (grav > 0.80f) grav = 0.80f;
-  ballVY += grav * k;
+  #pragma region Gravity, wind sway and random kicks
+  float gravity = BALL_GRAVITY_BASE + gameScore * BALL_GRAVITY_PER_POINT;  // falls faster each time
+  if (gameScore >= BALL_GRAVITY_STEP1_SCORE) gravity += BALL_GRAVITY_STEP1;
+  if (gameScore >= BALL_GRAVITY_STEP2_SCORE) gravity += BALL_GRAVITY_STEP2;
+  if (gravity > BALL_GRAVITY_MAX) gravity = BALL_GRAVITY_MAX;
+  ballVX += sinf((now + gameScore * BALL_WIND_SCORE_PHASE_MS) * BALL_WIND_RATE) * BALL_WIND_AMPLITUDE * k;
+  if (random(1000) < (long)(BALL_KICK_CHANCE_PCT * 10.0f * k)) ballVX += ((int)random(7) - 3) * BALL_KICK_STEP;
+  ballVY += gravity * k;
   ballX += ballVX * k;
   ballY += ballVY * k;
+  #pragma endregion
+
 #if BOARD_IS_ROUND
-  // bounce off the circular wall (physical round bezel)
+  #pragma region Bounce off the circular wall (physical round bezel)
   float dx = ballX - CX, dy = ballY - CY;
-  float d = sqrtf(dx * dx + dy * dy);
-  if (d > ARENA_WALL_R) {
-    float nx = dx / d, ny = dy / d;
-    float dot = ballVX * nx + ballVY * ny;
+  float distance = sqrtf(dx * dx + dy * dy);
+  if (distance > ARENA_WALL_R) {
+    float normalX = dx / distance, normalY = dy / distance;
+    float dot = ballVX * normalX + ballVY * normalY;
     if (dot > 0) {
-      ballVX = (ballVX - 2 * dot * nx) * 0.85f;
-      ballVY = (ballVY - 2 * dot * ny) * 0.85f;
+      ballVX = (ballVX - 2 * dot * normalX) * BALL_WALL_GAIN_X + ballWallNoise();
+      ballVY = (ballVY - 2 * dot * normalY) * BALL_WALL_GAIN_Y;
+      sfxPlay(SFX_BALL_BOUNCE);
     }
-    ballX = CX + nx * ARENA_WALL_R;
-    ballY = CY + ny * ARENA_WALL_R;
+    ballX = CX + normalX * ARENA_WALL_R;
+    ballY = CY + normalY * ARENA_WALL_R;
   }
+  #pragma endregion
 #else
-  // no circular bezel in a rectangle: bounces off left/right/ceiling
-  if (ballX < ARENA_LEFT)  { ballX = ARENA_LEFT;  ballVX = fabsf(ballVX) * 0.85f; }
-  if (ballX > ARENA_RIGHT) { ballX = ARENA_RIGHT; ballVX = -fabsf(ballVX) * 0.85f; }
-  if (ballY < ARENA_TOP)   { ballY = ARENA_TOP;   ballVY = fabsf(ballVY) * 0.85f; }
+  #pragma region Bounce off left/right (gain and noise) and the ceiling (0.88)
+  if (ballX < ARENA_LEFT) {
+    ballX = ARENA_LEFT;
+    ballVX = fabsf(ballVX) * BALL_WALL_GAIN_X + ballWallNoise();
+    sfxPlay(SFX_BALL_BOUNCE);
+  }
+  if (ballX > ARENA_RIGHT) {
+    ballX = ARENA_RIGHT;
+    ballVX = -fabsf(ballVX) * BALL_WALL_GAIN_X + ballWallNoise();
+    sfxPlay(SFX_BALL_BOUNCE);
+  }
+  if (ballY < ARENA_TOP) {
+    ballY = ARENA_TOP;
+    ballVY = fabsf(ballVY) * BALL_WALL_GAIN_Y;
+    sfxPlay(SFX_BALL_BOUNCE);
+  }
+  // the narrow arena bounces often: keep the 1.05 gain from building up past the hit cap
+  if (ballVX > BALL_MAX_VX) ballVX = BALL_MAX_VX;
+  if (ballVX < -BALL_MAX_VX) ballVX = -BALL_MAX_VX;
+  #pragma endregion
 #endif
   if (ballY > ARENA_GROUND_Y) {  // hit the ground
     if (++gameMisses >= 3) {
       gameNewHi = (gameScore > pet.gameHi);
-      pet.playResult(gameScore);  // updates the record and gives happiness
+      uint8_t attackBefore = pet.trAtk;
+      pet.playResult(gameScore);  // trains ATK, updates the record and gives happiness
+      gameAttackGain = pet.trAtk - attackBefore;
       sfxPlay(gameNewHi && gameScore > 0 ? SFX_MEDAL : SFX_LEVEL);
-      gameOverUntil = millis() + 4000;
+      gameOver = true;
     } else {
       respawnBall();
+      sfxPlay(SFX_BALL_MISS);
     }
   }
   // the creature follows it from below
@@ -1853,6 +2203,323 @@ void stepGame() {
   if (chase > 7) chase = 7;
   if (chase < -7) chase = -7;
   gamePetX += chase * k;
+}
+
+int scaledPixelEdge(int origin, int pixelIndex, uint16_t scalePercent);  // prototype (defined with the PMD drawing)
+void drawPmdActResizedM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS,
+                        uint16_t sizePercent);  // prototype (defined with the PMD drawing)
+
+// the creature in a minigame, anchored by the feet: PMD action (idle if missing)
+// or the B/W SD sprite fallback; sizePercent resizes either one (100 = usual size)
+void drawMinigamePet(uint8_t act, int centerX, int feetY, uint8_t maxScale, uint16_t sizePercent) {
+  if (pmd.loaded) {
+    if (!pmd.has(act)) act = PMD_IDLE;
+    drawPmdActResizedM(pmd, act, centerX, feetY, millis(), true, false, maxScale, sizePercent);
+  } else if (mon.loaded) {
+    uint16_t scalePercent = ((mon.h * 2 > 130) ? 1 : 2) * sizePercent;
+    int w = mon.w * scalePercent / 100, h = mon.h * scalePercent / 100;
+    uint16_t fm = mon.frameMs ? mon.frameMs : 100;
+    uint16_t fi = (millis() / fm) % mon.frames;
+    const uint8_t *fr = mon.data + (uint32_t)fi * mon.w * mon.h;
+    int px = centerX - w / 2, py = feetY - h;
+    int opaqueColumnMin = mon.w, opaqueColumnMax = -1, opaqueRowMin = mon.h, opaqueRowMax = -1;
+    for (int r = 0; r < mon.h; r++) {
+      int rowTop = scaledPixelEdge(py, r, scalePercent);
+      int rowHeight = scaledPixelEdge(py, r + 1, scalePercent) - rowTop;
+      if (rowHeight <= 0) continue;
+      for (int c = 0; c < mon.w; c++) {
+        uint8_t idx = fr[r * mon.w + c];
+        if (idx == 0xFF) continue;
+        int columnLeft = scaledPixelEdge(px, c, scalePercent);
+        int columnWidth = scaledPixelEdge(px, c + 1, scalePercent) - columnLeft;
+        if (columnWidth > 0) gfx->fillRect(columnLeft, rowTop, columnWidth, rowHeight, mon.pal[idx]);
+        if (c < opaqueColumnMin) opaqueColumnMin = c;
+        if (c > opaqueColumnMax) opaqueColumnMax = c;
+        if (r < opaqueRowMin) opaqueRowMin = r;
+        opaqueRowMax = r;
+      }
+    }
+    #pragma region Remember the opaque pixel box on screen (coin chase pickup)
+    lastSpriteDrawnBounds.valid = false;
+    if (opaqueColumnMax >= 0) {
+      lastSpriteDrawnBounds = { (int16_t)scaledPixelEdge(px, opaqueColumnMin, scalePercent),
+                                (int16_t)scaledPixelEdge(py, opaqueRowMin, scalePercent),
+                                (int16_t)(scaledPixelEdge(px, opaqueColumnMax + 1, scalePercent) - 1),
+                                (int16_t)(scaledPixelEdge(py, opaqueRowMax + 1, scalePercent) - 1), true };
+    }
+    #pragma endregion
+  }
+}
+
+void drawGameScene();  // prototype (defined further down)
+
+#pragma region Minigame results screen (ball game and coin chase)
+// Same look as the wild battle result: the creature on the habitat, a big
+// colored title, two detail lines, a gold reward line and an OK button.
+// Reuses the BATTLE_RESULT_* / BATTLE_OK_* layout so both screens stay aligned.
+bool isMinigameOkTapped(int16_t x, int16_t y) {
+  return isTouchInsideRect(x, y, BATTLE_OK_X, BATTLE_RESULT_BTN_Y - BATTLE_RESULT_HIT_PAD_Y, BATTLE_OK_W,
+                           BATTLE_RESULT_BTN_H + 2 * BATTLE_RESULT_HIT_PAD_Y);
+}
+
+// one line centered on CX in the result column
+void drawMinigameResultLine(const char *text, int preferredSize, int top) {
+  drawTextCenteredInBox(text, preferredSize, CX - BATTLE_RESULT_TEXT_MAX_W / 2, top, BATTLE_RESULT_TEXT_MAX_W, 8 * preferredSize);
+}
+
+// title: the score (green for a new record or a cleared coin chase);
+// lines: record (or NEW RECORD!), joy; reward: rewardFormat ("SPD +%u", "ATK +%u") when the stat went up
+void drawMinigameResults(uint8_t score, bool newRecord, bool cleared, uint16_t record, uint8_t statGain, StrId rewardFormat) {
+  drawGameScene();
+  bool night = sceneHour() < 6 || sceneHour() >= 20;
+  uint16_t resultInk = night ? UI_INK_NIGHT : UI_INK;
+
+  drawMinigamePet(PMD_IDLE, CX, BATTLE_GROUND_Y, BATTLE_SPRITE_MAX_S, 100);
+
+  #pragma region Panel (rect board only, like the battle result)
+  if (BATTLE_RESULT_PANEL_W > 0) {
+    gfx->fillRoundRect(BATTLE_RESULT_PANEL_X, BATTLE_RESULT_PANEL_Y, BATTLE_RESULT_PANEL_W, BATTLE_RESULT_PANEL_H,
+                       BATTLE_RESULT_PANEL_R, UI_WHITE);
+    gfx->drawRoundRect(BATTLE_RESULT_PANEL_X, BATTLE_RESULT_PANEL_Y, BATTLE_RESULT_PANEL_W, BATTLE_RESULT_PANEL_H,
+                       BATTLE_RESULT_PANEL_R, UI_INK);
+    resultInk = UI_INK;
+  }
+  #pragma endregion
+
+  #pragma region Title, record line, joy line, reward line
+  char scoreText[22];
+  snprintf(scoreText, sizeof(scoreText), T(S_SCORE_FMT), score);
+  gfx->setTextColor(newRecord || cleared ? UI_BAR_OK : resultInk);
+  drawMinigameResultLine(scoreText, BATTLE_RESULT_TITLE_SIZE, BATTLE_RESULT_TITLE_Y);
+
+  if (newRecord) {
+    gfx->setTextColor(UI_BAR_WARN);
+    drawMinigameResultLine(T(S_NEW_RECORD), BATTLE_RESULT_LINE_SIZE, BATTLE_RESULT_ROUNDS_Y);
+  } else {
+    char recordText[24];
+    snprintf(recordText, sizeof(recordText), T(S_RECORD_FMT), record);
+    gfx->setTextColor(resultInk);
+    drawMinigameResultLine(recordText, BATTLE_RESULT_LINE_SIZE, BATTLE_RESULT_ROUNDS_Y);
+  }
+  gfx->setTextColor(resultInk);
+  drawMinigameResultLine(score >= 10 ? T(S_GREAT_JOY) : T(S_PLUS_JOY), BATTLE_RESULT_LINE_SIZE, BATTLE_RESULT_DAMAGE_Y);
+
+  if (statGain) {
+    char rewardText[24];
+    snprintf(rewardText, sizeof(rewardText), T(rewardFormat), statGain);
+    gfx->setTextColor(UI_BAR_WARN);
+    drawMinigameResultLine(rewardText, BATTLE_RESULT_INFO_SIZE, BATTLE_RESULT_INFO_Y);
+  }
+  #pragma endregion
+
+  #pragma region OK button
+  gfx->fillRoundRect(BATTLE_OK_X, BATTLE_RESULT_BTN_Y, BATTLE_OK_W, BATTLE_RESULT_BTN_H, BATTLE_RESULT_BTN_R, UI_BAR_OK);
+  gfx->setTextColor(UI_BG_DAY);
+  drawTextCenteredInBox(T(S_OK), BATTLE_OK_TEXT_SIZE, BATTLE_OK_X, BATTLE_RESULT_BTN_Y, BATTLE_OK_W, BATTLE_RESULT_BTN_H);
+  #pragma endregion
+
+  gfx->flush();
+}
+#pragma endregion
+
+// ---------- minigame: coin chase (trains speed) ----------
+
+#pragma region Coin chase: play area and walking speed
+// keeps a body-center point inside the play area: the bezel circle on the round
+// board (trimmed above for the timer and below for the score), a rectangle on the CYD
+void clampToCoinPlayArea(float &bodyX, float &bodyY) {
+#if BOARD_IS_ROUND
+  float offsetX = bodyX - CX, offsetY = bodyY - CY;
+  float distance = sqrtf(offsetX * offsetX + offsetY * offsetY);
+  if (distance > COIN_PLAY_RADIUS) {
+    bodyX = CX + offsetX * COIN_PLAY_RADIUS / distance;
+    bodyY = CY + offsetY * COIN_PLAY_RADIUS / distance;
+  }
+#else
+  if (bodyX < COIN_PLAY_LEFT) bodyX = COIN_PLAY_LEFT;
+  if (bodyX > COIN_PLAY_RIGHT) bodyX = COIN_PLAY_RIGHT;
+#endif
+  if (bodyY < COIN_PLAY_TOP) bodyY = COIN_PLAY_TOP;
+  if (bodyY > COIN_PLAY_BOTTOM) bodyY = COIN_PLAY_BOTTOM;
+}
+
+// px/s from the speed stat: higher SPE walks faster, clamped so nobody crawls or teleports
+float coinPetSpeedPerSecond() {
+  uint16_t speedStat = pet.speStat();
+  if (speedStat > COIN_SPEED_STAT_CAP) speedStat = COIN_SPEED_STAT_CAP;
+  return COIN_PET_SPEED_MIN + (COIN_PET_SPEED_MAX - COIN_PET_SPEED_MIN) * speedStat / COIN_SPEED_STAT_CAP;
+}
+#pragma endregion
+
+void startCoinGame() {
+  if (pet.isEgg() || pet.sleeping || pet.ceremony) return;
+  coinOpen = true;
+  coinOver = false;
+  coinPoints = 0;
+  coinSpeedGain = 0;
+  coinNewHi = false;
+  coinTimeLeftMs = COIN_START_TIME_MS;
+  coinPetX = coinTargetX = CX;
+  coinPetFeetY = coinTargetFeetY = COIN_PLAY_BOTTOM + COIN_PET_BODY_OFFSET;
+  coinPetFacingLeft = false;
+  lastSpriteDrawnBounds.valid = false;  // from another screen: no pickup until the creature is drawn here
+  lastCoinStep = millis();
+  respawnCoin();
+}
+
+// new coin at a random spot in the play area, not right next to the creature
+void respawnCoin() {
+  coinSpawnedAt = millis();
+  float petBodyY = coinPetFeetY - COIN_PET_BODY_OFFSET;
+  for (int attempt = 0; attempt < COIN_SPAWN_ATTEMPTS; attempt++) {
+#if BOARD_IS_ROUND
+    coinX = CX - COIN_PLAY_RADIUS + random(2 * COIN_PLAY_RADIUS + 1);
+#else
+    coinX = COIN_PLAY_LEFT + random(COIN_PLAY_RIGHT - COIN_PLAY_LEFT + 1);
+#endif
+    coinY = COIN_PLAY_TOP + random(COIN_PLAY_BOTTOM - COIN_PLAY_TOP + 1);
+    clampToCoinPlayArea(coinX, coinY);
+    float offsetX = coinX - coinPetX, offsetY = coinY - petBodyY;
+    if (offsetX * offsetX + offsetY * offsetY >= (float)COIN_SPAWN_MIN_DISTANCE * COIN_SPAWN_MIN_DISTANCE) return;
+  }
+  // every attempt landed too close: the last one stays (the creature grabs it at once)
+}
+
+void coinGameTap(int16_t x, int16_t y) {
+  if (coinOver) {
+    if (isMinigameOkTapped(x, y)) {
+      coinOpen = false;
+      sfxPlay(SFX_TAP);
+    }
+    return;
+  }
+  if (isTouchInsideCircle(x, y, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_HIT_R)) {  // X = quit with no reward
+    coinOpen = false;
+    return;
+  }
+  #pragma region The tapped spot becomes the body destination
+  float targetBodyX = x, targetBodyY = y;
+  clampToCoinPlayArea(targetBodyX, targetBodyY);
+  coinTargetX = targetBodyX;
+  coinTargetFeetY = targetBodyY + COIN_PET_BODY_OFFSET;
+  #pragma endregion
+}
+
+// the coin circle overlaps the creature's opaque pixel box from the last drawn frame
+bool isCoinTouchingSprite() {
+  if (!lastSpriteDrawnBounds.valid) return false;
+  #pragma region Closest point of the box to the coin center
+  float closestX = coinX, closestY = coinY;
+  if (closestX < lastSpriteDrawnBounds.left) closestX = lastSpriteDrawnBounds.left;
+  if (closestX > lastSpriteDrawnBounds.right) closestX = lastSpriteDrawnBounds.right;
+  if (closestY < lastSpriteDrawnBounds.top) closestY = lastSpriteDrawnBounds.top;
+  if (closestY > lastSpriteDrawnBounds.bottom) closestY = lastSpriteDrawnBounds.bottom;
+  #pragma endregion
+  float offsetX = coinX - closestX, offsetY = coinY - closestY;
+  return offsetX * offsetX + offsetY * offsetY <= (float)COIN_RADIUS * COIN_RADIUS;
+}
+
+// ends the round: reward (SPE training, joy, record) and the results screen
+void finishCoinGame() {
+  coinNewHi = (coinPoints > pet.coinHi);
+  coinSpeedGain = pet.coinChaseResult(coinPoints);
+  sfxPlay(coinNewHi && coinPoints > 0 ? SFX_MEDAL : SFX_LEVEL);
+  coinOver = true;
+}
+
+void stepCoinGame() {
+  uint32_t now = millis();
+  #pragma region Elapsed real time (clamped for an abnormally late frame)
+  uint32_t elapsedMs = now - lastCoinStep;
+  if (elapsedMs > COIN_STEP_MAX_MS) elapsedMs = COIN_STEP_MAX_MS;
+  lastCoinStep = now;
+  #pragma endregion
+
+  #pragma region Walk toward the tapped spot and stop there
+  float offsetX = coinTargetX - coinPetX, offsetY = coinTargetFeetY - coinPetFeetY;
+  float distance = sqrtf(offsetX * offsetX + offsetY * offsetY);
+  float stepLength = coinPetSpeedPerSecond() * elapsedMs / 1000.0f;
+  if (distance <= stepLength) {
+    coinPetX = coinTargetX;
+    coinPetFeetY = coinTargetFeetY;
+  } else {
+    coinPetX += offsetX * stepLength / distance;
+    coinPetFeetY += offsetY * stepLength / distance;
+  }
+  if (offsetX < -1) coinPetFacingLeft = true;
+  else if (offsetX > 1) coinPetFacingLeft = false;
+  #pragma endregion
+
+  #pragma region Coin pickup when the coin touches the creature: +1 point, +5 s (capped at 30 s), new coin
+  if (isCoinTouchingSprite()) {
+    coinPoints++;
+    sfxPlay(SFX_PLAY);
+    coinTimeLeftMs += COIN_BONUS_TIME_MS;
+    if (coinTimeLeftMs > COIN_MAX_TIME_MS) coinTimeLeftMs = COIN_MAX_TIME_MS;
+    if (coinPoints >= COIN_WIN_POINTS) {
+      finishCoinGame();
+      return;
+    }
+    respawnCoin();
+  } else if (now - coinSpawnedAt >= COIN_LIFETIME_MS) {
+    respawnCoin();  // missed: the coin moves somewhere else
+  }
+  #pragma endregion
+
+  #pragma region Clock: the round ends at 0 s
+  coinTimeLeftMs -= (int32_t)elapsedMs;
+  if (coinTimeLeftMs <= 0) {
+    coinTimeLeftMs = 0;
+    finishCoinGame();
+  }
+  #pragma endregion
+}
+
+// gold coin with a darker rim and a shine: three circles, cheaper than a scaled bitmap
+void drawCoin(int centerX, int centerY) {
+  gfx->fillCircle(centerX, centerY, COIN_RADIUS, C565(0x7e, 0x55, 0x30));
+  gfx->fillCircle(centerX, centerY, COIN_RADIUS - 2, C565(0xe0, 0xb8, 0x60));
+  gfx->fillCircle(centerX, centerY, COIN_RADIUS - 4, C565(0xff, 0xd9, 0x5e));
+  gfx->fillCircle(centerX - COIN_RADIUS / 3, centerY - COIN_RADIUS / 3, COIN_RADIUS / 4, UI_WHITE);
+}
+
+void renderCoinGame() {
+  bool night = sceneHour() < 6 || sceneHour() >= 20;
+  uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
+
+  if (coinOver) {
+    drawMinigameResults(coinPoints, coinNewHi && coinPoints > 0, coinPoints >= COIN_WIN_POINTS, pet.coinHi, coinSpeedGain, S_SPD_GAIN_FMT);
+    return;
+  }
+
+  drawGameScene();
+  stepCoinGame();
+  if (coinOver) return;  // the round just ended: the results screen draws next frame
+
+  #pragma region Timer (top middle): whole seconds, rounded up
+  char timerText[8];
+  snprintf(timerText, sizeof(timerText), "%ld", (long)((coinTimeLeftMs + 999) / 1000));
+  gfx->setTextColor(coinTimeLeftMs <= 5000 ? UI_BAR_BAD : ink);
+  ctext(timerText, COIN_TIMER_TEXT_SIZE, COIN_TIMER_Y);
+  #pragma endregion
+
+  drawCoin((int)coinX, (int)coinY);
+
+  #pragma region The creature: walks while it has somewhere to go
+  bool walking = coinPetX != coinTargetX || coinPetFeetY != coinTargetFeetY;
+  uint8_t act = !walking ? PMD_IDLE : coinPetFacingLeft ? PMD_WALKL : PMD_WALKR;
+  drawMinigamePet(act, (int)coinPetX, (int)coinPetFeetY, COIN_PET_MAX_SCALE, COIN_PET_SIZE_PERCENT);
+  #pragma endregion
+
+  #pragma region Score (bottom, centered on CX)
+  char scoreLine[24];
+  snprintf(scoreLine, sizeof(scoreLine), T(S_SCORE_FMT), coinPoints);
+  gfx->setTextColor(ink);
+  ctext(scoreLine, MINIGAME_SCORE_TEXT_SIZE, MINIGAME_SCORE_Y, MINIGAME_SCORE_MAX_W);
+  #pragma endregion
+
+  drawCloseButton(gfx, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_R, UI_INK, UI_BG_DAY);  // quit (see coinGameTap)
+  gfx->flush();
 }
 
 // ---------- training bag (trains strength) ----------
@@ -1974,69 +2641,37 @@ void renderGame() {
   bool night = sceneHour() < 6 || sceneHour() >= 20;
   uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
 
-  if (gameOverUntil) {
-    drawGameScene();
-    if (!timeLeft(gameOverUntil)) {
-      gameOpen = false;
-      return;
-    }
-    char buf[22];
-    snprintf(buf, sizeof(buf), T(S_SCORE_FMT), gameScore);
-    gfx->setTextColor(ink);
-    ctext(buf, 4, SY(160));
-    if (gameNewHi && gameScore > 0) {
-      gfx->setTextColor(UI_BAR_WARN);
-      ctext(T(S_NEW_RECORD), 2, SY(214));
-    } else {
-      char rec[20];
-      snprintf(rec, sizeof(rec), T(S_RECORD_FMT), pet.gameHi);
-      gfx->setTextColor(ink);
-      ctext(rec, 2, SY(214));
-    }
-    const char *msg = gameScore >= 10 ? T(S_GREAT_JOY) : T(S_PLUS_JOY);
-    gfx->setTextColor(ink);
-    ctext(msg, 2, SY(250));
-    gfx->flush();
+  if (gameOver) {
+    drawMinigameResults(gameScore, gameNewHi && gameScore > 0, false, pet.gameHi, gameAttackGain, S_ATK_GAIN_FMT);
     return;
   }
 
   drawGameScene();
   stepGame();
 
-  // score, record and lives
-  char buf[8];
-  snprintf(buf, sizeof(buf), "%u", gameScore);
-  gfx->setTextColor(ink);
-  ctext(buf, 4, SY(30));
+  #pragma region Record and lives (top)
   // 24 and not 12: in Japanese "きろく %u" is 10 bytes before the number and the
   // record was cut to its first digit ("きろく 2" with 219). Text buffer sizes
   // are watched by TestBuffersDeTexto in test/test_tools.py.
   char rec[24];
   snprintf(rec, sizeof(rec), T(S_REC_FMT), pet.gameHi);
-  ctext(rec, 2, SY(76));
+  gfx->setTextColor(ink);
+  drawGlyphCenteredText(rec, 2, BALL_RECORD_Y);
   for (int i = 0; i < 3; i++) {
     if (i < 3 - gameMisses) gfx->fillCircle(LIFE_X0 + i * LIFE_DX, LIFE_Y, LIFE_R, UI_BAR_BAD);
     else gfx->drawCircle(LIFE_X0 + i * LIFE_DX, LIFE_Y, LIFE_R, UI_TRACK);
   }
+  #pragma endregion
 
-  if (pmd.loaded) {
-    uint8_t act = (ballX > gamePetX + 4) ? PMD_WALKR : (ballX < gamePetX - 4) ? PMD_WALKL : PMD_IDLE;
-    if (!pmd.has(act)) act = PMD_IDLE;
-    drawPmdAct(act, (int)gamePetX, GAME_PET_Y, millis(), true, false, 3);
-  } else if (mon.loaded) {
-    int s = (mon.h * 2 > 130) ? 1 : 2;
-    int w = mon.w * s, h = mon.h * s;
-    uint16_t fm = mon.frameMs ? mon.frameMs : 100;
-    uint16_t fi = (millis() / fm) % mon.frames;
-    const uint8_t *fr = mon.data + (uint32_t)fi * mon.w * mon.h;
-    int px = (int)gamePetX - w / 2, py = GAME_PET_Y - h;
-    for (int r = 0; r < mon.h; r++)
-      for (int c = 0; c < mon.w; c++) {
-        uint8_t idx = fr[r * mon.w + c];
-        if (idx == 0xFF) continue;
-        gfx->fillRect(px + c * s, py + r * s, s, s, mon.pal[idx]);
-      }
-  }
+  uint8_t act = (ballX > gamePetX + 4) ? PMD_WALKR : (ballX < gamePetX - 4) ? PMD_WALKL : PMD_IDLE;
+  drawMinigamePet(act, (int)gamePetX, GAME_PET_Y, 3, 100);
+
+  #pragma region Score (bottom, centered on CX, like the coin chase; the creature stands just above it)
+  char scoreLine[24];
+  snprintf(scoreLine, sizeof(scoreLine), T(S_SCORE_FMT), gameScore);
+  gfx->setTextColor(ink);
+  drawGlyphCenteredText(scoreLine, MINIGAME_SCORE_TEXT_SIZE, MINIGAME_SCORE_Y, MINIGAME_SCORE_MAX_W);
+  #pragma endregion
 
   // impact ring that expands and fades (soft hit feedback)
   uint32_t ht = millis() - hitTime;
@@ -2052,6 +2687,596 @@ void renderGame() {
   drawCloseButton(gfx, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_R, UI_INK, UI_BG_DAY);  // quit (see gameTap)
   gfx->flush();
 }
+
+// ---------- wild battles: random encounter prompt and manual turn-based battle ----------
+// BATTLE_*, WILD_PROMPT_*: boards/layout.h (one table per board, shared by drawing and battleTap)
+
+static_assert(TYPE_NAME_COUNT == TYPE_COUNT, "type name table out of sync");
+
+#pragma region Wild battle: stats, scheduling and the random encounter
+// the pet's battle stats (level clamped to the battle range, types from the dex)
+BattleStats petBattleStats() {
+  BattleStats stats = {};
+  stats.level = battleLevelFor(pet.level());
+  stats.atk = pet.atkStat();
+  stats.def = pet.defStat();
+  stats.spe = pet.speStat();
+  stats.hp = 0;  // derived from level and defense by the battle engine
+  if (!pet.isEgg() && pet.speciesId >= 1 && pet.speciesId <= DEX_COUNT) {
+    stats.type1 = DEX_TBL[pet.speciesId].type1;
+    stats.type2 = DEX_TBL[pet.speciesId].type2;
+  }
+  return stats;
+}
+
+void scheduleNextWild(uint32_t now) {
+  nextWildEligible = now + WILD_COOLDOWN_MS;
+}
+
+// fixed 1 in WILD_SHINY_ODDS
+bool rollWildShiny() {
+  return random(WILD_SHINY_ODDS) == 0;
+}
+
+// the prompt only shows over the plain, idle main screen with the user looking at it
+bool mainScreenReadyForWild() {
+  if (screenOff || dimStage > 0 || wasPressed) return false;
+  if (!isMainScreenShowing()) return false;  // every screen, menu and dialog (including this prompt)
+  if (pet.isEgg() || pet.sleeping || pet.ceremony || bathUntil) return false;
+  if (pet.evolving() || pet.wantEvolveButton() || pet.canRunawayNow() || pet.wantFarewellButton()) return false;
+  return true;
+}
+
+// opens the "a wild one appeared" prompt for wildDex (level and shiny rolled here)
+void openWildPrompt(int16_t wildDex, uint32_t now) {
+  if (wildDex < 1 || wildDex > DEX_COUNT) return;
+  wildPromptDex = wildDex;
+  wildPromptLevel = wildLevelFor(battleLevelFor(pet.level()), (uint8_t)random(100));
+  wildPromptShiny = rollWildShiny();
+  wildPromptUntil = now + WILD_PROMPT_MS;
+  scheduleNextWild(now);
+  sfxPlay(SFX_WILD_APPEAR);
+}
+
+// once the cooldown is over, one roll per minute; the chance depends on the day phase
+void maybeOfferWildEncounter(uint32_t now) {
+  if (nextWildEligible == 0) {
+    scheduleNextWild(now);
+    return;
+  }
+  if (wildPromptUntil) return;
+  if (now - lastWildCheck < WILD_CHECK_MS) return;
+  lastWildCheck = now;
+  if (timeLeft(nextWildEligible)) return;
+  if (!mainScreenReadyForWild()) return;
+
+  #pragma region Encounter chance: lower at night, except for ghost and poison species
+  uint8_t dayPhase = dayPhaseFromHour(sceneHour());
+  int16_t candidateDex = pickWildSpecies((uint8_t)random(100), dayPhase);
+  uint8_t chancePct = (dayPhase == 3) ? 4 : (dayPhase == 0 ? 7 : 8);
+  if (dayPhase == 3 && candidateDex >= 1 && candidateDex <= DEX_COUNT) {
+    const DexEntry &candidate = DEX_TBL[candidateDex];
+    if (candidate.type1 == TYPE_GHOST || candidate.type2 == TYPE_GHOST ||
+        candidate.type1 == TYPE_POISON || candidate.type2 == TYPE_POISON) chancePct = 8;
+  }
+  if ((uint8_t)random(100) >= chancePct) return;
+  #pragma endregion
+
+  openWildPrompt(candidateDex, now);
+}
+#pragma endregion
+
+#pragma region Wild battle: open, close, turns and result
+void closeBattle() {
+  battleOpen = false;
+  battleResolved = false;
+  battleAttackMenuOpen = false;
+  battleCatchOffered = false;
+  battleCatchTried = false;
+  battleCatchDone = false;
+  battleCatchSuccess = false;
+  battleRespectCatch = false;
+  battleCatchChance = 0;
+  galleryPmd.unload();  // the wild sprite borrowed the gallery's PmdMon
+}
+
+// forcedDex 0 = random wild species; forcedLevel 0 = random level around the pet's;
+// forcedShiny -1 = roll, 0 / 1 = forced
+void startBattleWith(int16_t forcedDex, uint8_t forcedLevel, int8_t forcedShiny, bool fromWildEncounter) {
+  if (!canStartWildBattle(pet.isEgg(), pet.sleeping, pet.ceremony)) return;
+  // galleryPmd is shared with the gallery; full screens are left alone (serial commands)
+  if (galleryOpen || gameOpen || coinOpen || sackOpen || kbOpen || settingsScreen != SETTINGS_CLOSED) return;
+
+  #pragma region Close the prompt and any main screen menu or dialog
+  wildPromptUntil = 0;
+  playMenuUntil = 0;
+  feedMenuUntil = 0;
+  confirmUntil = 0;
+  choiceKind = 0;
+  cardOpen = false;
+  scheduleNextWild(millis());
+  #pragma endregion
+
+  #pragma region Pick the wild species, level and shiny
+  uint8_t petBattleLevel = battleLevelFor(pet.level());
+  if (forcedDex >= 1 && forcedDex <= DEX_COUNT) {
+    battleDex = forcedDex;
+    battleLevel = forcedLevel ? forcedLevel : wildLevelFor(petBattleLevel, (uint8_t)random(100));
+  } else {
+    battleDex = pickWildSpecies((uint8_t)random(100), dayPhaseFromHour(sceneHour()));
+    battleLevel = wildLevelFor(petBattleLevel, (uint8_t)random(100));
+  }
+  if (battleDex < 1 || battleDex > DEX_COUNT) return;
+  battleShiny = forcedShiny < 0 ? rollWildShiny() : forcedShiny != 0;
+  #pragma endregion
+
+  #pragma region Reset the battle state
+  battlePlayer = petBattleStats();
+  battleEnemy = wildBattleStats(battleDex, battleLevel);
+  battleEnemy.hp = 0;
+  battleRun = beginBattleRuntime(battlePlayer, battleEnemy);
+  battleTurn = {};
+  battleReward = {};
+  battlePlayerMoveText[0] = 0;
+  battleWildMoveText[0] = 0;
+  battleAttackMenuOpen = false;
+  battleLowHpWarned = false;
+  battleCatchOffered = false;
+  battleCatchTried = false;
+  battleCatchDone = false;
+  battleCatchSuccess = false;
+  battleRespectCatch = false;
+  battleCatchChance = 0;
+  battleResolved = false;
+  battleFromWildEncounter = fromWildEncounter;
+  battleOpen = true;
+  #pragma endregion
+
+  galleryPmd.unload();
+  galleryPmd.load(battleDex, battleShiny);  // streaming on the CYD: headers only, one frame per draw
+  sfxPlay(SFX_TAP);
+}
+
+void startBattle() {
+  startBattleWith(0, 0, -1);
+}
+
+// applies the win (reward, catch offer) or the loss (respect catch after a close loss)
+void finishBattle() {
+  if (battleResolved) return;
+  battleResolved = true;
+  battleAttackMenuOpen = false;
+  if (battleTurn.playerWon) {
+    bool closeWin = battleRun.playerHp <= battleRun.playerMaxHp / 3;
+    battleReward = pet.applyBattleWin(battleDex, closeWin);
+    battleCatchOffered = true;
+    battleRespectCatch = false;
+    battleCatchChance = pet.catchChanceForWild(battleDex, battleLevel, battlePlayer.level, closeWin,
+                                               !battleFromWildEncounter);
+    sfxPlay(SFX_BATTLE_WIN);
+  } else {
+    battleReward = {};
+    pet.applyBattleLoss();
+    bool closeLoss = battleRun.enemyHp > 0 && battleRun.enemyHp * 100UL <= battleRun.enemyMaxHp * 30UL;
+    battleCatchChance = closeLoss ? pet.respectCatchChanceForWild(battleDex, battleLevel, battlePlayer.level,
+                                                                  !battleFromWildEncounter) : 0;
+    battleCatchOffered = battleCatchChance > 0;
+    battleRespectCatch = battleCatchOffered;
+    sfxPlay(SFX_BATTLE_LOSS);
+  }
+}
+
+// one turn: runs the engine, writes the message line and plays the turn sounds
+void performBattleAction(BattleAction action) {
+  if (battleResolved) return;
+  battleAttackMenuOpen = false;
+  battleTurn = stepBattle(battleRun, action, (uint8_t)random(100));
+
+  #pragma region Our move (under our sprite): rest, dodge, or the damage our attack did
+  if (battleTurn.restFailed) {
+    snprintf(battlePlayerMoveText, sizeof(battlePlayerMoveText), "%s", T(S_NO_REST));
+  } else if (battleTurn.playerRested) {
+    snprintf(battlePlayerMoveText, sizeof(battlePlayerMoveText), T(S_RESTED_FMT), battleTurn.playerHeal);
+  } else if (action == BATTLE_DODGE) {
+    snprintf(battlePlayerMoveText, sizeof(battlePlayerMoveText), "%s", T(S_DODGED));
+  } else if (battleTurn.playerDamage > 0) {
+    snprintf(battlePlayerMoveText, sizeof(battlePlayerMoveText), T(S_HIT_FMT), battleTurn.playerDamage);
+  } else {
+    snprintf(battlePlayerMoveText, sizeof(battlePlayerMoveText), "%s", T(S_MISSED));  // the wild one dodged it
+  }
+  #pragma endregion
+
+  #pragma region Move of the wild one (under its sprite): dodge, or the damage its attack did
+  if (battleTurn.restFailed) {
+    battleWildMoveText[0] = 0;  // no turn was played
+  } else if (battleTurn.enemyDodged && battleTurn.enemyDamage == 0) {
+    snprintf(battleWildMoveText, sizeof(battleWildMoveText), "%s", T(S_DODGED));
+  } else if (battleTurn.enemyDamage > 0) {
+    snprintf(battleWildMoveText, sizeof(battleWildMoveText), T(S_HIT_FMT), battleTurn.enemyDamage);
+  } else if (battleRun.enemyHp == 0) {
+    battleWildMoveText[0] = 0;  // fainted before acting
+  } else {
+    snprintf(battleWildMoveText, sizeof(battleWildMoveText), "%s", T(S_MISSED));  // we dodged it
+  }
+  #pragma endregion
+
+  if (battleTurn.battleEnded) {
+    finishBattle();
+    return;
+  }
+
+  #pragma region Turn sounds (queued): our move, then the hit taken, then the low HP warning
+  if (battleTurn.restFailed) sfxPlay(SFX_DENY);
+  else if (battleTurn.playerRested) sfxPlay(SFX_HEART);
+  else if (battleTurn.playerDamage > 0) sfxPlay(SFX_BATTLE_HIT);
+  else sfxPlay(SFX_TAP);
+  if (battleTurn.enemyDamage > 0) sfxPlay(SFX_BATTLE_HURT);
+  if (!battleLowHpWarned && battleRun.playerHp > 0 && battleRun.playerHp <= battleRun.playerMaxHp * 3 / 10) {
+    battleLowHpWarned = true;
+    sfxPlay(SFX_DENY);
+  }
+  #pragma endregion
+}
+#pragma endregion
+
+#pragma region Wild battle: touch
+// a drawn box grown by padX / padY on each side (the battle's generous hit areas)
+bool isTouchInsidePaddedRect(int16_t x, int16_t y, int left, int top, int width, int height, int padX, int padY) {
+  return isTouchInsideRect(x, y, left - padX, top - padY, width + 2 * padX, height + 2 * padY);
+}
+
+void battleTap(int16_t x, int16_t y) {
+  #pragma region Result view: Catch / Leave, then OK
+  if (battleResolved) {
+    if (battleCatchOffered && !battleCatchDone) {
+      if (isTouchInsidePaddedRect(x, y, BATTLE_CATCH_X, BATTLE_RESULT_BTN_Y, BATTLE_CATCH_W, BATTLE_RESULT_BTN_H, 0, BATTLE_RESULT_HIT_PAD_Y)) {
+        bool closeWin = battleRun.playerHp <= battleRun.playerMaxHp / 3;
+        battleCatchTried = true;
+        battleCatchDone = true;
+        if (battleRespectCatch) {
+          battleCatchSuccess = pet.tryRespectCatchWild(battleDex, battleLevel, battlePlayer.level,
+                                                       (uint8_t)random(100), battleShiny, !battleFromWildEncounter);
+          battleCatchChance = pet.respectCatchChanceForWild(battleDex, battleLevel, battlePlayer.level,
+                                                            !battleFromWildEncounter);
+        } else {
+          battleCatchSuccess = pet.tryCatchWild(battleDex, battleLevel, battlePlayer.level, closeWin,
+                                                (uint8_t)random(100), battleShiny, !battleFromWildEncounter);
+          battleCatchChance = pet.catchChanceForWild(battleDex, battleLevel, battlePlayer.level, closeWin,
+                                                     !battleFromWildEncounter);
+        }
+        sfxPlay(battleCatchSuccess ? SFX_CATCH_OK : SFX_CATCH_FAIL);
+        galleryDirty = true;  // the grid shows the new catch
+        return;
+      }
+      if (isTouchInsidePaddedRect(x, y, BATTLE_LEAVE_X, BATTLE_RESULT_BTN_Y, BATTLE_CATCH_W, BATTLE_RESULT_BTN_H, 0, BATTLE_RESULT_HIT_PAD_Y)) {
+        battleCatchDone = true;
+        battleCatchTried = false;
+        sfxPlay(SFX_TAP);
+      }
+      return;
+    }
+    if (isTouchInsidePaddedRect(x, y, BATTLE_OK_X, BATTLE_RESULT_BTN_Y, BATTLE_OK_W, BATTLE_RESULT_BTN_H, 0, BATTLE_RESULT_HIT_PAD_Y)) {
+      closeBattle();
+      sfxPlay(SFX_TAP);
+    }
+    return;
+  }
+  #pragma endregion
+
+  #pragma region Quick / Heavy overlay: any other tap closes it
+  if (battleAttackMenuOpen) {
+    if (isTouchInsidePaddedRect(x, y, BATTLE_QUICK_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H,
+                                BATTLE_ATTACK_MENU_HIT_PAD_X, BATTLE_ATTACK_MENU_HIT_PAD_Y)) {
+      performBattleAction(BATTLE_ATTACK_QUICK);
+      return;
+    }
+    if (isTouchInsidePaddedRect(x, y, BATTLE_HEAVY_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H,
+                                BATTLE_ATTACK_MENU_HIT_PAD_X, BATTLE_ATTACK_MENU_HIT_PAD_Y)) {
+      performBattleAction(BATTLE_ATTACK_HEAVY);
+      return;
+    }
+    battleAttackMenuOpen = false;
+    sfxPlay(SFX_TAP);
+    return;
+  }
+  #pragma endregion
+
+  #pragma region Run, then the three action buttons
+  if (isTouchInsideRect(x, y, BATTLE_RUN_HIT_X, BATTLE_RUN_HIT_Y, BATTLE_RUN_HIT_W, BATTLE_RUN_HIT_H)) {
+    closeBattle();
+    sfxPlay(SFX_TAP);
+    return;
+  }
+  if (isTouchInsidePaddedRect(x, y, BATTLE_ATTACK_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H,
+                              BATTLE_ACTION_HIT_PAD_X, BATTLE_ACTION_HIT_PAD_Y)) {
+    battleAttackMenuOpen = true;
+    sfxPlay(SFX_TAP);
+  } else if (isTouchInsidePaddedRect(x, y, BATTLE_DODGE_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H,
+                                     BATTLE_ACTION_HIT_PAD_X, BATTLE_ACTION_HIT_PAD_Y)) {
+    performBattleAction(BATTLE_DODGE);
+  } else if (isTouchInsidePaddedRect(x, y, BATTLE_REST_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H,
+                                     BATTLE_ACTION_HIT_PAD_X, BATTLE_ACTION_HIT_PAD_Y)) {
+    performBattleAction(BATTLE_REST);
+  }
+  #pragma endregion
+}
+#pragma endregion
+
+#pragma region Wild battle: drawing helpers
+void drawBattleHpBar(int x, int y, uint16_t currentHp, uint16_t maxHp, uint16_t color) {
+  if (maxHp == 0) maxHp = 1;
+  int fillWidth = (int)((uint32_t)currentHp * BATTLE_HP_W / maxHp);
+  if (fillWidth > BATTLE_HP_W) fillWidth = BATTLE_HP_W;
+  gfx->fillRoundRect(x, y, BATTLE_HP_W, BATTLE_HP_H, BATTLE_HP_R, UI_TRACK);
+  if (fillWidth > 2) gfx->fillRoundRect(x, y, fillWidth, BATTLE_HP_H, BATTLE_HP_R, color);
+}
+
+// "+N ATK/DEF/SPD" line for the win reward ("" when there is none)
+void battleRewardText(char *buffer, size_t bufferSize) {
+  if (battleReward.amount == 0) {
+    buffer[0] = 0;
+    return;
+  }
+  StrId rewardFormat = S_SPD_GAIN_FMT;
+  if (battleReward.stat == BATTLE_REWARD_ATK) rewardFormat = S_ATK_GAIN_FMT;
+  else if (battleReward.stat == BATTLE_REWARD_DEF) rewardFormat = S_DEF_GAIN_FMT;
+  snprintf(buffer, bufferSize, T(rewardFormat), battleReward.amount);
+}
+
+// label centered in a button box (shrinks to fit; text color set by the caller)
+void drawBattleButtonLabel(int left, int top, int width, int height, const char *label, int preferredSize) {
+  drawTextCenteredInBox(label, preferredSize, left, top, width, height);
+}
+
+// one line of text centered on CX in the result column
+void drawBattleResultLine(const char *text, int preferredSize, int top) {
+  drawTextCenteredInBox(text, preferredSize, CX - BATTLE_RESULT_TEXT_MAX_W / 2, top, BATTLE_RESULT_TEXT_MAX_W, 8 * preferredSize);
+}
+
+// chip color per battle type (the fork's palette; grey for TYPE_NONE / unknown)
+uint16_t battleTypeColor(uint8_t type) {
+  switch (type) {
+    case TYPE_FIRE: return 0xEA87;
+    case TYPE_WATER: return 0x4C98;
+    case TYPE_ELECTRIC: return 0xBCA1;
+    case TYPE_GRASS: return 0x3C49;
+    case TYPE_ICE: return 0x5D99;
+    case TYPE_FIGHTING: return 0xA2A5;
+    case TYPE_POISON: return 0x8A73;
+    case TYPE_GROUND: return 0xB447;
+    case TYPE_FLYING: return 0x8D7F;
+    case TYPE_PSYCHIC: return 0xD28F;
+    case TYPE_BUG: return 0x7CC4;
+    case TYPE_ROCK: return 0x9407;
+    case TYPE_GHOST: return 0x6B33;
+    case TYPE_DRAGON: return 0x5A5F;
+    case TYPE_DARK: return 0x5ACB;
+    case TYPE_STEEL: return 0xA534;
+    case TYPE_FAIRY: return 0xF3B7;
+    default: return 0x8C4D;
+  }
+}
+
+#pragma region Type chips (battle screen and Pokedex detail share the drawing, each with its own size)
+struct TypeChipStyle {
+  uint8_t textSize;
+  int16_t height, padding, radius, gap;
+};
+static const TypeChipStyle BATTLE_TYPE_CHIP_STYLE = { 1, BATTLE_CHIP_H, BATTLE_CHIP_PAD, BATTLE_CHIP_R, BATTLE_CHIP_GAP };
+static const TypeChipStyle GALLERY_TYPE_CHIP_STYLE = { GALLERY_TYPE_CHIP_TEXT_SIZE, GALLERY_TYPE_CHIP_H,
+                                                       GALLERY_TYPE_CHIP_PAD, GALLERY_TYPE_CHIP_R, GALLERY_TYPE_CHIP_GAP };
+
+int typeChipWidth(uint8_t type, const TypeChipStyle &style = BATTLE_TYPE_CHIP_STYLE) {
+  setSize(style.textSize);  // textW() with a CJK font measures with the active size
+  return (int)textW(typeName(type), style.textSize) + 2 * style.padding;
+}
+
+// width of one or two chips side by side
+int typeChipsTotalWidth(const DexEntry &entry, const TypeChipStyle &style = BATTLE_TYPE_CHIP_STYLE) {
+  int firstWidth = typeChipWidth(entry.type1, style);
+  if (entry.type2 == TYPE_NONE) return firstWidth;
+  return firstWidth + style.gap + typeChipWidth(entry.type2, style);
+}
+
+void drawTypeChip(int x, int y, uint8_t type, const TypeChipStyle &style = BATTLE_TYPE_CHIP_STYLE) {
+  if (type == TYPE_NONE) return;
+  int chipWidth = typeChipWidth(type, style);
+  gfx->fillRoundRect(x, y, chipWidth, style.height, style.radius, lerp565(battleTypeColor(type), UI_WHITE, 5, 8));
+  gfx->drawRoundRect(x, y, chipWidth, style.height, style.radius, UI_INK);
+  gfx->setTextColor(UI_INK);
+  setSize(style.textSize);
+  // glyph height actually drawn: 8 px per scale step in the 5x7 font, 16 px in the CJK fonts
+  int textHeight = (gCjkFont ? 16 : 8) * gTextSize;
+  setCur(x + style.padding, y + (style.height - textHeight) / 2);
+  printT(typeName(type));
+}
+
+// one or two chips starting at x (or ending at x when alignRight); returns the left edge
+int drawTypeChips(int x, int y, const DexEntry &entry, bool alignRight, const TypeChipStyle &style = BATTLE_TYPE_CHIP_STYLE) {
+  int firstWidth = typeChipWidth(entry.type1, style);
+  int totalWidth = typeChipsTotalWidth(entry, style);
+  int chipsLeft = alignRight ? x - totalWidth : x;
+  drawTypeChip(chipsLeft, y, entry.type1, style);
+  if (entry.type2 != TYPE_NONE) drawTypeChip(chipsLeft + firstWidth + style.gap, y, entry.type2, style);
+  return chipsLeft;
+}
+#pragma endregion
+
+// the same pokeball as the minigame: this species is already caught
+void drawCaughtBattleMarker(int x, int y) {
+  drawMap(SPR_ICON_PLAY, 16, x, y, BATTLE_CAUGHT_S, false);
+}
+#pragma endregion
+
+#pragma region Wild encounter prompt drawing
+void drawWildPrompt() {
+  gfx->fillRoundRect(WILD_PROMPT_X, WILD_PROMPT_Y, WILD_PROMPT_W, WILD_PROMPT_H, WILD_PROMPT_R, UI_WHITE);
+  gfx->drawRoundRect(WILD_PROMPT_X, WILD_PROMPT_Y, WILD_PROMPT_W, WILD_PROMPT_H, WILD_PROMPT_R, UI_INK);
+  const int textLeft = WILD_PROMPT_X + 8, textWidth = WILD_PROMPT_W - 16;
+
+  #pragma region Question and the wild species line
+  gfx->setTextColor(UI_INK);
+  drawTextCenteredInBox(T(S_WILD_Q), WILD_PROMPT_TITLE_SIZE, textLeft, WILD_PROMPT_TITLE_Y, textWidth, 8 * WILD_PROMPT_TITLE_SIZE);
+  char wildLine[48];
+  snprintf(wildLine, sizeof(wildLine), "%s%s Lv.%u", wildPromptShiny ? "*" : "", dexName(wildPromptDex), wildPromptLevel);
+  drawTextCenteredInBox(wildLine, WILD_PROMPT_NAME_SIZE, textLeft, WILD_PROMPT_NAME_Y, textWidth, 8 * WILD_PROMPT_NAME_SIZE);
+  #pragma endregion
+
+  #pragma region FIGHT / LATER buttons
+  gfx->fillRoundRect(WILD_PROMPT_BTN_X, WILD_PROMPT_FIGHT_Y, WILD_PROMPT_BTN_W, WILD_PROMPT_BTN_H, WILD_PROMPT_BTN_R, UI_BAR_BAD);
+  gfx->fillRoundRect(WILD_PROMPT_BTN_X, WILD_PROMPT_LATER_Y, WILD_PROMPT_BTN_W, WILD_PROMPT_BTN_H, WILD_PROMPT_BTN_R, UI_TRACK);
+  gfx->setTextColor(UI_WHITE);
+  drawBattleButtonLabel(WILD_PROMPT_BTN_X, WILD_PROMPT_FIGHT_Y, WILD_PROMPT_BTN_W, WILD_PROMPT_BTN_H, T(S_FIGHT), WILD_PROMPT_BTN_TEXT_SIZE);
+  gfx->setTextColor(UI_INK);
+  drawBattleButtonLabel(WILD_PROMPT_BTN_X, WILD_PROMPT_LATER_Y, WILD_PROMPT_BTN_W, WILD_PROMPT_BTN_H, T(S_LATER), WILD_PROMPT_BTN_TEXT_SIZE);
+  #pragma endregion
+}
+#pragma endregion
+
+#pragma region Wild battle screen
+void renderBattle() {
+  drawGameScene();
+  bool night = sceneHour() < 6 || sceneHour() >= 20;
+  uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
+  const DexEntry &petEntry = DEX_TBL[pet.speciesId];
+  const DexEntry &wildEntry = DEX_TBL[battleDex];
+
+  #pragma region Title and the run button (top right, battle in progress only)
+  gfx->setTextColor(ink);
+  drawTextCenteredInBox(T(battleFromWildEncounter ? S_WILD_BATTLE : S_BATTLE), BATTLE_TITLE_SIZE,
+                        CX - BATTLE_TITLE_MAX_W / 2, BATTLE_TITLE_Y, BATTLE_TITLE_MAX_W, 8 * BATTLE_TITLE_SIZE);
+  if (!battleResolved) {
+    gfx->fillRoundRect(BATTLE_RUN_X, BATTLE_RUN_Y, BATTLE_RUN_W, BATTLE_RUN_H, BATTLE_RUN_R, UI_TRACK);
+    gfx->setTextColor(UI_INK);
+    drawBattleButtonLabel(BATTLE_RUN_X, BATTLE_RUN_Y, BATTLE_RUN_W, BATTLE_RUN_H, T(S_RUN_BATTLE), BATTLE_BTN_TEXT_SIZE);
+  }
+  #pragma endregion
+
+  #pragma region Info columns: name and level, HP bar, type chips (pet left, wild right)
+  // 40: the longest dex name in UTF-8 or an 11-byte nickname, plus " Lv.100"
+  char petLabel[40], wildLabel[40];
+  snprintf(petLabel, sizeof(petLabel), "%s Lv.%u", pet.nick[0] ? pet.nick : dexName(pet.speciesId), battlePlayer.level);
+  snprintf(wildLabel, sizeof(wildLabel), "%s%s Lv.%u", battleShiny ? "*" : "", dexName(battleDex), battleLevel);
+  gfx->setTextColor(ink);
+  int nameSize = shrinkTextSizeToWidth(petLabel, BATTLE_NAME_SIZE, BATTLE_NAME_MAX_W);
+  setCur(BATTLE_PET_NAME_X, BATTLE_NAME_Y + 4 * (BATTLE_NAME_SIZE - nameSize));
+  printT(petLabel);
+  nameSize = shrinkTextSizeToWidth(wildLabel, BATTLE_NAME_SIZE, BATTLE_NAME_MAX_W);
+  setCur(BATTLE_WILD_NAME_RIGHT - (int)textW(wildLabel, nameSize), BATTLE_NAME_Y + 4 * (BATTLE_NAME_SIZE - nameSize));
+  printT(wildLabel);
+
+  drawBattleHpBar(BATTLE_PET_HP_X, BATTLE_HP_Y, battleRun.playerHp, battleRun.playerMaxHp, UI_BAR_OK);
+  drawBattleHpBar(BATTLE_WILD_HP_X, BATTLE_HP_Y, battleRun.enemyHp, battleRun.enemyMaxHp, UI_BAR_BAD);
+  drawTypeChips(BATTLE_PET_CHIP_X, BATTLE_CHIP_Y, petEntry, false);
+  int wildChipsLeft = drawTypeChips(BATTLE_WILD_CHIP_RIGHT, BATTLE_CHIP_Y, wildEntry, true);
+  // left of the wild type chips: next to the name it would leave the round display
+  if (pet.isCaught(battleDex)) drawCaughtBattleMarker(wildChipsLeft - BATTLE_CAUGHT_DX, BATTLE_CAUGHT_Y);
+  #pragma endregion
+
+  #pragma region Sprites (idle animation; thumbnail when there is no PMD sprite)
+  if (pmd.loaded) {
+    drawPmdAct(PMD_IDLE, BATTLE_PET_CX, BATTLE_GROUND_Y, millis(), true, false, BATTLE_SPRITE_MAX_S);
+  } else {
+    const uint8_t *petThumb = thumbs.get(pet.speciesId);
+    if (petThumb) drawThumbCell(petThumb, BATTLE_PET_THUMB_X, BATTLE_THUMB_Y, BATTLE_THUMB_S, false, BATTLE_THUMB_CELL);
+  }
+  if (galleryPmd.loaded) {
+    drawPmdActM(galleryPmd, PMD_IDLE, BATTLE_WILD_CX, BATTLE_GROUND_Y, millis(), true, false, BATTLE_SPRITE_MAX_S);
+  } else {
+    const uint8_t *wildThumb = thumbs.get(battleDex);
+    if (wildThumb) drawThumbCell(wildThumb, BATTLE_WILD_THUMB_X, BATTLE_THUMB_Y, BATTLE_THUMB_S, false, BATTLE_THUMB_CELL);
+  }
+  #pragma endregion
+
+  if (battleResolved) {
+    #pragma region Result: panel (rect board), WIN / LOSS, rounds and damage, info line
+    uint16_t resultInk = ink;
+    if (BATTLE_RESULT_PANEL_W > 0) {
+      gfx->fillRoundRect(BATTLE_RESULT_PANEL_X, BATTLE_RESULT_PANEL_Y, BATTLE_RESULT_PANEL_W, BATTLE_RESULT_PANEL_H,
+                         BATTLE_RESULT_PANEL_R, UI_WHITE);
+      gfx->drawRoundRect(BATTLE_RESULT_PANEL_X, BATTLE_RESULT_PANEL_Y, BATTLE_RESULT_PANEL_W, BATTLE_RESULT_PANEL_H,
+                         BATTLE_RESULT_PANEL_R, UI_INK);
+      resultInk = UI_INK;
+    }
+    gfx->setTextColor(battleTurn.playerWon ? UI_BAR_OK : UI_BAR_BAD);
+    drawBattleResultLine(battleTurn.playerWon ? T(S_WIN) : T(S_LOSS), BATTLE_RESULT_TITLE_SIZE, BATTLE_RESULT_TITLE_Y);
+    char roundsLine[32];
+    char damageLine[48];
+    snprintf(roundsLine, sizeof(roundsLine), T(S_ROUNDS_FMT), battleRun.round);
+    snprintf(damageLine, sizeof(damageLine), T(S_DAMAGE_FMT), battleRun.playerDamageTotal, battleRun.enemyDamageTotal);
+    gfx->setTextColor(resultInk);
+    drawBattleResultLine(roundsLine, BATTLE_RESULT_LINE_SIZE, BATTLE_RESULT_ROUNDS_Y);
+    drawBattleResultLine(damageLine, BATTLE_RESULT_LINE_SIZE, BATTLE_RESULT_DAMAGE_Y);
+    if (battleCatchDone && battleCatchTried) {
+      gfx->setTextColor(battleCatchSuccess ? UI_BAR_OK : UI_BAR_BAD);
+      drawBattleResultLine(battleCatchSuccess ? T(S_CAUGHT_OK) : T(S_ESCAPED), BATTLE_RESULT_INFO_SIZE, BATTLE_RESULT_INFO_Y);
+    } else if (battleTurn.playerWon) {
+      char rewardLine[48];
+      battleRewardText(rewardLine, sizeof(rewardLine));
+      if (rewardLine[0]) {
+        gfx->setTextColor(UI_BAR_WARN);
+        drawBattleResultLine(rewardLine, BATTLE_RESULT_INFO_SIZE, BATTLE_RESULT_INFO_Y);
+      }
+    } else if (battleRespectCatch && battleCatchOffered && !battleCatchDone) {
+      gfx->setTextColor(UI_BAR_WARN);
+      drawBattleResultLine(T(S_CLOSE_CHANCE), BATTLE_RESULT_INFO_SIZE, BATTLE_RESULT_INFO_Y);
+    }
+    #pragma endregion
+
+    #pragma region Result buttons: Catch / Leave while a catch is offered, then OK
+    gfx->setTextColor(UI_BG_DAY);
+    if (battleCatchOffered && !battleCatchDone) {
+      gfx->fillRoundRect(BATTLE_CATCH_X, BATTLE_RESULT_BTN_Y, BATTLE_CATCH_W, BATTLE_RESULT_BTN_H, BATTLE_RESULT_BTN_R, UI_BAR_OK);
+      gfx->fillRoundRect(BATTLE_LEAVE_X, BATTLE_RESULT_BTN_Y, BATTLE_CATCH_W, BATTLE_RESULT_BTN_H, BATTLE_RESULT_BTN_R, UI_TRACK);
+      drawBattleButtonLabel(BATTLE_CATCH_X, BATTLE_RESULT_BTN_Y, BATTLE_CATCH_W, BATTLE_RESULT_BTN_H, T(S_CATCH_WILD), BATTLE_BTN_TEXT_SIZE);
+      gfx->setTextColor(UI_INK);
+      drawBattleButtonLabel(BATTLE_LEAVE_X, BATTLE_RESULT_BTN_Y, BATTLE_CATCH_W, BATTLE_RESULT_BTN_H, T(S_LEAVE_WILD), BATTLE_BTN_TEXT_SIZE);
+    } else {
+      gfx->fillRoundRect(BATTLE_OK_X, BATTLE_RESULT_BTN_Y, BATTLE_OK_W, BATTLE_RESULT_BTN_H, BATTLE_RESULT_BTN_R, UI_BAR_OK);
+      drawBattleButtonLabel(BATTLE_OK_X, BATTLE_RESULT_BTN_Y, BATTLE_OK_W, BATTLE_RESULT_BTN_H, T(S_OK), BATTLE_OK_TEXT_SIZE);
+    }
+    #pragma endregion
+  } else {
+    #pragma region Moves of the last turn, each centered under its sprite (damage to us in red)
+    if (battlePlayerMoveText[0]) {
+      gfx->setTextColor(ink);
+      drawTextCenteredInBox(battlePlayerMoveText, BATTLE_MOVE_SIZE, BATTLE_PET_CX - BATTLE_MOVE_W / 2, BATTLE_MOVE_Y,
+                            BATTLE_MOVE_W, 8 * BATTLE_MOVE_SIZE);
+    }
+    if (battleWildMoveText[0]) {
+      gfx->setTextColor(battleTurn.enemyDamage > 0 ? UI_BAR_BAD : ink);
+      drawTextCenteredInBox(battleWildMoveText, BATTLE_MOVE_SIZE, BATTLE_WILD_CX - BATTLE_MOVE_W / 2, BATTLE_MOVE_Y,
+                            BATTLE_MOVE_W, 8 * BATTLE_MOVE_SIZE);
+    }
+    #pragma endregion
+
+    #pragma region Quick / Heavy overlay (after Attack)
+    if (battleAttackMenuOpen) {
+      gfx->fillRoundRect(BATTLE_QUICK_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, BATTLE_ATTACK_MENU_R, UI_BAR_BAD);
+      gfx->fillRoundRect(BATTLE_HEAVY_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, BATTLE_ATTACK_MENU_R, UI_BAR_WARN);
+      gfx->setTextColor(UI_BG_DAY);
+      drawBattleButtonLabel(BATTLE_QUICK_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, T(S_QUICK_ATTACK), BATTLE_BTN_TEXT_SIZE);
+      drawBattleButtonLabel(BATTLE_HEAVY_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, T(S_HEAVY_ATTACK), BATTLE_BTN_TEXT_SIZE);
+    }
+    #pragma endregion
+
+    #pragma region Attack / Dodge / Rest n
+    gfx->fillRoundRect(BATTLE_ATTACK_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H, BATTLE_ACTION_R, UI_BAR_BAD);
+    gfx->fillRoundRect(BATTLE_DODGE_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H, BATTLE_ACTION_R, 0x4C98);
+    gfx->fillRoundRect(BATTLE_REST_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H, BATTLE_ACTION_R, UI_BAR_OK);
+    gfx->setTextColor(UI_BG_DAY);
+    drawBattleButtonLabel(BATTLE_ATTACK_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H, T(S_ATTACK), BATTLE_BTN_TEXT_SIZE);
+    drawBattleButtonLabel(BATTLE_DODGE_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H, T(S_DODGE), BATTLE_BTN_TEXT_SIZE);
+    // 40: a CJK "rest" label plus " %u"
+    char restLabel[40];
+    snprintf(restLabel, sizeof(restLabel), "%s %u", T(S_REST), battleRun.restUsesLeft);
+    drawBattleButtonLabel(BATTLE_REST_X, BATTLE_ACTION_Y, BATTLE_ACTION_W, BATTLE_ACTION_H, restLabel, BATTLE_BTN_TEXT_SIZE);
+    #pragma endregion
+  }
+
+  gfx->flush();
+}
+#pragma endregion
 
 // ---------- creature info card (vertical swipe) ----------
 
@@ -2168,9 +3393,9 @@ bool isTouchOnSettingsCloseButton(int16_t touchX, int16_t touchY) {
 #pragma endregion
 
 #pragma region Settings menu screen
-// Title, four large rows (Pokedex, Audio / Video, Time, Language) and the firmware version
+// Title, four large rows (Screen Off, Audio / Video, Time, Language) and the firmware version
 #define SETTINGS_MENU_ROW_COUNT 4
-static const StrId SETTINGS_MENU_ROW_LABELS[SETTINGS_MENU_ROW_COUNT] = { S_MENU_POKEDEX, S_MENU_AV, S_MENU_TIME, S_MENU_LANG };
+static const StrId SETTINGS_MENU_ROW_LABELS[SETTINGS_MENU_ROW_COUNT] = { S_MENU_SCREEN_OFF, S_MENU_AV, S_MENU_TIME, S_MENU_LANG };
 
 void openSettingsMenu() { settingsScreen = SETTINGS_MENU; }
 
@@ -2215,12 +3440,9 @@ void handleSettingsMenuTap(int16_t touchX, int16_t touchY) {
   }
   for (int rowIndex = 0; rowIndex < SETTINGS_MENU_ROW_COUNT; rowIndex++) {
     if (!isTouchInsideRect(touchX, touchY, SETTINGS_MENU_ROW_X, settingsMenuRowTop(rowIndex), SETTINGS_MENU_ROW_W, SETTINGS_MENU_ROW_H)) continue;
-    if (rowIndex == 0) {  // Pokedex: opens the gallery exactly like the old swipe did
-      galleryOpen = true;
-      galleryPage = 0;
-      galleryDetail = 0;
-      galleryDirty = true;
+    if (rowIndex == 0) {  // Screen Off: back to the main screen with the panel dark (see turnScreenOff)
       settingsScreen = SETTINGS_CLOSED;
+      turnScreenOff();
     }
     else if (rowIndex == 1) settingsScreen = SETTINGS_AUDIO_VIDEO;
     else if (rowIndex == 2) openClock();  // loads the current time into the editor
@@ -3097,7 +4319,8 @@ void renderGallery() {
     gfx->fillScreen(RGB565_BLACK);
     fillScreenBg(UI_BG_DAY);
     const DexEntry &d = DEX_TBL[galleryDetail];
-    bool reg = pet.isRegistered(galleryDetail);
+    // known = raised or caught in a wild battle: color, name and animation
+    bool reg = pet.isRegistered(galleryDetail) || pet.isCaught(galleryDetail);
     char head[32];
     snprintf(head, sizeof(head), "N.%03d %s%s", galleryDetail,
              pet.isShinyRegistered(galleryDetail) ? "*" : "", reg ? dexName(galleryDetail) : "???");
@@ -3109,6 +4332,10 @@ void renderGallery() {
     setSize(gts);
     setCur(centerX(head, gts), gts == 3 ? SY(56) : SY(60));
     printT(head);
+    #pragma region Type chips (shown for every species, known or not)
+    int typesWidth = typeChipsTotalWidth(d, GALLERY_TYPE_CHIP_STYLE);
+    drawTypeChips(CX - typesWidth / 2, GALLERY_DETAIL_TYPES_Y, d, false, GALLERY_TYPE_CHIP_STYLE);
+    #pragma endregion
     if (galleryPmd.loaded) {
       // animated and in color if registered; static silhouette if not ("?" style)
       drawPmdActM(galleryPmd, PMD_IDLE, CX, SY(300), reg ? millis() : 0, true, !reg, 6);
@@ -3116,6 +4343,12 @@ void renderGallery() {
       const uint8_t *t = thumbs.get(galleryDetail);
       if (t) drawThumb(t, CX - GAL_CELL / 2, SY(135), 4, !reg);
     }
+    #pragma region Caught mark (species caught in a wild battle)
+    if (pet.isCaught(galleryDetail)) {
+      gfx->setTextColor(UI_BAR_OK);
+      ctext(T(S_CAUGHT_MARK), 2, SY(392), LCD_WIDTH - 2 * CARD_ARROW_HIT_W);
+    }
+    #pragma endregion
     drawGalleryNavigation(galleryDetail > 1, galleryDetail < 151);
     gfx->flush();
     return;
@@ -3140,13 +4373,23 @@ void renderGallery() {
       int x = GAL_X + c * GAL_CELL, y = GAL_Y + r * GAL_CELL;
       const uint8_t *t = thumbs.get(dex);
       if (t) {
-        drawGalleryGridThumb(t, x, y, !pet.isRegistered(dex));
+        bool raised = pet.isRegistered(dex);
+        bool caught = pet.isCaught(dex);
+        drawGalleryGridThumb(t, x, y, !raised && !caught);  // known = raised or caught
         if (pet.isShinyRegistered(dex)) {
           gfx->setTextColor(UI_BAR_WARN);
           setSize(2);
           setCur(x + GAL_CELL * 62 / 80, y + GAL_CELL * 4 / 80);  // offsets tuned for an 80 px cell
           printT("*");
         }
+        #pragma region Caught marker C: caught in a wild battle but never raised (bottom left of the cell)
+        if (caught && !raised) {
+          gfx->setTextColor(UI_BAR_OK);
+          setSize(BOARD_IS_ROUND ? 2 : 1);
+          setCur(x + GAL_CELL * 4 / 80, y + GAL_CELL * 58 / 80);
+          printT("C");
+        }
+        #pragma endregion
       } else {
         char num[6];
         snprintf(num, sizeof(num), "%d", dex);
@@ -3178,12 +4421,19 @@ void galleryShowNeighborSpecies(int step) {
   galleryPmd.load(neighborDex, pet.isShinyRegistered(neighborDex));
 }
 
-// Closes the gallery and returns to the settings menu it is opened from
-void galleryCloseToSettingsMenu() {
+// Opens the gallery on its first page (Pokedex button on the main screen)
+void openGallery() {
+  galleryOpen = true;
+  galleryPage = 0;
+  galleryDetail = 0;
+  galleryDirty = true;
+}
+
+// Closes the gallery and returns to the main screen it is opened from
+void closeGalleryToMainScreen() {
   galleryOpen = false;
   galleryDetail = 0;
   galleryPmd.unload();
-  settingsScreen = SETTINGS_MENU;
 }
 
 // Left/right arrows (same style and hit boxes as the info card) plus the round X.
@@ -3230,7 +4480,7 @@ void galleryTap(int16_t x, int16_t y) {
   }
   if (galleryNavigationHit(x, y, galleryPage > 0, galleryPage < 9, navigationStep, closeHit)) {
     if (closeHit) {
-      galleryCloseToSettingsMenu();
+      closeGalleryToMainScreen();
     } else {
       galleryPage += navigationStep;
       galleryDirty = true;
@@ -3322,6 +4572,11 @@ void drawHeaderWithLevel(const char *name, uint16_t nameColor) {
 // Menu button at the top left (main pet view and egg view)
 void drawHamburgerButton() {
   drawHamburgerIcon(gfx, HAMBURGER_X, HAMBURGER_Y, HAMBURGER_W, HAMBURGER_H, inkColor());
+}
+
+// Pokedex button under the hamburger (main pet view and egg view): opens the gallery
+void drawPokedexButton() {
+  drawMap(SPR_ICON_POKEDEX, 16, POKEDEX_BTN_X, POKEDEX_BTN_Y, POKEDEX_BTN_S, false);
 }
 
 // Current local time at the top right, in the format chosen on the time screen.
@@ -3665,6 +4920,12 @@ uint8_t pmdFrameAt(const PmdAct &a, uint32_t t, bool loop) {
 // draws an action anchored at its base (center-x, ground) and returns its scale
 // draws an action of a specific PmdMon (m); drawPmdAct uses the global pmd
 void drawPmdActM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS) {
+  drawPmdActResizedM(m, actId, cx, groundY, t, loop, sil, maxS, 100);
+}
+
+// same as drawPmdActM, then resized by sizePercent (100 = the usual whole-number zoom)
+void drawPmdActResizedM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS,
+                        uint16_t sizePercent) {
   const PmdAct &a = m.acts[actId];
   if (!a.frames) return;
   uint8_t sBase = m.acts[PMD_IDLE].h ? SY(170) / m.acts[PMD_IDLE].h : 5;
@@ -3675,25 +4936,56 @@ void drawPmdActM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool
   while (s > minS && a.h * s > SY(250)) s--;  // actions with a large frame (attack)
   // anchor by the feet (a.base), not by the canvas height: that way actions
   // with different padding (Hurt, Eat...) all sit at the same ground height
-  int x0 = cx - a.w * s / 2, y0 = groundY - (a.base ? a.base : a.h) * s;
-  drawPmdFrameAtScale(m, actId, x0, y0, t, loop, sil, s);
+  uint16_t scalePercent = (uint16_t)s * sizePercent;
+  int x0 = cx - a.w * scalePercent / 200, y0 = groundY - (a.base ? a.base : a.h) * scalePercent / 100;
+  drawPmdFrameAtScalePercent(m, actId, x0, y0, t, loop, sil, scalePercent);
 }
 
 //#region Draw the current frame of an action, canvas top-left at (canvasLeft, canvasTop), at a fixed scale
 void drawPmdFrameAtScale(PmdMon &m, uint8_t actId, int canvasLeft, int canvasTop, uint32_t t, bool loop, bool sil, uint8_t scale) {
+  drawPmdFrameAtScalePercent(m, actId, canvasLeft, canvasTop, t, loop, sil, (uint16_t)scale * 100);
+}
+
+// scalePercent 250 = x2.5: source pixel c covers screen x from scaledPixelEdge(c) up to scaledPixelEdge(c + 1),
+// so a fractional zoom still tiles with no gaps
+int scaledPixelEdge(int origin, int pixelIndex, uint16_t scalePercent) {
+  return origin + pixelIndex * scalePercent / 100;
+}
+
+void drawPmdFrameAtScalePercent(PmdMon &m, uint8_t actId, int canvasLeft, int canvasTop, uint32_t t, bool loop, bool sil,
+                                uint16_t scalePercent) {
   const PmdAct &a = m.acts[actId];
   if (!a.frames) return;
   uint8_t fi = pmdFrameAt(a, t, loop);
   const uint8_t *fr = m.frame(actId, fi);  // blob: direct pointer; streaming: reads 1 frame from the SD
+  lastSpriteDrawnBounds.valid = false;
   if (!fr) return;
+  int opaqueColumnMin = a.w, opaqueColumnMax = -1, opaqueRowMin = a.h, opaqueRowMax = -1;
   for (int r = 0; r < a.h; r++) {
     const uint8_t *row = fr + r * a.w;
+    int rowTop = scaledPixelEdge(canvasTop, r, scalePercent);
+    int rowHeight = scaledPixelEdge(canvasTop, r + 1, scalePercent) - rowTop;
+    if (rowHeight <= 0) continue;
     for (int c = 0; c < a.w; c++) {
       uint8_t idx = row[c];
       if (idx == 0xFF) continue;
-      gfx->fillRect(canvasLeft + c * scale, canvasTop + r * scale, scale, scale, sil ? INK_K : m.pal[idx]);
+      int columnLeft = scaledPixelEdge(canvasLeft, c, scalePercent);
+      int columnWidth = scaledPixelEdge(canvasLeft, c + 1, scalePercent) - columnLeft;
+      if (columnWidth > 0) gfx->fillRect(columnLeft, rowTop, columnWidth, rowHeight, sil ? INK_K : m.pal[idx]);
+      if (c < opaqueColumnMin) opaqueColumnMin = c;
+      if (c > opaqueColumnMax) opaqueColumnMax = c;
+      if (r < opaqueRowMin) opaqueRowMin = r;
+      opaqueRowMax = r;
     }
   }
+  #pragma region Remember the opaque pixel box on screen (coin chase pickup)
+  if (opaqueColumnMax >= 0) {
+    lastSpriteDrawnBounds = { (int16_t)scaledPixelEdge(canvasLeft, opaqueColumnMin, scalePercent),
+                              (int16_t)scaledPixelEdge(canvasTop, opaqueRowMin, scalePercent),
+                              (int16_t)(scaledPixelEdge(canvasLeft, opaqueColumnMax + 1, scalePercent) - 1),
+                              (int16_t)(scaledPixelEdge(canvasTop, opaqueRowMax + 1, scalePercent) - 1), true };
+  }
+  #pragma endregion
 }
 //#endregion
 void drawPmdAct(uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS) {

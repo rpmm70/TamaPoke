@@ -553,6 +553,108 @@ def icon_apple():
     ]
 
 
+#region Controller icon (main screen play button)
+def icon_controller():
+    # main screen play button: a gamepad with a d-pad on the left,
+    # four colored face buttons on the right and two grips at the bottom
+    return [
+        "................",
+        "................",
+        "................",
+        "...kkkkkkkkkk...",
+        "..kssssssssssk..",
+        ".ksskssssssrssk.",
+        ".kskkkssssbsfsk.",
+        ".ksskssSSssgssk.",
+        ".ksssssssssssSk.",
+        "kssssSkkkkSsssSk",
+        "ksssSk....ksssSk",
+        "kssSk......kssSk",
+        ".kkk........kkk.",
+        "................",
+        "................",
+        "................",
+    ]
+#endregion
+
+
+#region Swords icon (play menu: wild battle)
+def icon_swords():
+    # play menu item 2: two swords crossing in an X, blades up,
+    # gold guards and brown grips toward the bottom corners
+    return [
+        "..k..........k..",
+        ".kSk........ksk.",
+        ".kSsk......kwsk.",
+        "..kSsk....kwsk..",
+        "...kSsk..kwsk...",
+        "....kSskkwsk....",
+        ".....kSswsk.....",
+        "..k...kSsk...k..",
+        ".kYk.kwsSsk.kYk.",
+        "..kYkwskkSskYk..",
+        "...kfkk..kkfk...",
+        "..kckYk..kYkck..",
+        ".kCk.kYkkYk.kCk.",
+        "kfk...k..k...kfk",
+        ".k............k.",
+        "................",
+    ]
+#endregion
+
+
+#region Coin icon (play menu: coin chase)
+def icon_coin():
+    # play menu item 1: gold coin with a shine; swords move to item 2.
+    # Dark outline, darker gold rim with brown shading toward the bottom
+    # right, white shine at the upper left and an embossed bar in the middle
+    return [
+        "................",
+        ".....kkkkkk.....",
+        "...kkYYYYYYkk...",
+        "..kYYffffffYYk..",
+        ".kYfwwfffffffYk.",
+        ".kYwwffYYffffYk.",
+        ".kYwfffYYffffYk.",
+        ".kYffffYYffffYk.",
+        ".kYffffYYfffYCk.",
+        ".kYffffYYfffYCk.",
+        ".kYffffYYffYYCk.",
+        ".kYfffffffYYYCk.",
+        "..kYYYYYYYYCCk..",
+        "...kkCCCCCCkk...",
+        ".....kkkkkk.....",
+        "................",
+    ]
+#endregion
+
+
+#region Pokedex icon (main screen button under the hamburger)
+def icon_pokedex():
+    # red Pokedex front: raised top-left lid with the blue lens and two
+    # lights, a gray-framed dark screen, then the round button, green pad
+    # and d-pad along the bottom; the darker right column is the hinge
+    return [
+        "................",
+        ".kkkkkkkkkk.....",
+        ".krkkkrrrrrkkkk.",
+        ".kkwbbkrfrgrrRk.",
+        ".kkbbBkrrrrrrRk.",
+        ".krkkkrrRRRRRRk.",
+        ".krrrrrrrrrrrRk.",
+        ".krsssssssssrRk.",
+        ".krskkkkkkksrRk.",
+        ".krskkkkkkksrRk.",
+        ".krskkkkkkksrRk.",
+        ".krsssssssssrRk.",
+        ".krrrrrrrrrkrRk.",
+        ".krkkrgggrkkkRk.",
+        ".krrrrrrrrrkrRk.",
+        ".kkkkkkkkkkkkkk.",
+    ]
+#endregion
+
+
 def icon_berry_blue():
     # food item 1: hamburger (keeps the berry name used by the firmware)
     return [
@@ -619,6 +721,31 @@ def icon_candy():
     ]
 
 
+#region Coffee icon (food picker item 4)
+def icon_coffee():
+    # food item 4: white mug of coffee on a saucer, gray steam rising,
+    # brown coffee surface, handle on the right
+    return [
+        "................",
+        "......s...s.....",
+        ".....s...s......",
+        "......s...s.....",
+        ".....s...s......",
+        "................",
+        "..kkkkkkkkkkk...",
+        "..kCCcccccCCk...",
+        "..kwwwwwwwwskkk.",
+        "..kwwwwwwwwsk.k.",
+        "..kwwwwwwwwsk.k.",
+        "..kwwwwwwwwskkk.",
+        "...kwwwwwwsk....",
+        "....kkkkkkk.....",
+        ".kkkkkkkkkkkkk..",
+        "................",
+    ]
+#endregion
+
+
 def icon_clean():
     # bath button: side view of a clawfoot bathtub with bubbles
     return [
@@ -658,7 +785,12 @@ SPRITES = {
     "ICON_BERRY_B": icon_berry_blue(),
     "ICON_BERRY_G": icon_berry_green(),
     "ICON_CANDY": icon_candy(),
+    "ICON_COFFEE": icon_coffee(),
     "ICON_APPLE": icon_apple(),
+    "ICON_CONTROLLER": icon_controller(),
+    "ICON_SWORDS": icon_swords(),
+    "ICON_COIN": icon_coin(),
+    "ICON_POKEDEX": icon_pokedex(),
     "EGG": egg(),
     "POOP": poop(),
     "HEART": heart(),

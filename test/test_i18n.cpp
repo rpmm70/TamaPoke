@@ -55,6 +55,16 @@ static const ExpectedFmt EXPECTED[] = {
   { S_MISTAKES_FMT,    "%u" },
   { S_FAREWELL_BTN,    "%s" },
   { S_RUNAWAY_BTN,     "%s" },
+  //#region Wild battle formats
+  { S_ROUNDS_FMT,      "%u" },
+  { S_DAMAGE_FMT,      "%u,%u" },
+  { S_ROUND_SHORT_FMT, "%u" },
+  { S_HIT_FMT,         "%u" },
+  { S_RESTED_FMT,      "%u" },
+  { S_ATK_GAIN_FMT,    "%u" },
+  { S_DEF_GAIN_FMT,    "%u" },
+  { S_SPD_GAIN_FMT,    "%u" },
+  //#endregion
 };
 static const int NUM_EXPECTED = (int)(sizeof(EXPECTED) / sizeof(EXPECTED[0]));
 
@@ -193,6 +203,102 @@ TEST(i18n, el_menu_de_ajustes_cabe_en_pantalla) {
   }
   gLang = LANG_DEFAULT;
 }
+
+#pragma region Wild battle strings and type labels
+// The wild battle block is appended in a fixed order (see i18n.h). Every entry
+// must be filled in every language, and the *_FMT ones must carry exactly the
+// specifiers the battle UI passes.
+TEST(i18n, wild_battle_strings_are_filled_with_the_expected_formats) {
+  struct BattleStringCheck { StrId id; const char *expectedSignature; };
+  const BattleStringCheck battleStringChecks[] = {
+    { S_WILD_BATTLE, "(sin formato)" }, { S_WILD_Q, "(sin formato)" },
+    { S_FIGHT, "(sin formato)" }, { S_LATER, "(sin formato)" },
+    { S_RUN_BATTLE, "(sin formato)" }, { S_ATTACK, "(sin formato)" },
+    { S_DODGE, "(sin formato)" }, { S_REST, "(sin formato)" },
+    { S_QUICK_ATTACK, "(sin formato)" }, { S_HEAVY_ATTACK, "(sin formato)" },
+    { S_WIN, "(sin formato)" }, { S_LOSS, "(sin formato)" },
+    { S_ROUNDS_FMT, "%u" }, { S_DAMAGE_FMT, "%u,%u" }, { S_ROUND_SHORT_FMT, "%u" },
+    { S_HIT_FMT, "%u" }, { S_EFFECTIVE, "(sin formato)" },
+    { S_NOT_EFFECTIVE, "(sin formato)" }, { S_MISSED, "(sin formato)" },
+    { S_DODGED, "(sin formato)" }, { S_ENEMY_DODGED, "(sin formato)" },
+    { S_COUNTER_READY, "(sin formato)" }, { S_NO_REST, "(sin formato)" },
+    { S_RESTED_FMT, "%u" }, { S_GUARD, "(sin formato)" },
+    { S_CATCH_WILD, "(sin formato)" }, { S_LEAVE_WILD, "(sin formato)" },
+    { S_CAUGHT_OK, "(sin formato)" }, { S_ESCAPED, "(sin formato)" },
+    { S_CLOSE_CHANCE, "(sin formato)" },
+    { S_ATK_GAIN_FMT, "%u" }, { S_DEF_GAIN_FMT, "%u" }, { S_SPD_GAIN_FMT, "%u" },
+    { S_OK, "(sin formato)" }, { S_CAUGHT_MARK, "(sin formato)" },
+  };
+  const int battleStringCount = (int)(sizeof(battleStringChecks) / sizeof(battleStringChecks[0]));
+  #pragma region The block is complete and in order
+  CHECK_EQ(battleStringCount, 35);
+  for (int i = 0; i < battleStringCount; i++)
+    CHECK_EQ((int)battleStringChecks[i].id, (int)S_WILD_BATTLE + i);
+  #pragma endregion
+  #pragma region Every language has text and the right specifiers
+  for (int lang = 0; lang < LANG_COUNT; lang++) {
+    gLang = (Lang)lang;
+    for (const BattleStringCheck &stringCheck : battleStringChecks) {
+      const char *text = T(stringCheck.id);
+      char where[64];
+      snprintf(where, sizeof(where), "[%s][id %d]", LANG_NAME[lang], (int)stringCheck.id);
+      CHECK_MSG(text != NULL && text[0] != 0, std::string("empty battle string ") + where);
+      if (!text) continue;
+      std::string gotSignature = joinSpecs(specs(text));
+      CHECK_MSG(gotSignature == stringCheck.expectedSignature,
+                std::string("battle format ") + where + " \"" + text + "\": " + gotSignature +
+                ", expected " + stringCheck.expectedSignature);
+    }
+  }
+  gLang = LANG_DEFAULT;
+  #pragma endregion
+}
+
+// Battle buttons on the 320x240 screen hold 7 CP437 characters at most.
+// CJK is skipped: bytes are not on-screen width there (checked on the board).
+TEST(i18n, wild_battle_button_labels_fit_in_seven_characters) {
+  const StrId buttonLabelIds[] = { S_FIGHT, S_LATER, S_RUN_BATTLE, S_ATTACK, S_DODGE, S_REST,
+                                   S_CATCH_WILD, S_LEAVE_WILD, S_OK, S_QUICK_ATTACK,
+                                   S_HEAVY_ATTACK };
+  for (int lang = 0; lang < LANG_COUNT; lang++) {
+    if (LANG_IS_CJK(lang)) continue;
+    gLang = (Lang)lang;
+    for (StrId labelId : buttonLabelIds) {
+      const char *labelText = T(labelId);
+      char where[64];
+      snprintf(where, sizeof(where), "[%s][id %d]", LANG_NAME[lang], (int)labelId);
+      CHECK_MSG(strlen(labelText) <= 7, std::string("battle button label too long ") + where + ": " + labelText);
+    }
+  }
+  gLang = LANG_DEFAULT;
+}
+
+TEST(i18n, type_names_are_filled_in_every_language) {
+  for (int lang = 0; lang < LANG_COUNT; lang++) {
+    gLang = (Lang)lang;
+    char where[64];
+    snprintf(where, sizeof(where), "[%s]", LANG_NAME[lang]);
+    #pragma region TYPE_NONE and out of range give an empty label
+    CHECK_MSG(typeName(0) != NULL && typeName(0)[0] == 0, std::string("TYPE_NONE not empty ") + where);
+    CHECK_MSG(typeName(TYPE_NAME_COUNT) != NULL && typeName(TYPE_NAME_COUNT)[0] == 0,
+              std::string("out of range type not empty ") + where);
+    CHECK_MSG(typeName(255) != NULL && typeName(255)[0] == 0, std::string("type 255 not empty ") + where);
+    #pragma endregion
+    #pragma region Every real type has a short label without format specifiers
+    for (int type = 1; type < TYPE_NAME_COUNT; type++) {
+      const char *label = typeName((uint8_t)type);
+      snprintf(where, sizeof(where), "[%s][type %d]", LANG_NAME[lang], type);
+      CHECK_MSG(label != NULL && label[0] != 0, std::string("empty type label ") + where);
+      if (!label) continue;
+      CHECK_MSG(strchr(label, '%') == NULL, std::string("type label has a % ") + where);
+      if (!LANG_IS_CJK(lang))
+        CHECK_MSG(strlen(label) <= 8, std::string("type label too long ") + where + ": " + label);
+    }
+    #pragma endregion
+  }
+  gLang = LANG_DEFAULT;
+}
+#pragma endregion
 
 TEST(i18n, las_medallas_no_llevan_acentos) {
   for (int lang = 0; lang < LANG_COUNT; lang++) {

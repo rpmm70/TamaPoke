@@ -33,6 +33,9 @@
 // Speaker: bare GPIO pin, no I2S codec; driven with PWM tones (ledc)
 #define SPEAKER_PIN 26
 
+// BOOT button: GPIO0, active low. Screen on/off key (rtcbat_cyd.cpp pwrShortPressed)
+#define BOOT_BUTTON_PIN 0
+
 // RGB LED (active low) and LDR: not used yet
 #define LED_RED 4
 #define LED_GREEN 16

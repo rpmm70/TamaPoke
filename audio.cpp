@@ -104,11 +104,27 @@ static const Note N_MEDAL[]  = {{784, 70}, {0, 25}, {784, 70}, {0, 25}, {1047, 2
 static const Note N_DENY[]   = {{300, 110}, {200, 170}};
 static const Note N_BYE[]    = {{784, 150}, {659, 150}, {523, 280}};
 static const Note N_LEVEL[]  = {{784, 70}, {1047, 130}};
+#pragma region Wild battle and ball game notes
+// Kept under 400 ms each so a battle turn or a bounce never queues up a backlog.
+// Same notes as audio_cyd.cpp: if they change here, change them there.
+static const Note N_WILD_APPEAR[] = {{392, 50}, {523, 50}, {0, 15}, {784, 60}, {1047, 110}};
+static const Note N_BATTLE_HIT[]  = {{1175, 35}, {1568, 45}};
+static const Note N_BATTLE_HURT[] = {{300, 60}, {190, 80}};
+static const Note N_BATTLE_WIN[]  = {{659, 60}, {784, 60}, {988, 80}, {1319, 170}};
+static const Note N_BATTLE_LOSS[] = {{392, 110}, {330, 110}, {196, 170}};
+static const Note N_CATCH_OK[]    = {{784, 55}, {988, 65}, {1319, 180}};
+static const Note N_CATCH_FAIL[]  = {{523, 80}, {392, 80}, {0, 15}, {247, 180}};
+static const Note N_BALL_BOUNCE[] = {{820, 20}, {620, 25}};
+static const Note N_BALL_MISS[]   = {{360, 60}, {210, 100}};
+#pragma endregion
 
 struct SfxDef { const Note *n; uint8_t len; };
 static const SfxDef SFX[SFX_COUNT] = {
   {N_TAP, 1}, {N_EAT, 3}, {N_PLAY, 2}, {N_HEART, 2}, {N_HATCH, 4},
   {N_EVOLVE, 5}, {N_MEDAL, 5}, {N_DENY, 2}, {N_BYE, 3}, {N_LEVEL, 2},
+  {N_WILD_APPEAR, 5}, {N_BATTLE_HIT, 2}, {N_BATTLE_HURT, 2}, {N_BATTLE_WIN, 4},
+  {N_BATTLE_LOSS, 3}, {N_CATCH_OK, 3}, {N_CATCH_FAIL, 4}, {N_BALL_BOUNCE, 2},
+  {N_BALL_MISS, 2},
 };
 
 static int16_t buf[256 * 2];  // interleaved stereo (L=R)

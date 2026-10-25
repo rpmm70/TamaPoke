@@ -343,6 +343,127 @@ uint16_t Pet::registeredCount() const {
   return n;
 }
 
+#pragma region Wild battles and catching
+uint16_t Pet::caughtCount() const {
+  uint16_t caughtTotal = 0;
+  for (int16_t dex = 1; dex <= DEX_COUNT; dex++)
+    if (isCaught(dex)) caughtTotal++;
+  return caughtTotal;
+}
+
+void Pet::registerCaught(int16_t dex, bool shinyVariant) {
+  if (dex < 1 || dex > DEX_COUNT) return;
+  dexCaught[(dex - 1) >> 3] |= (1 << ((dex - 1) & 7));
+  if (shinyVariant) dexShinyReg[(dex - 1) >> 3] |= (1 << ((dex - 1) & 7));
+  save();
+}
+
+// a battle started from the play menu (swords) instead of a wild encounter keeps
+// this percent of the normal catch chance (the encounter is the rarer event)
+#define REQUESTED_BATTLE_CATCH_PCT 70
+
+uint8_t Pet::catchChanceForWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel, bool closeWin,
+                                bool requestedBattle) const {
+  if (wildDex < 1 || wildDex > DEX_COUNT) return 0;
+  const DexEntry &wild = DEX_TBL[wildDex];
+  if (wild.rarity == R_LEGENDARIO) return 0;
+  int chance = wild.rarity == R_RARO ? 28 : 55;
+  int levelGap = (int)wildLevel - (int)(petLevel ? petLevel : 1);
+  if (levelGap > 0) chance -= levelGap * 4;
+  else if (levelGap < 0) chance += (-levelGap) * 2;
+  if (closeWin) chance += 8;
+  chance += bond / 20;
+  // the fork adds a step-counter bonus here; this port has no pedometer (bonus 0)
+  if (wild.rarity == R_RARO && chance > 60) chance = 60;
+  if (chance > 75) chance = 75;
+  if (chance < 10) chance = 10;
+  if (requestedBattle) chance = chance * REQUESTED_BATTLE_CATCH_PCT / 100;  // 7..52
+  return (uint8_t)chance;
+}
+
+uint8_t Pet::respectCatchChanceForWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel,
+                                       bool requestedBattle) const {
+  uint8_t normalChance = catchChanceForWild(wildDex, wildLevel, petLevel, true, requestedBattle);
+  if (normalChance == 0) return 0;
+  uint8_t chance = (uint8_t)((uint16_t)normalChance * 40 / 100);
+  if (chance < 5) chance = 5;
+  if (chance > 25) chance = 25;
+  return chance;
+}
+
+bool Pet::tryCatchWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel, bool closeWin,
+                       uint8_t luckRoll, bool shinyVariant, bool requestedBattle) {
+  uint8_t chance = catchChanceForWild(wildDex, wildLevel, petLevel, closeWin, requestedBattle);
+  if (chance == 0) return false;
+  if ((luckRoll % 100) < chance) {
+    registerCaught(wildDex, shinyVariant);
+    joy = clamp100((int)joy + 4);
+    addBond(1);
+    save();
+    return true;
+  }
+  return false;
+}
+
+bool Pet::tryRespectCatchWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel,
+                              uint8_t luckRoll, bool shinyVariant, bool requestedBattle) {
+  uint8_t chance = respectCatchChanceForWild(wildDex, wildLevel, petLevel, requestedBattle);
+  if (chance == 0) return false;
+  if ((luckRoll % 100) < chance) {
+    registerCaught(wildDex, shinyVariant);
+    save();
+    return true;
+  }
+  return false;
+}
+
+BattleReward Pet::applyBattleWin(int16_t wildDex, bool closeWin) {
+  BattleReward reward;
+  if (ceremony != CER_NONE || isEgg()) return reward;
+  if (wildDex < 1 || wildDex > DEX_COUNT) wildDex = 1;
+  const DexEntry &wild = DEX_TBL[wildDex];
+
+  #pragma region Training reward
+  reward.amount = (wild.rarity == R_RARO) ? 2 : 1;
+  if (closeWin) reward.amount++;
+  if (wild.bAtk >= wild.bDef && wild.bAtk >= wild.bSpe) {
+    reward.stat = BATTLE_REWARD_DEF;  // a hard hitter teaches defense
+    trDef = clamp100((int)trDef + reward.amount);
+  } else if (wild.bDef >= wild.bAtk && wild.bDef >= wild.bSpe) {
+    reward.stat = BATTLE_REWARD_ATK;  // a tank teaches attack
+    trAtk = clamp100((int)trAtk + reward.amount);
+  } else {
+    reward.stat = BATTLE_REWARD_SPE;
+    trSpe = clamp100((int)trSpe + reward.amount);
+  }
+  #pragma endregion
+
+  #pragma region Counters and mood
+  battleWins++;
+  battleStreak++;
+  if (battleStreak > bestBattleStreak) bestBattleStreak = battleStreak;
+  joy = clamp100((int)joy + 8 + (closeWin ? 4 : 0));
+  energy = dropTo(energy, 8, 20);
+  fullness = dropTo(fullness, 3, 10);
+  addBond(closeWin ? 3 : 2);
+  registerCare();
+  #pragma endregion
+
+  save();
+  return reward;
+}
+
+void Pet::applyBattleLoss() {
+  if (ceremony != CER_NONE || isEgg()) return;
+  battleLosses++;
+  battleStreak = 0;
+  joy = dropTo(joy, 12, 20);
+  energy = dropTo(energy, 18, 20);
+  fullness = dropTo(fullness, 4, 10);
+  save();
+}
+#pragma endregion
+
 // final form that has completed its cycle (7 days): ready to say goodbye. The
 // user triggers the farewell with the button (it does not fire on its own, so they see it)
 bool Pet::canFarewellNow() const {
@@ -468,21 +589,59 @@ void Pet::feedCandy() {
   save();
 }
 
-void Pet::playResult(uint8_t score) {
-  if (ceremony != CER_NONE || isEgg()) return;
-  uint8_t v = trSpe + score / 5;  // playing trains speed
-  trSpe = v > 100 ? 100 : v;
+#pragma region Coffee
+// a pick-me-up: restores energy but spoils the appetite. Not a berry color, so
+// it can never be the favorite food (no heart, no bond, no berryKnown)
+void Pet::feedCoffee() {
+  if (ceremony != CER_NONE) return;
+  if (isEgg() || sleeping) return;
+  energy = clamp100(energy + 25);
+  fullness = dropTo(fullness, 10, 0);
+  eatUntil = millis() + EAT_ANIM_MS;
+  registerCare();
+  save();
+}
+#pragma endregion
+
+#pragma region Play session effects
+// mood, tiredness, weight and bond after a ball game or a coin chase; saves
+void Pet::applyPlaySessionEffects(uint8_t score) {
   joy = clamp100(joy + 5 + (score > 15 ? 30 : score * 2));
   energy = dropTo(energy, 10 + score / 2, 5);
   fullness = dropTo(fullness, 5, 5);
   int burn = (int)weight - score * 2;  // exercise burns weight
   weight = burn > 0 ? burn : 0;
   if (score >= 5) heartUntil = millis() + HEART_MS;
-  if (score > gameHi) gameHi = score;  // new record
   addBond(2);
   registerCare();
   save();
 }
+#pragma endregion
+
+void Pet::playResult(uint8_t score) {
+  if (ceremony != CER_NONE || isEgg()) return;
+  // the ball game trains attack: +1 per 5 points, at most +2 per game
+  uint8_t attackGain = score / 5 > 2 ? 2 : score / 5;
+  uint16_t raisedAttack = (uint16_t)trAtk + attackGain;
+  trAtk = raisedAttack > 100 ? 100 : (uint8_t)raisedAttack;
+  if (score > gameHi) gameHi = score;  // new record
+  applyPlaySessionEffects(score);
+}
+
+#pragma region Coin chase reward
+// coin chase: points (0-15) train speed. Returns the gain.
+uint8_t Pet::coinChaseResult(uint8_t points) {
+  if (ceremony != CER_NONE || isEgg()) return 0;
+  uint8_t gain = points >= 10 ? 2 : (points >= 5 ? 1 : 0);
+  uint8_t speedBefore = trSpe;
+  uint16_t raisedSpeed = (uint16_t)trSpe + gain;
+  trSpe = raisedSpeed > 100 ? 100 : (uint8_t)raisedSpeed;
+  gain = trSpe - speedBefore;         // what actually went in after capping at 100
+  if (points > coinHi) coinHi = points;  // new record
+  applyPlaySessionEffects(points);
+  return gain;
+}
+#pragma endregion
 
 // training bag: hits train strength. Returns the gain.
 uint8_t Pet::trainStrength(uint16_t hits) {
@@ -594,8 +753,16 @@ void Pet::save() {
   prefs.putUShort("tmedal", totalMedals);
   prefs.putUShort("mstone", lastMilestone);
   prefs.putUShort("ghi", gameHi);
+  prefs.putUShort("chi", coinHi);
   prefs.putUShort("shi", strHi);
   prefs.putString("nick", nick);
+  #pragma region Wild battle state
+  prefs.putBytes("dexcgt", dexCaught, sizeof(dexCaught));
+  prefs.putUShort("bwin", battleWins);
+  prefs.putUShort("bloss", battleLosses);
+  prefs.putUShort("bstk", battleStreak);
+  prefs.putUShort("bbstk", bestBattleStreak);
+  #pragma endregion
 }
 
 void Pet::load() {
@@ -646,8 +813,16 @@ void Pet::load() {
   totalMedals = prefs.getUShort("tmedal", 0);
   lastMilestone = prefs.getUShort("mstone", 0);
   gameHi = prefs.getUShort("ghi", 0);
+  coinHi = prefs.getUShort("chi", 0);
   strHi = prefs.getUShort("shi", 0);
   prefs.getString("nick", nick, sizeof(nick));
+  #pragma region Wild battle state
+  prefs.getBytes("dexcgt", dexCaught, sizeof(dexCaught));
+  battleWins = prefs.getUShort("bwin", 0);
+  battleLosses = prefs.getUShort("bloss", 0);
+  battleStreak = prefs.getUShort("bstk", 0);
+  bestBattleStreak = prefs.getUShort("bbstk", 0);
+  #pragma endregion
   // seed: the current pet counts as raised (old saves)
   if (speciesId >= 1) registerSpecies(speciesId);
 }

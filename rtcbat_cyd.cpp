@@ -62,7 +62,32 @@ bool batCharging() { return false; }
 int batMillivolts() { return 0; }
 bool usbPresent() { return true; }  // this board only runs plugged into USB
 
-void pwrSetup() {}
-bool pwrShortPressed() { return false; }
+#pragma region BOOT button (GPIO0) as the screen on/off key
+// No PMU power key on this board: the BOOT button stands in for it. GPIO0 is a
+// strapping pin, but after boot it is a normal input (active low, with the
+// board's pull-up). The loop polls only every 250 ms, so a falling-edge
+// interrupt latches the press instead of hoping a short tap is still held.
+#define BOOT_BUTTON_DEBOUNCE_MS 200
+static volatile bool bootButtonPressLatched = false;
+static volatile uint32_t bootButtonLastPressMs = 0;
+
+static void IRAM_ATTR onBootButtonFalling() {
+  uint32_t nowMs = millis();
+  if (nowMs - bootButtonLastPressMs < BOOT_BUTTON_DEBOUNCE_MS) return;  // contact bounce
+  bootButtonLastPressMs = nowMs;
+  bootButtonPressLatched = true;
+}
+
+void pwrSetup() {
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BOOT_BUTTON_PIN), onBootButtonFalling, FALLING);
+}
+
+bool pwrShortPressed() {
+  if (!bootButtonPressLatched) return false;
+  bootButtonPressLatched = false;
+  return true;
+}
+#pragma endregion
 
 #endif  // BOARD_CYD_RECT

@@ -213,3 +213,42 @@ TEST(dex, dexName_fuera_de_rango_no_revienta) {
   }
   gLang = LANG_DEFAULT;
 }
+
+#pragma region Battle types
+
+TEST(dex, unused_entry_zero_has_no_battle_types) {
+  CHECK_EQ((int)DEX_TBL[0].type1, (int)TYPE_NONE);
+  CHECK_EQ((int)DEX_TBL[0].type2, (int)TYPE_NONE);
+}
+
+TEST(dex, every_species_has_a_valid_primary_battle_type) {
+  for (int species = 1; species <= N; species++) {
+    const DexEntry &entry = DEX_TBL[species];
+    CHECK_MSG(entry.type1 != TYPE_NONE, std::string("no primary battle type: ") + entry.name);
+    CHECK_MSG(entry.type1 < TYPE_COUNT, std::string("primary battle type out of range: ") + entry.name);
+    CHECK_MSG(entry.type2 < TYPE_COUNT, std::string("secondary battle type out of range: ") + entry.name);
+    CHECK_MSG(entry.type1 != entry.type2, std::string("same battle type twice: ") + entry.name);
+  }
+}
+
+TEST(dex, battle_types_follow_the_modern_chart) {
+  CHECK_EQ((int)DEX_TBL[1].type1, (int)TYPE_GRASS);     // Bulbasaur
+  CHECK_EQ((int)DEX_TBL[1].type2, (int)TYPE_POISON);
+  CHECK_EQ((int)DEX_TBL[6].type1, (int)TYPE_FIRE);      // Charizard
+  CHECK_EQ((int)DEX_TBL[6].type2, (int)TYPE_FLYING);
+  CHECK_EQ((int)DEX_TBL[35].type1, (int)TYPE_FAIRY);    // Clefairy (Normal before gen 6)
+  CHECK_EQ((int)DEX_TBL[35].type2, (int)TYPE_NONE);
+  CHECK_EQ((int)DEX_TBL[81].type1, (int)TYPE_ELECTRIC); // Magnemite (Steel since gen 2)
+  CHECK_EQ((int)DEX_TBL[81].type2, (int)TYPE_STEEL);
+  CHECK_EQ((int)DEX_TBL[94].type1, (int)TYPE_GHOST);    // Gengar
+  CHECK_EQ((int)DEX_TBL[94].type2, (int)TYPE_POISON);
+  CHECK_EQ((int)DEX_TBL[151].type1, (int)TYPE_PSYCHIC); // Mew
+  CHECK_EQ((int)DEX_TBL[151].type2, (int)TYPE_NONE);
+}
+
+TEST(dex, caught_bitmap_has_one_bit_per_species) {
+  CHECK_EQ((int)DEX_BITMAP_BYTES, (DEX_COUNT + 7) / 8);
+  CHECK_MSG(DEX_BITMAP_BYTES * 8 >= DEX_COUNT, "the caught bitmap is too small for the dex");
+}
+
+#pragma endregion

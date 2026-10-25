@@ -39,6 +39,8 @@
 // uniform scale (by height) for drawings that must keep their proportions
 #define SK(v) (((int32_t)(v) * LCD_HEIGHT) / 466)
 #define SKM(v) (SK(v) < 1 ? 1 : SK(v))
+// SK() for fractional values (ball physics): same ratio, without integer truncation
+#define SKF(v) ((float)(v) * (float)LCD_HEIGHT / 466.0f)
 
 #if BOARD_IS_ROUND
   // text size: identity
@@ -59,6 +61,12 @@
   #define HAMBURGER_W 30
   #define HAMBURGER_H 20
   #define HAMBURGER_HIT_R 32
+  // Pokedex button: 16x16 icon at x2 under the hamburger, same center x (83);
+  // its bottom-left corner (67, 164) is 180 px from the center
+  #define POKEDEX_BTN_S 2
+  #define POKEDEX_BTN_X (HAMBURGER_X + HAMBURGER_W / 2 - 8 * POKEDEX_BTN_S)
+  #define POKEDEX_BTN_Y 132
+  #define POKEDEX_BTN_HIT_R 26
   #define HDR_NAME_MAX_W (LCD_WIDTH - 80)
   // clock: digits at size 3 (y 26..50, just above the name), AM/PM at size 2;
   // its top-right corner (330, 26) is 229 px from the center
@@ -85,12 +93,13 @@
   #define STARTER_TH_CELL 80
   #define STARTER_TH_S 3
   #define STARTER_R 14
-  // food picker
-  #define FEED_X 101
-  #define FEED_Y 288
-  #define FEED_W 264
-  #define FEED_H 64
+  // food picker: apple / hamburger / pizza / candy / coffee; corners stay inside the bezel (farthest 203 px)
   #define FEED_ITEM 66
+  #define FEED_ITEM_COUNT 5
+  #define FEED_W (FEED_ITEM_COUNT * FEED_ITEM)
+  #define FEED_X (CX - FEED_W / 2)
+  #define FEED_Y 288
+  #define FEED_H 64
   #define FEED_ICON_S 3
   #define FEED_R 14
   // "release?" dialog
@@ -276,6 +285,13 @@
   #define GALLERY_THUMB_SCALE_DEN 2
   // Detail header ends left of the close button (x 340)
   #define GALLERY_DETAIL_HEADER_MAXW 190
+  // Detail type chips, centered under the header (header ends y 80, chips y 100..126)
+  #define GALLERY_DETAIL_TYPES_Y 100
+  #define GALLERY_TYPE_CHIP_TEXT_SIZE 2
+  #define GALLERY_TYPE_CHIP_H 26
+  #define GALLERY_TYPE_CHIP_PAD 10
+  #define GALLERY_TYPE_CHIP_R 8
+  #define GALLERY_TYPE_CHIP_GAP 8
   //#endregion
   #define MED_X0 28
   #define MED_COLSTEP 206
@@ -320,14 +336,164 @@
   #define NEEDS_BAR_W_MIN 40
   #define NEEDS_COLUMN_SPACING 42
   //#endregion
-  #define LIFE_X0 180
+  // ball game top: record line, then the lives (three dots, the middle one on CX)
+  #define BALL_RECORD_Y 36
+  #define LIFE_X0 (CX - LIFE_DX)
   #define LIFE_DX 28
-  #define LIFE_Y 104
+  #define LIFE_Y 64
   #define LIFE_R 6
+  //#region Minigame score line (bottom, centered): ball game and coin chase
+  #define MINIGAME_SCORE_Y 404
+  #define MINIGAME_SCORE_TEXT_SIZE 2
+  #define MINIGAME_SCORE_MAX_W 260
+  //#endregion
   #define BALL_S 3
   #define BALL_OFF 24
-  #define GAME_PET_Y 394
+  #define GAME_PET_Y (MINIGAME_SCORE_Y - 10)  // ball game: feet just above the score line
   #define PET_HEART_SCALE 2  // "likes it" heart over the creature (32 px bitmap)
+  //#region Ball game: smallest touch radius around the ball (the fork's radii are used as is)
+  #define BALL_HIT_RADIUS_MIN 0
+  //#endregion
+  //#region Play picker: ball / coin / swords strip (food picker style, 3 items, centered under the play button)
+  #define PLAY_MENU_ITEM 66
+  #define PLAY_MENU_ITEM_COUNT 3
+  #define PLAY_MENU_W (PLAY_MENU_ITEM_COUNT * PLAY_MENU_ITEM)
+  #define PLAY_MENU_X (CX - PLAY_MENU_W / 2)
+  #define PLAY_MENU_Y 288
+  #define PLAY_MENU_H 64
+  #define PLAY_MENU_ICON_S 3
+  #define PLAY_MENU_R 14
+  //#endregion
+  //#region Coin chase: timer (top middle), coin and sprite sizes, play area inside the bezel
+  #define COIN_TIMER_Y 40
+  #define COIN_TIMER_TEXT_SIZE 4
+  #define COIN_RADIUS 14
+  #define COIN_PET_MAX_SCALE 2
+  #define COIN_PET_SIZE_PERCENT 125  // x2 zoom grown to x2.5
+  #define COIN_PET_BODY_OFFSET 45    // body center sits this far above the feet
+  #define COIN_PLAY_RADIUS 170       // body center stays inside this circle around (CX, CY)
+  #define COIN_PLAY_TOP 92           // below the timer and the close button
+  #define COIN_PLAY_BOTTOM 384       // above the score line
+  #define COIN_SPAWN_MIN_DISTANCE 120
+  //#endregion
+  //#region Wild encounter prompt: question, species line, FIGHT / LATER buttons (the fork's literals)
+  #define WILD_PROMPT_X 82
+  #define WILD_PROMPT_Y 156
+  #define WILD_PROMPT_W 302
+  #define WILD_PROMPT_H 178
+  #define WILD_PROMPT_R 18
+  #define WILD_PROMPT_TITLE_Y 176
+  #define WILD_PROMPT_TITLE_SIZE 3
+  #define WILD_PROMPT_NAME_Y 206
+  #define WILD_PROMPT_NAME_SIZE 2
+  #define WILD_PROMPT_BTN_X 93
+  #define WILD_PROMPT_BTN_W 280
+  #define WILD_PROMPT_BTN_H 44
+  #define WILD_PROMPT_BTN_R 12
+  #define WILD_PROMPT_BTN_TEXT_SIZE 2
+  #define WILD_PROMPT_FIGHT_Y 226
+  #define WILD_PROMPT_LATER_Y 278
+  //#endregion
+  //#region Wild battle: title, two info columns, run button (the fork's literals)
+  #define BATTLE_TITLE_Y 34
+  #define BATTLE_TITLE_SIZE 3
+  #define BATTLE_TITLE_MAX_W 300
+  #define BATTLE_NAME_Y 82
+  #define BATTLE_NAME_SIZE 2
+  #define BATTLE_NAME_MAX_W 160
+  #define BATTLE_PET_NAME_X 28
+  #define BATTLE_WILD_NAME_RIGHT 408
+  #define BATTLE_HP_Y 110
+  #define BATTLE_HP_W 150
+  #define BATTLE_HP_H 14
+  #define BATTLE_HP_R 4
+  #define BATTLE_PET_HP_X 28
+  #define BATTLE_WILD_HP_X 288
+  #define BATTLE_CHIP_Y 130
+  #define BATTLE_CHIP_H 16
+  #define BATTLE_CHIP_R 5
+  #define BATTLE_CHIP_PAD 7
+  #define BATTLE_CHIP_GAP 4
+  #define BATTLE_PET_CHIP_X 28
+  #define BATTLE_WILD_CHIP_RIGHT 438
+  // caught marker: pokeball icon left of the wild type chips
+  #define BATTLE_CAUGHT_DX 36
+  #define BATTLE_CAUGHT_Y 122
+  #define BATTLE_CAUGHT_S 2
+  #define BATTLE_RUN_X 188
+  #define BATTLE_RUN_Y 102
+  #define BATTLE_RUN_W 90
+  #define BATTLE_RUN_H 32
+  #define BATTLE_RUN_R 9
+  #define BATTLE_RUN_HIT_X 184
+  #define BATTLE_RUN_HIT_Y 100
+  #define BATTLE_RUN_HIT_W 98
+  #define BATTLE_RUN_HIT_H 36
+  //#endregion
+  //#region Wild battle: sprites (feet on BATTLE_GROUND_Y) and the thumbnail fallback
+  #define BATTLE_PET_CX 142
+  #define BATTLE_WILD_CX 328
+  #define BATTLE_GROUND_Y 272
+  #define BATTLE_SPRITE_MAX_S 3
+  #define BATTLE_PET_THUMB_X 94
+  #define BATTLE_WILD_THUMB_X 280
+  #define BATTLE_THUMB_Y 152
+  #define BATTLE_THUMB_S 3
+  #define BATTLE_THUMB_CELL 64
+  //#endregion
+  //#region Wild battle: last turn's moves, one line centered under each sprite (y 318..334)
+  // boxes x 52..232 and 238..418, inside the circle at that height (chord x 16..450)
+  #define BATTLE_MOVE_Y 318
+  #define BATTLE_MOVE_SIZE 2
+  #define BATTLE_MOVE_W 180
+  //#endregion
+  //#region Wild battle: Attack / Dodge / Rest buttons and the Quick / Heavy overlay
+  // hit boxes = the drawn box grown by the *_HIT_PAD_* margins (the fork's generous areas)
+  #define BATTLE_ACTION_Y 358
+  #define BATTLE_ACTION_W 108
+  #define BATTLE_ACTION_H 58
+  #define BATTLE_ACTION_R 13
+  #define BATTLE_ATTACK_X 58
+  #define BATTLE_DODGE_X 179
+  #define BATTLE_REST_X 300
+  #define BATTLE_ACTION_HIT_PAD_X 12
+  #define BATTLE_ACTION_HIT_PAD_Y 14
+  #define BATTLE_ATTACK_MENU_Y 298
+  #define BATTLE_ATTACK_MENU_W 150
+  #define BATTLE_ATTACK_MENU_H 46
+  #define BATTLE_ATTACK_MENU_R 12
+  #define BATTLE_QUICK_X 74
+  #define BATTLE_HEAVY_X 242
+  #define BATTLE_ATTACK_MENU_HIT_PAD_X 8
+  #define BATTLE_ATTACK_MENU_HIT_PAD_Y 6
+  #define BATTLE_BTN_TEXT_SIZE 2
+  //#endregion
+  //#region Wild battle result: WIN / LOSS, rounds and damage, reward line, Catch / Leave or OK
+  // no panel behind the text on the round board (BATTLE_RESULT_PANEL_W 0)
+  #define BATTLE_RESULT_PANEL_X 0
+  #define BATTLE_RESULT_PANEL_Y 0
+  #define BATTLE_RESULT_PANEL_W 0
+  #define BATTLE_RESULT_PANEL_H 0
+  #define BATTLE_RESULT_PANEL_R 0
+  #define BATTLE_RESULT_TEXT_MAX_W 300
+  #define BATTLE_RESULT_TITLE_Y 300
+  #define BATTLE_RESULT_TITLE_SIZE 4
+  #define BATTLE_RESULT_ROUNDS_Y 334
+  #define BATTLE_RESULT_DAMAGE_Y 356
+  #define BATTLE_RESULT_LINE_SIZE 2
+  #define BATTLE_RESULT_INFO_Y 378
+  #define BATTLE_RESULT_INFO_SIZE 2
+  #define BATTLE_RESULT_BTN_Y 396
+  #define BATTLE_RESULT_BTN_H 52
+  #define BATTLE_RESULT_BTN_R 14
+  #define BATTLE_CATCH_X 76
+  #define BATTLE_LEAVE_X 242
+  #define BATTLE_CATCH_W 148
+  #define BATTLE_OK_X 118
+  #define BATTLE_OK_W 230
+  #define BATTLE_OK_TEXT_SIZE 3
+  #define BATTLE_RESULT_HIT_PAD_Y 4
+  //#endregion
 #else
   // 320x240: text 7->5, 6/5/4->3, 3->2, rest unchanged
   #define TS(n) ((n) >= 7 ? 5 : (n) >= 4 ? 3 : (n) == 3 ? 2 : (n))
@@ -345,6 +511,11 @@
   #define HAMBURGER_W 24
   #define HAMBURGER_H 17
   #define HAMBURGER_HIT_R 26
+  // Pokedex button: 16x16 icon at x2 under the hamburger, same center x (18), y 30..62
+  #define POKEDEX_BTN_S 2
+  #define POKEDEX_BTN_X (HAMBURGER_X + HAMBURGER_W / 2 - 8 * POKEDEX_BTN_S)
+  #define POKEDEX_BTN_Y 30
+  #define POKEDEX_BTN_HIT_R 20
   // name x 82..238, so it clears the widest clock ("12:59 PM": x 240..316)
   #define HDR_NAME_MAX_W 156
   // clock: digits at size 2 (y 4..20), AM/PM at size 1
@@ -370,11 +541,13 @@
   #define STARTER_TH_CELL 56
   #define STARTER_TH_S 2
   #define STARTER_R 10
-  #define FEED_X 44
-  #define FEED_Y 150
-  #define FEED_W 232
-  #define FEED_H 44
+  // food picker: apple / hamburger / pizza / candy / coffee (x 15..305)
   #define FEED_ITEM 58
+  #define FEED_ITEM_COUNT 5
+  #define FEED_W (FEED_ITEM_COUNT * FEED_ITEM)
+  #define FEED_X (CX - FEED_W / 2)
+  #define FEED_Y 150
+  #define FEED_H 44
   #define FEED_ICON_S 2
   #define FEED_R 10
   #define CONF_X 20
@@ -550,6 +723,13 @@
   #define GALLERY_THUMB_SCALE_NUM 1
   #define GALLERY_THUMB_SCALE_DEN 1
   #define GALLERY_DETAIL_HEADER_MAXW 234
+  // Detail type chips, centered under the header (size-3 header ends y 52, chips y 60..80)
+  #define GALLERY_DETAIL_TYPES_Y 60
+  #define GALLERY_TYPE_CHIP_TEXT_SIZE 2
+  #define GALLERY_TYPE_CHIP_H 20
+  #define GALLERY_TYPE_CHIP_PAD 6
+  #define GALLERY_TYPE_CHIP_R 5
+  #define GALLERY_TYPE_CHIP_GAP 6
   //#endregion
   // medal grid narrowed (was x 12..308) so it stays clear of the page arrows
   #define MED_X0 26
@@ -592,14 +772,166 @@
   #define NEEDS_BAR_W_MIN 40
   #define NEEDS_COLUMN_SPACING 24
   //#endregion
-  #define LIFE_X0 SX(180)
+  // ball game top: record line, then the lives (three dots, the middle one on CX)
+  #define BALL_RECORD_Y 10
+  #define LIFE_X0 (CX - LIFE_DX)
   #define LIFE_DX 14
-  #define LIFE_Y 60
+  #define LIFE_Y 34
   #define LIFE_R 4
+  //#region Minigame score line (bottom, centered): ball game and coin chase
+  #define MINIGAME_SCORE_Y (LCD_HEIGHT - 18)
+  #define MINIGAME_SCORE_TEXT_SIZE 2
+  #define MINIGAME_SCORE_MAX_W (LCD_WIDTH - 20)
+  //#endregion
   #define BALL_S 2
   #define BALL_OFF 16
-  #define GAME_PET_Y (LCD_HEIGHT - 6)
+  #define GAME_PET_Y (MINIGAME_SCORE_Y - 4)  // ball game: feet just above the score line
   #define PET_HEART_SCALE 1  // "likes it" heart over the creature (32 px bitmap)
+  //#region Ball game: smallest touch radius around the ball (resistive touch needs slack)
+  #define BALL_HIT_RADIUS_MIN 30
+  //#endregion
+  //#region Play picker: ball / coin / swords strip (food picker style, 3 items of 64 px, centered)
+  #define PLAY_MENU_ITEM 64
+  #define PLAY_MENU_ITEM_COUNT 3
+  #define PLAY_MENU_W (PLAY_MENU_ITEM_COUNT * PLAY_MENU_ITEM)
+  #define PLAY_MENU_X (CX - PLAY_MENU_W / 2)
+  #define PLAY_MENU_Y 148
+  #define PLAY_MENU_H 48
+  #define PLAY_MENU_ICON_S 2
+  #define PLAY_MENU_R 10
+  //#endregion
+  //#region Coin chase: timer (top middle), coin and sprite sizes, play rectangle
+  #define COIN_TIMER_Y 6
+  #define COIN_TIMER_TEXT_SIZE 4
+  #define COIN_RADIUS 9
+  #define COIN_PET_MAX_SCALE 1
+  #define COIN_PET_SIZE_PERCENT 125  // x1 zoom grown to x1.25
+  #define COIN_PET_BODY_OFFSET 25    // body center sits this far above the feet
+  #define COIN_PLAY_LEFT 24          // body center stays inside this rectangle
+  #define COIN_PLAY_RIGHT (LCD_WIDTH - 24)
+  #define COIN_PLAY_TOP 44           // below the timer and the close button
+  #define COIN_PLAY_BOTTOM (LCD_HEIGHT - 44)  // above the score line
+  #define COIN_SPAWN_MIN_DISTANCE 70
+  //#endregion
+  //#region Wild encounter prompt: 280x150 box centered (y 45..195), buttons 248x44 stacked
+  #define WILD_PROMPT_X 20
+  #define WILD_PROMPT_Y 45
+  #define WILD_PROMPT_W 280
+  #define WILD_PROMPT_H 150
+  #define WILD_PROMPT_R 12
+  #define WILD_PROMPT_TITLE_Y 51
+  #define WILD_PROMPT_TITLE_SIZE 2
+  #define WILD_PROMPT_NAME_Y 73
+  #define WILD_PROMPT_NAME_SIZE 2
+  #define WILD_PROMPT_BTN_X 36
+  #define WILD_PROMPT_BTN_W 248
+  #define WILD_PROMPT_BTN_H 44
+  #define WILD_PROMPT_BTN_R 10
+  #define WILD_PROMPT_BTN_TEXT_SIZE 2
+  #define WILD_PROMPT_FIGHT_Y 95
+  #define WILD_PROMPT_LATER_Y 145
+  //#endregion
+  //#region Wild battle: title (y 2..18), two info columns (y 20..54), run button top right
+  // Columns x 6..156 (pet) and x 164..314 (wild): name (y 20..36), HP bar (y 37..42),
+  // type chips (y 43..53). The run button sits where the close X normally is; its
+  // hit box (x 250..320, y 0..40) is larger than the drawn pill.
+  #define BATTLE_TITLE_Y 2
+  #define BATTLE_TITLE_SIZE 2
+  #define BATTLE_TITLE_MAX_W 200
+  #define BATTLE_NAME_Y 20
+  #define BATTLE_NAME_SIZE 2
+  #define BATTLE_NAME_MAX_W 150
+  #define BATTLE_PET_NAME_X 6
+  #define BATTLE_WILD_NAME_RIGHT 314
+  #define BATTLE_HP_Y 37
+  #define BATTLE_HP_W 150
+  #define BATTLE_HP_H 5
+  #define BATTLE_HP_R 2
+  #define BATTLE_PET_HP_X 6
+  #define BATTLE_WILD_HP_X 164
+  #define BATTLE_CHIP_Y 43
+  #define BATTLE_CHIP_H 10
+  #define BATTLE_CHIP_R 3
+  #define BATTLE_CHIP_PAD 3
+  #define BATTLE_CHIP_GAP 3
+  #define BATTLE_PET_CHIP_X 6
+  #define BATTLE_WILD_CHIP_RIGHT 314
+  // caught marker: pokeball icon (16 px) left of the wild type chips, y 43..59
+  #define BATTLE_CAUGHT_DX 18
+  #define BATTLE_CAUGHT_Y 43
+  #define BATTLE_CAUGHT_S 1
+  #define BATTLE_RUN_X 262
+  #define BATTLE_RUN_Y 1
+  #define BATTLE_RUN_W 56
+  #define BATTLE_RUN_H 18
+  #define BATTLE_RUN_R 6
+  #define BATTLE_RUN_HIT_X 250
+  #define BATTLE_RUN_HIT_Y 0
+  #define BATTLE_RUN_HIT_W 70
+  #define BATTLE_RUN_HIT_H 40
+  //#endregion
+  //#region Wild battle: sprites at scale 2 with feet on y 150 over drawGameScene()
+  #define BATTLE_PET_CX 80
+  #define BATTLE_WILD_CX 240
+  #define BATTLE_GROUND_Y 150
+  #define BATTLE_SPRITE_MAX_S 2
+  #define BATTLE_PET_THUMB_X 40
+  #define BATTLE_WILD_THUMB_X 200
+  #define BATTLE_THUMB_Y 65
+  #define BATTLE_THUMB_S 2
+  #define BATTLE_THUMB_CELL 80
+  //#endregion
+  //#region Wild battle: last turn's moves, one line centered under each sprite (y 172..188)
+  // boxes x 4..156 and 164..316; text shrinks to size 1 when it does not fit
+  #define BATTLE_MOVE_Y 172
+  #define BATTLE_MOVE_SIZE 2
+  #define BATTLE_MOVE_W 152
+  //#endregion
+  //#region Wild battle: Attack / Dodge / Rest buttons (y 192..236) and the Quick / Heavy overlay (y 128..172)
+  #define BATTLE_ACTION_Y 192
+  #define BATTLE_ACTION_W 100
+  #define BATTLE_ACTION_H 44
+  #define BATTLE_ACTION_R 10
+  #define BATTLE_ATTACK_X 5
+  #define BATTLE_DODGE_X 110
+  #define BATTLE_REST_X 215
+  #define BATTLE_ACTION_HIT_PAD_X 2
+  #define BATTLE_ACTION_HIT_PAD_Y 2
+  #define BATTLE_ATTACK_MENU_Y 128
+  #define BATTLE_ATTACK_MENU_W 148
+  #define BATTLE_ATTACK_MENU_H 44
+  #define BATTLE_ATTACK_MENU_R 10
+  #define BATTLE_QUICK_X 8
+  #define BATTLE_HEAVY_X 164
+  #define BATTLE_ATTACK_MENU_HIT_PAD_X 2
+  #define BATTLE_ATTACK_MENU_HIT_PAD_Y 2
+  #define BATTLE_BTN_TEXT_SIZE 2
+  //#endregion
+  //#region Wild battle result: white panel over the sprites (y 96..176), buttons in the action row
+  #define BATTLE_RESULT_PANEL_X 40
+  #define BATTLE_RESULT_PANEL_Y 96
+  #define BATTLE_RESULT_PANEL_W 240
+  #define BATTLE_RESULT_PANEL_H 80
+  #define BATTLE_RESULT_PANEL_R 10
+  #define BATTLE_RESULT_TEXT_MAX_W 232
+  #define BATTLE_RESULT_TITLE_Y 100
+  #define BATTLE_RESULT_TITLE_SIZE 3
+  #define BATTLE_RESULT_ROUNDS_Y 128
+  #define BATTLE_RESULT_DAMAGE_Y 140
+  #define BATTLE_RESULT_LINE_SIZE 1
+  #define BATTLE_RESULT_INFO_Y 154
+  #define BATTLE_RESULT_INFO_SIZE 2
+  #define BATTLE_RESULT_BTN_Y 192
+  #define BATTLE_RESULT_BTN_H 44
+  #define BATTLE_RESULT_BTN_R 10
+  #define BATTLE_CATCH_X 10
+  #define BATTLE_LEAVE_X 165
+  #define BATTLE_CATCH_W 145
+  #define BATTLE_OK_X 85
+  #define BATTLE_OK_W 150
+  #define BATTLE_OK_TEXT_SIZE 2
+  #define BATTLE_RESULT_HIT_PAD_Y 2
+  //#endregion
 #endif
 
 #define EVO_BTN_X (CX - EVO_BTN_W / 2)

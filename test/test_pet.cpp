@@ -3,6 +3,7 @@
 #include "shim/Arduino.h"
 #include "../pet.h"
 #include "../dex.h"
+#include "../battle.h"  // battleLevelFor
 #include <string.h>
 
 // ---------------------------------------------------------------- helpers
@@ -155,6 +156,49 @@ TEST(feed, chuche_engorda) {
   CHECK_EQ(p.joy, (uint8_t)62);
   CHECK_EQ(p.weight, (uint8_t)12);
 }
+
+#pragma region Coffee
+TEST(feed, coffee_raises_energy_and_lowers_food) {
+  Pet p;
+  makePet(p, 4);
+  p.energy = 50;
+  p.fullness = 50;
+  p.feedCoffee();
+  CHECK_EQ(p.energy, (uint8_t)75);
+  CHECK_EQ(p.fullness, (uint8_t)40);
+}
+
+TEST(feed, coffee_caps_energy_at_100_and_food_at_0) {
+  Pet p;
+  makePet(p, 4);
+  p.energy = 90;
+  p.fullness = 4;
+  p.feedCoffee();
+  CHECK_EQ(p.energy, (uint8_t)100);
+  CHECK_EQ(p.fullness, (uint8_t)0);
+}
+
+TEST(feed, coffee_is_never_the_favorite) {
+  for (int16_t species = 1; species <= 3; species++) {  // covers every speciesId % 3
+    Pet p;
+    makePet(p, 4);
+    p.speciesId = species;
+    uint8_t joyBefore = p.joy;
+    p.feedCoffee();
+    CHECK(!p.berryKnown);              // a favorite would be discovered here
+    CHECK_EQ(p.joy, joyBefore);        // and give +10 joy
+  }
+}
+
+TEST(feed, coffee_not_while_sleeping) {
+  Pet p;
+  makePet(p, 4);
+  p.energy = 40;
+  p.toggleLight();  // off to sleep
+  p.feedCoffee();
+  CHECK_EQ(p.energy, (uint8_t)40);
+}
+#pragma endregion
 
 TEST(feed, dormido_o_huevo_no_come) {
   Pet p;
@@ -453,19 +497,112 @@ TEST(train, el_saco_cansa_y_quema_peso) {
   CHECK_EQ(p.energy, (uint8_t)3);
 }
 
-TEST(play, minijuego_entrena_velocidad_y_guarda_record) {
+TEST(play, ball_game_trains_attack_and_keeps_record) {
   Pet p;
   makePet(p, 4);
   p.joy = 10;
   p.weight = 50;
+  uint8_t speedBefore = p.trSpe;
   p.playResult(20);
-  CHECK_EQ(p.trSpe, (uint8_t)4);
+  CHECK_EQ(p.trAtk, (uint8_t)2);   // 20 points would be +4, capped at +2 per game
+  CHECK_EQ(p.trSpe, speedBefore);  // speed is no longer trained by the ball game
   CHECK_EQ(p.joy, (uint8_t)45);   // +5 +30 for scoring more than 15
   CHECK_EQ(p.weight, (uint8_t)10);  // 50 - 20*2
   CHECK_EQ(p.gameHi, (uint16_t)20);
   p.playResult(5);
   CHECK_MSG(p.gameHi == 20, "un resultado peor no baja el record");
+  CHECK_EQ(p.trAtk, (uint8_t)3);   // 5 points: +1
+  p.playResult(4);
+  CHECK_EQ(p.trAtk, (uint8_t)3);   // under 5 points: no gain
+  p.trAtk = 99;
+  p.playResult(40);
+  CHECK_EQ(p.trAtk, (uint8_t)100); // never above 100
 }
+
+#pragma region Coin chase
+TEST(coin, gain_steps_at_5_and_10_points) {
+  static const uint8_t POINTS[] = { 0, 4, 5, 9, 10, 15 };
+  static const uint8_t EXPECTED_GAIN[] = { 0, 0, 1, 1, 2, 2 };
+  for (int i = 0; i < 6; i++) {
+    Pet p;
+    makePet(p, 4);
+    p.trSpe = 10;
+    CHECK_EQ(p.coinChaseResult(POINTS[i]), EXPECTED_GAIN[i]);
+    CHECK_EQ(p.trSpe, (uint8_t)(10 + EXPECTED_GAIN[i]));
+  }
+}
+
+TEST(coin, speed_caps_at_100_and_reports_the_real_gain) {
+  Pet p;
+  makePet(p, 4);
+  p.trSpe = 99;
+  CHECK_EQ(p.coinChaseResult(15), (uint8_t)1);
+  CHECK_EQ(p.trSpe, (uint8_t)100);
+  CHECK_EQ(p.coinChaseResult(15), (uint8_t)0);
+  CHECK_EQ(p.trSpe, (uint8_t)100);
+}
+
+TEST(coin, same_side_effects_as_the_ball_game) {
+  Pet p;
+  makePet(p, 4);
+  p.joy = 10;
+  p.energy = 80;
+  p.fullness = 80;
+  p.weight = 50;
+  p.coinChaseResult(10);
+  CHECK_EQ(p.joy, (uint8_t)35);       // +5 +10*2
+  CHECK_EQ(p.energy, (uint8_t)65);    // -(10 + 10/2)
+  CHECK_EQ(p.fullness, (uint8_t)75);
+  CHECK_EQ(p.weight, (uint8_t)30);    // 50 - 10*2
+  CHECK(p.showHeart());
+}
+
+TEST(coin, egg_gets_nothing) {
+  mockNvsReset();
+  Pet p;
+  p.begin();
+  CHECK(p.isEgg());
+  CHECK_EQ(p.coinChaseResult(15), (uint8_t)0);
+  CHECK_EQ(p.trSpe, (uint8_t)0);
+  CHECK_EQ(p.coinHi, (uint16_t)0);
+}
+
+TEST(coin, ceremony_gets_nothing) {
+  Pet p;
+  makePet(p, 4);
+  p.trSpe = 10;
+  p.joy = 40;
+  p.ceremony = CER_FAREWELL;
+  CHECK_EQ(p.coinChaseResult(15), (uint8_t)0);
+  CHECK_EQ(p.trSpe, (uint8_t)10);
+  CHECK_EQ(p.joy, (uint8_t)40);
+  CHECK_EQ(p.coinHi, (uint16_t)0);
+}
+
+TEST(coin, record_only_rises_when_beaten) {
+  Pet p;
+  makePet(p, 4);
+  p.coinChaseResult(8);
+  CHECK_EQ(p.coinHi, (uint16_t)8);
+  p.coinChaseResult(3);
+  CHECK_MSG(p.coinHi == 8, "a worse result does not lower the record");
+  p.coinChaseResult(8);
+  CHECK_EQ(p.coinHi, (uint16_t)8);
+  p.coinChaseResult(12);
+  CHECK_EQ(p.coinHi, (uint16_t)12);
+  CHECK_EQ(p.gameHi, (uint16_t)0);  // the ball game record is separate
+}
+
+TEST(coin, record_survives_a_reboot) {
+  Pet first;
+  makePet(first, 4);
+  first.coinChaseResult(13);  // saves
+
+  Pet second;
+  second.begin();  // same "NVS": simulates a reboot
+  CHECK_EQ(second.coinHi, (uint16_t)13);
+}
+#pragma endregion
 
 TEST(play, jugar_sube_felicidad_y_cansa) {
   Pet p;
@@ -936,3 +1073,205 @@ TEST(save, el_autoguardado_se_marca_y_se_vuelca) {
   p.flushSave();
   CHECK(!p.savePending());
 }
+
+#pragma region Wild battles and catching
+static int16_t findFirstDexWithRarity(uint8_t rarity) {
+  for (int16_t dex = 1; dex <= DEX_COUNT; dex++)
+    if (DEX_TBL[dex].rarity == rarity) return dex;
+  return -1;
+}
+
+TEST(caught, register_caught_sets_bitmap_and_persists) {
+  Pet first;
+  makePet(first, 4);
+  CHECK_EQ(first.caughtCount(), (uint16_t)0);
+  first.registerCaught(25);
+  first.registerCaught(DEX_COUNT);
+  CHECK(first.isCaught(25));
+  CHECK(first.isCaught(DEX_COUNT));
+  CHECK(!first.isCaught(26));
+  CHECK_EQ(first.caughtCount(), (uint16_t)2);
+  CHECK_MSG(!first.isRegistered(25), "registeredCount stays raised only");
+  CHECK_EQ(first.registeredCount(), (uint16_t)1);
+  CHECK(!first.isShinyRegistered(25));
+
+  Pet rebooted;
+  rebooted.begin();  // same "NVS": simulates a reboot
+  CHECK(rebooted.isCaught(25));
+  CHECK(rebooted.isCaught(DEX_COUNT));
+  CHECK_EQ(rebooted.caughtCount(), (uint16_t)2);
+}
+
+TEST(caught, out_of_range_is_ignored) {
+  Pet p;
+  makePet(p, 4);
+  p.registerCaught(0);
+  p.registerCaught(-1);
+  p.registerCaught(DEX_COUNT + 1);
+  CHECK_EQ(p.caughtCount(), (uint16_t)0);
+  memset(p.dexCaught, 0xFF, sizeof(p.dexCaught));
+  CHECK(!p.isCaught(0));
+  CHECK(!p.isCaught(DEX_COUNT + 1));
+  CHECK_EQ(p.caughtCount(), (uint16_t)DEX_COUNT);
+}
+
+TEST(caught, shiny_catch_sets_shiny_registry) {
+  Pet p;
+  makePet(p, 4);
+  p.registerCaught(16, true);
+  CHECK(p.isCaught(16));
+  CHECK(p.isShinyRegistered(16));
+  CHECK(!p.isRegistered(16));
+
+  Pet rebooted;
+  rebooted.begin();
+  CHECK(rebooted.isShinyRegistered(16));
+}
+
+TEST(battle_pet, win_and_loss_update_counters_and_streak) {
+  Pet first;
+  makePet(first, 4);
+  first.applyBattleWin(16, false);
+  first.applyBattleWin(16, false);
+  CHECK_EQ(first.battleWins, (uint16_t)2);
+  CHECK_EQ(first.battleStreak, (uint16_t)2);
+  CHECK_EQ(first.bestBattleStreak, (uint16_t)2);
+  first.applyBattleLoss();
+  CHECK_EQ(first.battleLosses, (uint16_t)1);
+  CHECK_EQ(first.battleStreak, (uint16_t)0);
+  CHECK_EQ(first.bestBattleStreak, (uint16_t)2);
+  first.applyBattleWin(16, false);
+  CHECK_EQ(first.battleWins, (uint16_t)3);
+  CHECK_EQ(first.battleStreak, (uint16_t)1);
+  CHECK_EQ(first.bestBattleStreak, (uint16_t)2);
+
+  Pet rebooted;
+  rebooted.begin();
+  CHECK_EQ(rebooted.battleWins, (uint16_t)3);
+  CHECK_EQ(rebooted.battleLosses, (uint16_t)1);
+  CHECK_EQ(rebooted.battleStreak, (uint16_t)1);
+  CHECK_EQ(rebooted.bestBattleStreak, (uint16_t)2);
+}
+
+TEST(battle_pet, win_trains_the_stat_opposite_to_the_wild_strength) {
+  Pet p;
+  makePet(p, 4);
+  // MANKEY (56): attack is its best base stat -> trains defense
+  BattleReward defenseReward = p.applyBattleWin(56, false);
+  CHECK_EQ((int)defenseReward.stat, (int)BATTLE_REWARD_DEF);
+  CHECK_EQ(defenseReward.amount, (uint8_t)1);
+  CHECK_EQ(p.trDef, (uint8_t)1);
+  // SQUIRTLE (7): defense is its best base stat -> trains attack, close win +1
+  BattleReward attackReward = p.applyBattleWin(7, true);
+  CHECK_EQ((int)attackReward.stat, (int)BATTLE_REWARD_ATK);
+  CHECK_EQ(attackReward.amount, (uint8_t)2);
+  CHECK_EQ(p.trAtk, (uint8_t)2);
+  // PIDGEY (16): speed is its best base stat -> trains speed
+  BattleReward speedReward = p.applyBattleWin(16, false);
+  CHECK_EQ((int)speedReward.stat, (int)BATTLE_REWARD_SPE);
+  CHECK_EQ(p.trSpe, (uint8_t)1);
+  // rare wild gives 2
+  BattleReward rareReward = p.applyBattleWin(findFirstDexWithRarity(R_RARO), false);
+  CHECK_EQ(rareReward.amount, (uint8_t)2);
+}
+
+TEST(battle_pet, egg_gets_no_battle_reward) {
+  mockNvsReset();
+  Pet p;
+  p.begin();
+  CHECK(p.isEgg());
+  BattleReward reward = p.applyBattleWin(16, true);
+  CHECK_EQ((int)reward.stat, (int)BATTLE_REWARD_NONE);
+  CHECK_EQ(p.battleWins, (uint16_t)0);
+  p.applyBattleLoss();
+  CHECK_EQ(p.battleLosses, (uint16_t)0);
+}
+
+TEST(catch_chance, legendary_is_never_catchable) {
+  Pet p;
+  makePet(p, 4);
+  p.bond = 100;
+  int16_t legendaryDex = findFirstDexWithRarity(R_LEGENDARIO);
+  CHECK(legendaryDex >= 1);
+  CHECK_EQ(p.catchChanceForWild(legendaryDex, 1, 100, true), (uint8_t)0);
+  CHECK_EQ(p.respectCatchChanceForWild(legendaryDex, 1, 100), (uint8_t)0);
+  CHECK(!p.tryCatchWild(legendaryDex, 1, 100, true, 0));
+  CHECK(!p.tryRespectCatchWild(legendaryDex, 1, 100, 0));
+  CHECK(!p.isCaught(legendaryDex));
+  CHECK_EQ(p.catchChanceForWild(0, 5, 5, false), (uint8_t)0);
+  CHECK_EQ(p.catchChanceForWild(DEX_COUNT + 1, 5, 5, false), (uint8_t)0);
+}
+
+TEST(catch_chance, bounds_for_all_species_levels_and_bond) {
+  Pet p;
+  makePet(p, 4);
+  const uint8_t levels[] = { 0, 1, 5, 20, 50, 100, 255 };
+  const uint8_t bonds[] = { 0, 50, 100 };
+  for (int16_t dex = 1; dex <= DEX_COUNT; dex++) {
+    uint8_t rarity = DEX_TBL[dex].rarity;
+    if (rarity == R_LEGENDARIO) continue;
+    for (uint8_t bondValue : bonds) {
+      p.bond = bondValue;
+      for (uint8_t wildLevel : levels) {
+        for (uint8_t petLevel : levels) {
+          for (int closeWin = 0; closeWin < 2; closeWin++) {
+            uint8_t chance = p.catchChanceForWild(dex, wildLevel, petLevel, closeWin != 0);
+            CHECK_RANGE(chance, 10, 75);
+            if (rarity == R_RARO) CHECK(chance <= 60);
+          }
+          CHECK_RANGE(p.respectCatchChanceForWild(dex, wildLevel, petLevel), 5, 25);
+        }
+      }
+    }
+  }
+}
+
+TEST(catch_chance, catch_roll_compares_with_chance) {
+  Pet p;
+  makePet(p, 4);
+  p.bond = 0;
+  int16_t commonDex = findFirstDexWithRarity(R_COMUN);
+  uint8_t chance = p.catchChanceForWild(commonDex, 10, 10, false);
+  CHECK_EQ(chance, (uint8_t)55);  // common, same level, no bonus
+  CHECK(!p.tryCatchWild(commonDex, 10, 10, false, chance));  // roll == chance fails
+  CHECK(!p.isCaught(commonDex));
+  CHECK(p.tryCatchWild(commonDex, 10, 10, false, chance - 1, true));
+  CHECK(p.isCaught(commonDex));
+  CHECK(p.isShinyRegistered(commonDex));
+}
+
+TEST(catch_chance, respect_catch_is_harder) {
+  Pet p;
+  makePet(p, 4);
+  p.bond = 0;
+  int16_t commonDex = findFirstDexWithRarity(R_COMUN);
+  uint8_t respectChance = p.respectCatchChanceForWild(commonDex, 10, 10);
+  CHECK_EQ(respectChance, (uint8_t)25);  // (55 + 8) * 40% = 25
+  CHECK(!p.tryRespectCatchWild(commonDex, 10, 10, respectChance));
+  CHECK(p.tryRespectCatchWild(commonDex, 10, 10, respectChance - 1));
+  CHECK(p.isCaught(commonDex));
+}
+
+TEST(catch_chance, requested_battle_keeps_70_percent) {
+  Pet p;
+  makePet(p, 4);
+  p.bond = 0;
+  int16_t commonDex = findFirstDexWithRarity(R_COMUN);
+  CHECK_EQ(p.catchChanceForWild(commonDex, 10, 10, false, true), (uint8_t)38);  // 55 * 70%
+  CHECK_EQ(p.respectCatchChanceForWild(commonDex, 10, 10, true), (uint8_t)17);  // (63 * 70% = 44) * 40%
+  uint8_t requestedChance = p.catchChanceForWild(commonDex, 10, 10, false, true);
+  CHECK(!p.tryCatchWild(commonDex, 10, 10, false, requestedChance, false, true));  // roll == chance fails
+  CHECK(p.tryCatchWild(commonDex, 10, 10, false, requestedChance - 1, false, true));
+  int16_t legendaryDex = findFirstDexWithRarity(R_LEGENDARIO);
+  CHECK_EQ(p.catchChanceForWild(legendaryDex, 1, 100, true, true), (uint8_t)0);
+}
+
+TEST(battle_pet, battle_level_caps_a_long_lived_pet) {
+  Pet p;
+  makePet(p, 4);
+  p.ageMinutes = 249UL * MINUTES_PER_LEVEL;  // level 250
+  CHECK_EQ(p.level(), (uint16_t)250);
+  CHECK_EQ(battleLevelFor(p.level()), (uint8_t)100);
+  CHECK_EQ(battleLevelFor(250), (uint8_t)100);
+}
+#pragma endregion

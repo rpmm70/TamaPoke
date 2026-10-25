@@ -34,8 +34,17 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolucionar?", "Mantener forma", "Despedirse?", "Despedirse", "Quedaros juntos",
     "Elige tu inicial",
     "Sin sprites", "C\240rgalos en la SD",
-    "AJUSTES", "POKEDEX", "Audio / V\241deo", "Hora", "Idioma",
+    "AJUSTES", "Apagar pantalla", "Audio / V\241deo", "Hora", "Idioma",
     "Sonido", "Brillo", "On", "Off",
+    //#region ES wild battle strings
+    "COMBATE SALVAJE", "Combate salvaje?", "LUCHAR", "Luego", "HUIR",
+    "Atacar", "Evadir", "Curar", "R\240pido", "Fuerte",
+    "VICTORIA!", "DERROTA", "%u rondas", "Hecho %u / Recibido %u", "R%u",
+    "Atac\242 por %u", "Efectivo", "D\202bil", "Fall\242!", "Esquivado", "Rival Esquiv\242",
+    "Contra Listo", "Sin Descanso", "Cura +%u PS", "Guardia",
+    "Atrapar", "Dejar", "Atrapado!", "Se Fue", "Cerca!",
+    "FUE +%u", "DEF +%u", "VEL +%u", "OK", "ATRAPADO",
+    //#endregion
   },
   // ---------------- EN ----------------
   {
@@ -64,8 +73,17 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolve?", "Keep form", "Say goodbye?", "Goodbye", "Stay together",
     "Choose your starter",
     "No sprites", "Load them onto the SD",
-    "SETTINGS", "POKEDEX", "Audio / Video", "Time", "Language",
+    "SETTINGS", "Screen Off", "Audio / Video", "Time", "Language",
     "Sound", "Brightness", "On", "Off",
+    //#region EN wild battle strings
+    "WILD BATTLE", "Wild battle?", "FIGHT", "Later", "RUN",
+    "Attack", "Dodge", "Rest", "Quick", "Heavy",
+    "WIN!", "LOSS", "%u rounds", "Dealt %u / Taken %u", "R%u",
+    "Attacked for %u", "Effective", "Weak", "Missed!", "Dodged", "Enemy Dodged",
+    "Counter Ready", "No Rest Left", "Rest +%u HP", "Guard",
+    "Catch", "Leave", "Caught!", "Escaped", "Close!",
+    "ATK +%u", "DEF +%u", "SPD +%u", "OK", "CAUGHT",
+    //#endregion
   },
   // ---------------- FR ----------------
   {
@@ -94,8 +112,17 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "\220voluer?", "Garder forme", "Dire adieu?", "Adieu", "Rester ensemble",
     "Choisis ton starter",
     "Pas de sprites", "Charge-les sur la SD",
-    "R\220GLAGES", "POKEDEX", "Audio / Vid\202o", "Heure", "Langue",
+    "R\220GLAGES", "\220teindre l'\202cran", "Audio / Vid\202o", "Heure", "Langue",
     "Son", "Luminosit\202", "On", "Off",
+    //#region FR wild battle strings
+    "COMBAT SAUVAGE", "Combat sauvage?", "COMBAT", "Apr\212s", "FUIR",
+    "Attaque", "Esquive", "Repos", "Rapide", "Fort",
+    "VICTOIRE!", "D\220FAITE", "%u tours", "Inflig\202s %u / Re\207us %u", "M%u",
+    "Attaque %u", "Efficace", "Faible", "Rat\202!", "Esquiv\202", "Ennemi Esquive",
+    "Contre Pr\210t", "Plus De Repos", "Soin +%u PV", "Garde",
+    "Capture", "Laisser", "Captur\202!", "\220chapp\202", "Presque!",
+    "ATQ +%u", "DEF +%u", "VIT +%u", "OK", "CAPTUR\220",
+    //#endregion
   },
   // ---------------- DE ----------------
   // German does use umlauts: the firmware's 5x7 font is a full CP437 table
@@ -129,8 +156,17 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Entwickeln?", "Form behalten", "Abschied?", "Leb wohl", "Zusammen bleiben",
     "W\204hle deinen Starter",
     "Keine Sprites", "Auf die SD laden",
-    "EINSTELLUNGEN", "POKEDEX", "Audio / Video", "Uhrzeit", "Sprache",
+    "EINSTELLUNGEN", "Bildschirm aus", "Audio / Video", "Uhrzeit", "Sprache",
     "Ton", "Helligkeit", "An", "Aus",
+    //#region DE wild battle strings
+    "WILDER KAMPF", "Wilder Kampf?", "KAMPF", "Sp\204ter", "FLIEHEN",
+    "Angriff", "Ducken", "Ruhen", "Schnell", "Stark",
+    "SIEG!", "NIEDERLAGE", "%u Runden", "Verteilt %u / Erlitten %u", "R%u",
+    "Angriff: %u", "Effektiv", "Schwach", "Verfehlt!", "Ausgewichen", "Gegner Wich Aus",
+    "Konter Bereit", "Keine Ruhe", "Heilung +%u KP", "Schutz",
+    "Fangen", "Lassen", "Gefangen!", "Entkommen", "Knapp!",
+    "ANG +%u", "VER +%u", "INI +%u", "OK", "GEFANGEN",
+    //#endregion
   },
   // ---------------- IT ----------------
   {
@@ -159,8 +195,17 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolvere?", "Mantieni forma", "Salutare?", "Addio", "Restare insieme",
     "Scegli l'iniziale",
     "Senza sprite", "Caricali sulla SD",
-    "IMPOSTAZIONI", "POKEDEX", "Audio / Video", "Ora", "Lingua",
+    "IMPOSTAZIONI", "Spegni schermo", "Audio / Video", "Ora", "Lingua",
     "Suono", "Luminosit\205", "On", "Off",
+    //#region IT wild battle strings
+    "LOTTA SELVATICA", "Lotta selvatica?", "LOTTA", "Dopo", "FUGGI",
+    "Attacca", "Schiva", "Riposa", "Rapido", "Forte",
+    "VITTORIA!", "SCONFITTA", "%u turni", "Inflitti %u / Subiti %u", "T%u",
+    "Attacco: %u", "Efficace", "Debole", "Mancato!", "Schivato", "Nemico Schiva",
+    "Contrattacco", "Niente Riposo", "Cura +%u PS", "Guardia",
+    "Prendi", "Lascia", "Preso!", "Fuggito", "Quasi!",
+    "ATT +%u", "DIF +%u", "VEL +%u", "OK", "PRESO",
+    //#endregion
   },
   // ---------------- PT ----------------
   {
@@ -189,8 +234,17 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evoluir?", "Manter forma", "Despedir?", "Adeus", "Ficar juntos",
     "Escolhe o inicial",
     "Sem sprites", "Carrega-os no SD",
-    "AJUSTES", "POKEDEX", "Audio / V\241deo", "Hora", "Idioma",
+    "AJUSTES", "Desligar visor", "Audio / V\241deo", "Hora", "Idioma",
     "Som", "Brilho", "On", "Off",
+    //#region PT wild battle strings
+    "BATALHA SELVAGEM", "Batalha selvagem?", "LUTAR", "Depois", "FUGIR",
+    "Atacar", "Desviar", "Curar", "R\240pido", "Forte",
+    "VITORIA!", "DERROTA", "%u rondas", "Causado %u / Sofrido %u", "R%u",
+    "Atacou por %u", "Efetivo", "Fraco", "Falhou!", "Desviou", "Rival Desviou",
+    "Contra Pronto", "Sem Descanso", "Cura +%u PS", "Guarda",
+    "Apanhar", "Deixar", "Apanhado!", "Fugiu", "Perto!",
+    "ATQ +%u", "DEF +%u", "VEL +%u", "OK", "APANHADO",
+    //#endregion
   },
   // ---------------- JA ----------------
   {
@@ -242,9 +296,18 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
 
     "スプライトなし", "SDにいれてください",
 
-    "せってい", "ずかん", "おと / がめん", "じかん", "ことば",
+    "せってい", "がめんオフ", "おと / がめん", "じかん", "ことば",
 
     "おと", "あかるさ", "オン", "オフ",
+    //#region JA wild battle strings
+    "やせいのバトル", "やせいのバトル？", "たたかう", "あとで", "にげる",
+    "こうげき", "よける", "やすむ", "クイック", "パワー",
+    "かった！", "まけた...", "%uターン", "あたえた %u / うけた %u", "T%u",
+    "こうげき %u", "こうかばつぐん！", "いまひとつ...", "はずれた！", "よけた", "あいてがよけた！",
+    "カウンターOK", "もうやすめない", "かいふく +%u HP", "ガード",
+    "つかまえる", "にがす", "つかまえた！", "にげられた...", "おしい！",
+    "こうげき +%u", "ぼうぎょ +%u", "すばやさ +%u", "OK", "ゲット",
+    //#endregion
   },
   // ---------------- KO ----------------
   // The specifiers go in the SAME ORDER as in the English row even though
@@ -278,8 +341,17 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "진화할까요?", "형태 유지", "작별할까요?", "작별", "계속 함께",
     "스타터를 선택하세요",
     "스프라이트 없음", "SD 카드에 넣어주세요",
-    "설정", "도감", "소리 / 화면", "시간", "언어",
+    "설정", "화면 끄기", "소리 / 화면", "시간", "언어",
     "소리", "밝기", "켬", "끔",
+    //#region KO wild battle strings
+    "야생 배틀", "야생 배틀?", "싸운다", "나중에", "도망",
+    "공격", "회피", "휴식", "빠르게", "강하게",
+    "승리!", "패배...", "%u라운드", "내 공격 %u / 상대 공격 %u", "R%u",
+    "공격 %u", "효과 굉장!", "효과 별로...", "빗나갔다!", "피했다", "상대가 피했다!",
+    "반격 준비", "휴식 불가", "회복 +%u HP", "가드",
+    "잡기", "놓아주기", "잡았다!", "도망쳤다...", "아깝다!",
+    "공격 +%u", "방어 +%u", "속도 +%u", "OK", "포획",
+    //#endregion
   },
 };
 
@@ -323,10 +395,41 @@ static const char *const MED_DSC[LANG_COUNT][MED_COUNT] = {
     "연속 7일", "유대감 최대", "최종 진화", "건강함" },
 };
 
+#pragma region Battle type labels
+// Short uppercase battle type labels [language][type], index = TYPE_* in dex.h
+// (TYPE_NONE first, always ""). Latin labels stay at 8 characters or fewer and
+// use CP437 single-byte capitals (\220 E-acute, \216 A-umlaut, \200 C-cedilla).
+static const char *const TYPE_NAMES[LANG_COUNT][TYPE_NAME_COUNT] = {
+  { "", "NORMAL", "FUEGO", "AGUA", "ELECTR", "PLANTA", "HIELO", "LUCHA", "VENENO", "TIERRA",
+    "VOLADOR", "PSIQUICO", "BICHO", "ROCA", "FANTASMA", "DRAGON", "SINIEST", "ACERO", "HADA" },
+  { "", "NORMAL", "FIRE", "WATER", "ELECTRIC", "GRASS", "ICE", "FIGHTING", "POISON", "GROUND",
+    "FLYING", "PSYCHIC", "BUG", "ROCK", "GHOST", "DRAGON", "DARK", "STEEL", "FAIRY" },
+  { "", "NORMAL", "FEU", "EAU", "\220LECTRIK", "PLANTE", "GLACE", "COMBAT", "POISON", "SOL",
+    "VOL", "PSY", "INSECTE", "ROCHE", "SPECTRE", "DRAGON", "T\220N\220BRES", "ACIER", "F\220E" },
+  { "", "NORMAL", "FEUER", "WASSER", "ELEKTRO", "PFLANZE", "EIS", "KAMPF", "GIFT", "BODEN",
+    "FLUG", "PSYCHO", "K\216FER", "GESTEIN", "GEIST", "DRACHE", "UNLICHT", "STAHL", "FEE" },
+  { "", "NORMALE", "FUOCO", "ACQUA", "ELETTRO", "ERBA", "GHIACCIO", "LOTTA", "VELENO", "TERRA",
+    "VOLANTE", "PSICO", "COLEOT", "ROCCIA", "SPETTRO", "DRAGO", "BUIO", "ACCIAIO", "FOLLETTO" },
+  { "", "NORMAL", "FOGO", "AGUA", "EL\220TRICO", "PLANTA", "GELO", "LUTADOR", "VENENOSO", "TERRA",
+    "VOADOR", "PSIQUICO", "INSETO", "PEDRA", "FANTASMA", "DRAGAO", "SOMBRIO", "A\200O", "FADA" },
+  { "", "ノーマル", "ほのお", "みず", "でんき", "くさ", "こおり", "かくとう", "どく", "じめん",
+    "ひこう", "エスパー", "むし", "いわ", "ゴースト", "ドラゴン", "あく", "はがね", "フェアリー" },
+  { "", "노말", "불꽃", "물", "전기", "풀", "얼음", "격투", "독", "땅",
+    "비행", "에스퍼", "벌레", "바위", "고스트", "드래곤", "악", "강철", "페어리" },
+};
+#pragma endregion
+
 const char *T(StrId id) { return STRINGS[gLang][id]; }
 const char *medalName(int i)  { return MED_NAME[gLang][i]; }
 const char *medalLabel(int i) { return MED_LBL[gLang][i]; }
 const char *medalDesc(int i)  { return MED_DSC[gLang][i]; }
+
+#pragma region Battle type label lookup
+const char *typeName(uint8_t type) {
+  if (type >= TYPE_NAME_COUNT) return "";
+  return TYPE_NAMES[gLang][type];
+}
+#pragma endregion
 
 void loadLang() {
   Preferences p;

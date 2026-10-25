@@ -59,11 +59,31 @@ enum StrId : uint8_t {
   S_EVO_Q, S_EVO_KEEP, S_FAR_Q, S_FAR_GO, S_FAR_STAY,
   S_CHOOSE_STARTER,  // title of the starter choice (first time)
   S_NO_SPRITES, S_LOAD_SPRITES,  // notice when the sprite is missing from the SD
-  // settings menu: title, the four section rows (Pokedex first), then the row labels and toggle values
-  S_MENU_TITLE, S_MENU_POKEDEX, S_MENU_AV, S_MENU_TIME, S_MENU_LANG,
+  // settings menu: title, the four section rows (Screen Off first), then the row labels and toggle values
+  S_MENU_TITLE, S_MENU_SCREEN_OFF, S_MENU_AV, S_MENU_TIME, S_MENU_LANG,
   S_SOUND, S_BRIGHTNESS, S_ON, S_OFF,
+  //#region Wild battle strings
+  // wild battles: prompt, action buttons (at most 7 Latin characters), turn log,
+  // catch dialog and rewards. Folding markers inside the enum are comments:
+  // GCC rejects #pragma region inside an enum or initializer body.
+  S_WILD_BATTLE, S_WILD_Q, S_FIGHT, S_LATER, S_RUN_BATTLE,
+  S_ATTACK, S_DODGE, S_REST, S_QUICK_ATTACK, S_HEAVY_ATTACK,
+  S_WIN, S_LOSS, S_ROUNDS_FMT, S_DAMAGE_FMT, S_ROUND_SHORT_FMT,
+  S_HIT_FMT, S_EFFECTIVE, S_NOT_EFFECTIVE, S_MISSED, S_DODGED, S_ENEMY_DODGED,
+  S_COUNTER_READY, S_NO_REST, S_RESTED_FMT, S_GUARD,
+  S_CATCH_WILD, S_LEAVE_WILD, S_CAUGHT_OK, S_ESCAPED, S_CLOSE_CHANCE,
+  S_ATK_GAIN_FMT, S_DEF_GAIN_FMT, S_SPD_GAIN_FMT, S_OK, S_CAUGHT_MARK,
+  //#endregion
   STR_COUNT
 };
+
+#pragma region Battle type labels
+// Number of battle types, TYPE_NONE first. Must equal TYPE_COUNT in dex.h
+// (the TYPE_* enum order is the index order of typeName()).
+#define TYPE_NAME_COUNT 19
+// Short uppercase type label in the active language ("" for TYPE_NONE or out of range).
+const char *typeName(uint8_t type);
+#pragma endregion
 
 const char *T(StrId id);       // text in the active language
 const char *medalName(int i);  // medal banner (MED_COUNT)
