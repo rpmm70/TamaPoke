@@ -251,6 +251,12 @@ uint8_t battleLevelFor(uint16_t petLevel) {
 }
 #pragma endregion
 
+#pragma region Battle HP
+uint16_t battleMaxHpFor(const BattleStats &stats) {
+  return computeTurnMaxHp(stats);
+}
+#pragma endregion
+
 #pragma region Wild encounter
 uint8_t battleTypeEffectPct(uint8_t attackType, uint8_t defendType1, uint8_t defendType2) {
   return computeTypeEffectPct(attackType, defendType1, defendType2);

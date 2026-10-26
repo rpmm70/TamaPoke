@@ -84,6 +84,8 @@ struct BattleTurnResult {
 uint8_t dayPhaseFromHour(int hour);
 // clamps the pet level (up to 999) to the battle range (BATTLE_LEVEL_CAP)
 uint8_t battleLevelFor(uint16_t petLevel);
+// max HP a turn battle starts with for these stats (same formula as beginBattleRuntime)
+uint16_t battleMaxHpFor(const BattleStats &stats);
 
 bool canStartWildBattle(bool isEgg, bool sleeping, uint8_t ceremony);
 uint8_t wildLevelFor(uint8_t petLevel, uint8_t luckRoll);

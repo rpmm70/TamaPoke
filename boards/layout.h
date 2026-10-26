@@ -67,6 +67,17 @@
   #define POKEDEX_BTN_X (HAMBURGER_X + HAMBURGER_W / 2 - 8 * POKEDEX_BTN_S)
   #define POKEDEX_BTN_Y 132
   #define POKEDEX_BTN_HIT_R 26
+  //#region Sleep bubble: "Zzz" speech bubble by the sleeping creature's head (drawSleepBubble)
+  #define SLEEP_BUBBLE_TEXT_SIZE 2
+  #define SLEEP_BUBBLE_PAD_X 8
+  #define SLEEP_BUBBLE_PAD_Y 6
+  #define SLEEP_BUBBLE_R 10
+  #define SLEEP_BUBBLE_TAIL 10        // tail base width and its drop to the head
+  #define SLEEP_BUBBLE_GAP 2          // bubble left edge past the anchor point
+  #define SLEEP_BUBBLE_HEAD_INSET 10  // anchor this far below the top of the sprite box
+  #define SLEEP_BUBBLE_MAX_RIGHT 400  // stays inside the bezel at head height
+  #define SLEEP_BUBBLE_MIN_TOP 120    // below the header and the level row
+  //#endregion
   #define HDR_NAME_MAX_W (LCD_WIDTH - 80)
   // clock: digits at size 3 (y 26..50, just above the name), AM/PM at size 2;
   // its top-right corner (330, 26) is 229 px from the center
@@ -136,12 +147,12 @@
   #define FAR_BTN_H 58
   #define FAR_BTN_Y 176
   #define FAR_R 16
-  //#region Settings screens: shared title (menu, audio/video, time, language)
-  #define SETTINGS_TITLE_Y 44
+  //#region Settings screens: section label box width (titles: drawScreenTitle(), CARD_PROGRESS_TITLE_*)
   #define SETTINGS_TITLE_MAX_W 260
   //#endregion
   //#region Settings menu: four rows (y 126..380, inside the circle) and the version line
-  // Row 0 starts below the close button's hit circle (ends at y 122).
+  // Row 0 starts below the TS(5) title (y 58..98) and the close button's hit circle
+  // (ends at y 122); the farthest row corner, (73, 380), is 217 px from the center.
   #define SETTINGS_MENU_ROW_X 73
   #define SETTINGS_MENU_ROW_W 320
   #define SETTINGS_MENU_ROW_Y 126
@@ -153,14 +164,17 @@
   #define SETTINGS_MENU_VERSION_Y 436
   //#endregion
   //#region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN squares) and bar
-  #define SETTINGS_SOUND_LABEL_Y 112
+  // Under the TS(5) title (y 58..98): label 122..146 (below the close button's hit
+  // circle, which ends at y 122), pill 158..210, label 240..264, -/+ row 276..334
+  // (its farthest corners, (63, 334) and (403, 334), are 198 px from the center)
+  #define SETTINGS_SOUND_LABEL_Y 122
   #define SETTINGS_SOUND_PILL_X 163
-  #define SETTINGS_SOUND_PILL_Y 148
+  #define SETTINGS_SOUND_PILL_Y 158
   #define SETTINGS_SOUND_PILL_W 140
   #define SETTINGS_SOUND_PILL_H 52
   #define SETTINGS_PILL_R 14
-  #define SETTINGS_BRIGHTNESS_LABEL_Y 232
-  #define SETTINGS_BRIGHTNESS_ROW_Y 270
+  #define SETTINGS_BRIGHTNESS_LABEL_Y 240
+  #define SETTINGS_BRIGHTNESS_ROW_Y 276
   #define SETTINGS_BRIGHTNESS_MINUS_X 63
   #define SETTINGS_BRIGHTNESS_PLUS_X 345
   #define SETTINGS_BRIGHTNESS_BAR_X 137
@@ -168,6 +182,8 @@
   #define SETTINGS_BRIGHTNESS_BAR_H 24
   //#endregion
   //#region Language list: 2 columns x 4 rows (y 126..372, corners inside the circle)
+  // Below the TS(5) title (y 58..98) and the close button's hit circle (ends at y 122);
+  // the farthest corners, (55, 372) and (411, 372), are 226 px from the center.
   #define SETTINGS_LANG_CELL_X0 55
   #define SETTINGS_LANG_CELL_COL_STEP 188
   #define SETTINGS_LANG_CELL_W 168
@@ -176,9 +192,11 @@
   #define SETTINGS_LANG_CELL_H 54
   #define SETTINGS_LANG_CELL_R 12
   //#endregion
-  // time setting (title: SETTINGS_TITLE_Y)
-  #define CLK_DIG_Y 108
-  #define CLK_DIG_HALF 105
+  // time setting, under the TS(5) title (y 58..98): digits 120..168, -/+ 190..248,
+  // HOUR/MIN 256..272, toggles 290..334, OK 352..400 (its bottom corners are 195 px from the center)
+  #define CLK_DIG_Y 120
+  #define CLK_DIG_SIZE 6   // one size under the old TS(7)
+  #define CLK_DIG_HALF 90  // half of "12:34" at CLK_DIG_SIZE: 5 chars * 6 px * 6 / 2
   #define CLK_BTN 58
   #define CLK_BTN_Y 190
   #define CLK_HM_X 104
@@ -213,12 +231,7 @@
   #define CEL_R 16
   #define CEL_L1Y 176
   #define CEL_L2Y 212
-  // info card: train button, medals, name and stats
-  #define TRAIN_X 96
-  #define TRAIN_Y 300
-  #define TRAIN_W 274
-  #define TRAIN_H 40
-  #define TRAIN_TY 11
+  // info card: medals, name and stats
   #define CARD_HEAD_MAXW 198
   //#region Shared close button (top-right; inside the bezel circle: 191 px from the center + radius 20)
   #define CLOSE_BTN_CX 360
@@ -265,6 +278,16 @@
   #define CARD_PROFILE_VALUE_GAP 4
   #define CARD_PROFILE_BAR_H 12
   #define CARD_PROFILE_BAR_GAP 8
+  // Nickname's "(SPECIES)" line, this far under the name (TS(5) name: y 58..98,
+  // subtitle y 104..120, above the stat rows at y 124 and the portrait at y 130)
+  #define CARD_PROFILE_SUBTITLE_SIZE 2
+  #define CARD_PROFILE_SUBTITLE_GAP 6
+  //#endregion
+  //#region Info card page 1 (stats): type chips under the title (y 58..98), then 7 rows of text
+  // Chips y 104..130; rows HP..LOSSES y 144..388 (row corners stay inside the circle), above the page dots (y 428)
+  #define CARD_STATS_TYPES_Y 104
+  #define CARD_STATS_ROW_Y0 144
+  #define CARD_STATS_ROW_STEP 38
   //#endregion
   //#region Info card page 3 (progress): vertical rhythm, tops of each text line / the bar
   // Spread evenly from the title (y 58) to the last line (ends y 395), above the page dots (y 428)
@@ -277,10 +300,25 @@
   #define CARD_PROGRESS_EVO_VALUE_Y 312
   #define CARD_PROGRESS_MISTAKES_Y 379
   //#endregion
-  //#region Pokedex gallery: 4x4 grid below the close button's hit circle (y <= 122), detail header width
-  // Grid x 105..361, y 124..380; thumbnails (40 px) are drawn at 3/2 scale (60 px)
+  //#region Pokedex gallery: title, R/C counts, filter column, 4x4 grid below the close button's hit circle (y <= 122)
+  // Grid x 148..404 (pushed right for the filters; the right arrow hit box starts at 410),
+  // y 124..380; thumbnails (40 px) are drawn at 3/2 scale (60 px). Its farthest corner is 225 px from the center.
   #define GALLERY_CELL 64
+  #define GALLERY_GRID_X 148
   #define GALLERY_GRID_Y 124
+  #define GALLERY_TITLE_Y 36
+  #define GALLERY_TITLE_SIZE 3
+  #define GALLERY_COUNTS_Y 70
+  #define GALLERY_COUNTS_SIZE 2
+  // filters: 4 stacked buttons x 62..142, y 169..335 (centered on the grid), right of the
+  // left arrow hit box (x < 56); farthest corner (62, 335) is 199 px from the center
+  #define GALLERY_FILTER_X 62
+  #define GALLERY_FILTER_W 80
+  #define GALLERY_FILTER_Y 169
+  #define GALLERY_FILTER_H 34
+  #define GALLERY_FILTER_GAP 10
+  #define GALLERY_FILTER_R 10
+  #define GALLERY_FILTER_TEXT_SIZE 2
   #define GALLERY_THUMB_SCALE_NUM 3
   #define GALLERY_THUMB_SCALE_DEN 2
   // Detail header ends left of the close button (x 340)
@@ -293,12 +331,16 @@
   #define GALLERY_TYPE_CHIP_R 8
   #define GALLERY_TYPE_CHIP_GAP 8
   //#endregion
-  #define MED_X0 28
-  #define MED_COLSTEP 206
-  #define MED_W 196
-  #define MED_Y0 120
-  #define MED_STEP 54
-  #define MED_H 44
+  //#region Info card page 2 (medals): 2x4 grid x 40..426, y 124..362 under the title (y 58..98)
+  // Top row starts below the close button's hit circle (y <= 122); the bottom row's
+  // corners (40, 362) and (426, 362) sit 232 px from the center, inside the 233 px bezel.
+  #define MED_X0 40
+  #define MED_COLSTEP 196
+  #define MED_W 190
+  #define MED_Y0 124
+  #define MED_STEP 64
+  #define MED_H 46
+  //#endregion
   #define MED_MARK_CX 22
   #define MED_MARK_R 11
   #define MED_TXT_X 44
@@ -354,9 +396,9 @@
   //#region Ball game: smallest touch radius around the ball (the fork's radii are used as is)
   #define BALL_HIT_RADIUS_MIN 0
   //#endregion
-  //#region Play picker: ball / coin / swords strip (food picker style, 3 items, centered under the play button)
+  //#region Play picker: ball / coin / glove / swords strip (food picker style, 4 items, centered under the play button)
   #define PLAY_MENU_ITEM 66
-  #define PLAY_MENU_ITEM_COUNT 3
+  #define PLAY_MENU_ITEM_COUNT 4
   #define PLAY_MENU_W (PLAY_MENU_ITEM_COUNT * PLAY_MENU_ITEM)
   #define PLAY_MENU_X (CX - PLAY_MENU_W / 2)
   #define PLAY_MENU_Y 288
@@ -516,6 +558,17 @@
   #define POKEDEX_BTN_X (HAMBURGER_X + HAMBURGER_W / 2 - 8 * POKEDEX_BTN_S)
   #define POKEDEX_BTN_Y 30
   #define POKEDEX_BTN_HIT_R 20
+  //#region Sleep bubble: "Zzz" speech bubble by the sleeping creature's head (drawSleepBubble)
+  #define SLEEP_BUBBLE_TEXT_SIZE 2
+  #define SLEEP_BUBBLE_PAD_X 5
+  #define SLEEP_BUBBLE_PAD_Y 4
+  #define SLEEP_BUBBLE_R 6
+  #define SLEEP_BUBBLE_TAIL 6         // tail base width and its drop to the head
+  #define SLEEP_BUBBLE_GAP 1          // bubble left edge past the anchor point
+  #define SLEEP_BUBBLE_HEAD_INSET 6   // anchor this far below the top of the sprite box
+  #define SLEEP_BUBBLE_MAX_RIGHT (LCD_WIDTH - 4)
+  #define SLEEP_BUBBLE_MIN_TOP 44     // below the header, the level row and the streak badge
+  //#endregion
   // name x 82..238, so it clears the widest clock ("12:59 PM": x 240..316)
   #define HDR_NAME_MAX_W 156
   // clock: digits at size 2 (y 4..20), AM/PM at size 1
@@ -581,16 +634,15 @@
   #define FAR_BTN_H 36
   #define FAR_BTN_Y 76
   #define FAR_R 10
-  //#region Settings screens: shared title (menu, audio/video, time, language)
-  #define SETTINGS_TITLE_Y 8
+  //#region Settings screens: section label box width (titles: drawScreenTitle(), CARD_PROGRESS_TITLE_*)
   #define SETTINGS_TITLE_MAX_W 240
   //#endregion
-  //#region Settings menu: four rows (y 42..212) and the version line
-  // Row 0 starts below the close button's hit circle (ends at y 38).
+  //#region Settings menu: four rows (y 44..210) and the version line (y 222..230)
+  // Row 0 starts below the TS(5) title (y 12..36) and the close button's hit circle (ends at y 38).
   #define SETTINGS_MENU_ROW_X 30
   #define SETTINGS_MENU_ROW_W 260
-  #define SETTINGS_MENU_ROW_Y 42
-  #define SETTINGS_MENU_ROW_H 38
+  #define SETTINGS_MENU_ROW_Y 44
+  #define SETTINGS_MENU_ROW_H 37
   #define SETTINGS_MENU_ROW_GAP 6
   #define SETTINGS_MENU_ROW_R 10
   #define SETTINGS_MENU_ARROW_INSET 16
@@ -598,34 +650,38 @@
   #define SETTINGS_MENU_VERSION_Y 222
   //#endregion
   //#region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN squares) and bar
-  #define SETTINGS_SOUND_LABEL_Y 38
+  // Under the TS(5) title (y 12..36): label 50..66, pill 74..110, label 130..146, -/+ row 154..198
+  #define SETTINGS_SOUND_LABEL_Y 50
   #define SETTINGS_SOUND_PILL_X 110
-  #define SETTINGS_SOUND_PILL_Y 60
+  #define SETTINGS_SOUND_PILL_Y 74
   #define SETTINGS_SOUND_PILL_W 100
   #define SETTINGS_SOUND_PILL_H 36
   #define SETTINGS_PILL_R 8
-  #define SETTINGS_BRIGHTNESS_LABEL_Y 114
-  #define SETTINGS_BRIGHTNESS_ROW_Y 140
+  #define SETTINGS_BRIGHTNESS_LABEL_Y 130
+  #define SETTINGS_BRIGHTNESS_ROW_Y 154
   #define SETTINGS_BRIGHTNESS_MINUS_X 40
   #define SETTINGS_BRIGHTNESS_PLUS_X 236
   #define SETTINGS_BRIGHTNESS_BAR_X 96
   #define SETTINGS_BRIGHTNESS_BAR_W 128
   #define SETTINGS_BRIGHTNESS_BAR_H 16
   //#endregion
-  //#region Language list: 2 columns x 4 rows (y 40..226, 42 px tall rows)
+  //#region Language list: 2 columns x 4 rows (y 44..227, 42 px tall rows)
+  // Below the TS(5) title (y 12..36) and the close button's hit circle (ends at y 38).
   #define SETTINGS_LANG_CELL_X0 20
   #define SETTINGS_LANG_CELL_COL_STEP 145
   #define SETTINGS_LANG_CELL_W 135
-  #define SETTINGS_LANG_CELL_Y0 40
-  #define SETTINGS_LANG_CELL_ROW_STEP 48
+  #define SETTINGS_LANG_CELL_Y0 44
+  #define SETTINGS_LANG_CELL_ROW_STEP 47
   #define SETTINGS_LANG_CELL_H 42
   #define SETTINGS_LANG_CELL_R 8
   //#endregion
-  // time setting (title: SETTINGS_TITLE_Y)
-  #define CLK_DIG_Y 30
-  #define CLK_DIG_HALF 75
+  // time setting, under the TS(5) title (y 12..36): digits 44..76 (glyphs end at 72), -/+ 80..124,
+  // HOUR/MIN 130..146, toggles 154..184, OK 194..224
+  #define CLK_DIG_Y 44
+  #define CLK_DIG_SIZE 4   // one size under the old TS(7) = 5 (TS() has no 4 on this board)
+  #define CLK_DIG_HALF 60  // half of "12:34" at CLK_DIG_SIZE: 5 chars * 6 px * 4 / 2
   #define CLK_BTN 44
-  #define CLK_BTN_Y 78
+  #define CLK_BTN_Y 80
   #define CLK_HM_X 36
   #define CLK_HP_X 88
   #define CLK_MM_X 188
@@ -633,10 +689,10 @@
   #define CLK_BTN_R 8
   #define CLK_GLYPH_DX 13
   #define CLK_GLYPH_DY 10
-  #define CLK_LBL_Y 126
+  #define CLK_LBL_Y 130
   #define CLK_PAIR_W (CLK_HP_X + CLK_BTN - CLK_HM_X)  // one -/+ pair, edge to edge (HOUR/MIN center under it)
   //#region Time setting: 12h/24h toggle under the hour pair, AM/PM toggle under the minute pair
-  #define CLK_MODE_Y 150
+  #define CLK_MODE_Y 154
   #define CLK_MODE_H 30
   #define CLK_MODE_R 8
   #define CLK_MODE_W CLK_PAIR_W
@@ -644,12 +700,12 @@
   #define CLK_AMPM_X CLK_MM_X
   //#endregion
   #define CLK_OK_X 90
-  #define CLK_OK_Y 192
+  #define CLK_OK_Y 194
   #define CLK_OK_W 140
   #define CLK_OK_H 30
   #define CLK_OK_R 8
   #define CLK_OK_TX 12
-  #define CLK_OK_TY 199
+  #define CLK_OK_TY 201
   #define CEL_X 20
   #define CEL_Y 60
   #define CEL_W 280
@@ -657,11 +713,6 @@
   #define CEL_R 10
   #define CEL_L1Y 66
   #define CEL_L2Y 88
-  #define TRAIN_X 48
-  #define TRAIN_Y 155
-  #define TRAIN_W 224
-  #define TRAIN_H 22
-  #define TRAIN_TY 3
   #define CARD_HEAD_MAXW 250
   //#region Shared close button (top-right corner)
   #define CLOSE_BTN_CX (LCD_WIDTH - 16)
@@ -705,6 +756,16 @@
   #define CARD_PROFILE_VALUE_GAP 2
   #define CARD_PROFILE_BAR_H 8
   #define CARD_PROFILE_BAR_GAP 6
+  // Nickname's "(SPECIES)" line, this far under the name (TS(5) = 3 name: y 12..36,
+  // subtitle y 39..47, above the stat rows at y 52 and the portrait at y 56)
+  #define CARD_PROFILE_SUBTITLE_SIZE 1
+  #define CARD_PROFILE_SUBTITLE_GAP 3
+  //#endregion
+  //#region Info card page 1 (stats): type chips under the title (y 12..36), then 7 rows of text
+  // Chips y 40..60; rows HP..LOSSES y 64..200, above the page dots (y 230)
+  #define CARD_STATS_TYPES_Y 40
+  #define CARD_STATS_ROW_Y0 64
+  #define CARD_STATS_ROW_STEP 20
   //#endregion
   //#region Info card page 3 (progress): vertical rhythm, tops of each text line / the bar
   // Spread evenly from the title (y 12) to the last line (ends y 217), above the page dots (y 226)
@@ -717,9 +778,24 @@
   #define CARD_PROGRESS_EVO_VALUE_Y 160
   #define CARD_PROGRESS_MISTAKES_Y 201
   //#endregion
-  //#region Pokedex gallery: 4x4 grid (x 78..242, y 43..207), detail header width
+  //#region Pokedex gallery: title, R/C counts, filter column, 4x4 grid (x 120..284, y 38..202), detail header width
+  // The grid ends where the right arrow hit box starts (x 284)
   #define GALLERY_CELL 41
-  #define GALLERY_GRID_Y 43
+  #define GALLERY_GRID_X 120
+  #define GALLERY_GRID_Y 38
+  #define GALLERY_TITLE_Y 4
+  #define GALLERY_TITLE_SIZE 3
+  #define GALLERY_COUNTS_Y 24
+  #define GALLERY_COUNTS_SIZE 1
+  // filters: 4 stacked buttons x 40..114, y 60..180 (centered on the grid), right of the
+  // left arrow hit box (x < 36)
+  #define GALLERY_FILTER_X 40
+  #define GALLERY_FILTER_W 74
+  #define GALLERY_FILTER_Y 60
+  #define GALLERY_FILTER_H 24
+  #define GALLERY_FILTER_GAP 8
+  #define GALLERY_FILTER_R 6
+  #define GALLERY_FILTER_TEXT_SIZE 2
   #define GALLERY_THUMB_SCALE_NUM 1
   #define GALLERY_THUMB_SCALE_DEN 1
   #define GALLERY_DETAIL_HEADER_MAXW 234
@@ -731,13 +807,16 @@
   #define GALLERY_TYPE_CHIP_R 5
   #define GALLERY_TYPE_CHIP_GAP 6
   //#endregion
-  // medal grid narrowed (was x 12..308) so it stays clear of the page arrows
+  //#region Info card page 2 (medals): 2x4 grid x 26..294, y 48..212 under the title (y 12..36)
+  // Narrowed (was x 12..308) so it stays clear of the page arrows; the bottom row
+  // ends above the page dots (y 230)
   #define MED_X0 26
   #define MED_COLSTEP 136
   #define MED_W 132
-  #define MED_Y0 54
-  #define MED_STEP 30
-  #define MED_H 26
+  #define MED_Y0 48
+  #define MED_STEP 44
+  #define MED_H 32
+  //#endregion
   #define MED_MARK_CX 13
   #define MED_MARK_R 8
   #define MED_TXT_X 28
@@ -790,9 +869,9 @@
   //#region Ball game: smallest touch radius around the ball (resistive touch needs slack)
   #define BALL_HIT_RADIUS_MIN 30
   //#endregion
-  //#region Play picker: ball / coin / swords strip (food picker style, 3 items of 64 px, centered)
+  //#region Play picker: ball / coin / glove / swords strip (food picker style, 4 items of 64 px, centered)
   #define PLAY_MENU_ITEM 64
-  #define PLAY_MENU_ITEM_COUNT 3
+  #define PLAY_MENU_ITEM_COUNT 4
   #define PLAY_MENU_W (PLAY_MENU_ITEM_COUNT * PLAY_MENU_ITEM)
   #define PLAY_MENU_X (CX - PLAY_MENU_W / 2)
   #define PLAY_MENU_Y 148
@@ -940,7 +1019,7 @@
 //#region Settings screens: derived and board-independent values
 // horizontal padding kept free on each side of a label inside its box
 #define SETTINGS_TEXT_SIDE_PAD 3
-// left edge of the shared title box, centered on CX
+// left edge of the section label box, centered on CX
 #define SETTINGS_TITLE_X (CX - SETTINGS_TITLE_MAX_W / 2)
 //#endregion
 

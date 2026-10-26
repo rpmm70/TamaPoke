@@ -109,8 +109,22 @@ PmdMon galleryPmd;  // large sprite for the gallery detail view (PMD/TPK2, licen
 // pokedex gallery
 bool galleryOpen = false;
 bool galleryDirty = false;
-int galleryPage = 0;        // 10 pages of 16
+int galleryPage = 0;        // pages of 16 over the filtered list
 int16_t galleryDetail = 0;  // dex in detail view, 0 = grid
+#pragma region Pokedex gallery filter (All / Raised / Caught / Shiny buttons on the left of the grid)
+enum GalleryFilter : uint8_t { GALLERY_FILTER_ALL = 0, GALLERY_FILTER_RAISED, GALLERY_FILTER_CAUGHT, GALLERY_FILTER_SHINY,
+                               GALLERY_FILTER_COUNT };
+GalleryFilter galleryFilter = GALLERY_FILTER_ALL;  // kept between visits (not saved to NVS)
+int16_t galleryFilteredDex[151];                   // dex numbers that pass the filter, ascending
+int16_t galleryFilteredCount = 0;                  // filled by rebuildGalleryFilteredList()
+// prototypes (defined after renderGallery)
+void rebuildGalleryFilteredList();
+int galleryPageCount();
+int galleryFilteredIndexOf(int16_t dex);
+void drawGalleryFilterButtons();
+bool handleGalleryFilterTap(int16_t x, int16_t y);
+bool galleryDetailHasNeighbor(int step);
+#pragma endregion
 
 bool screenOff = false;       // short press of the PWR / BOOT button, or Screen Off in the settings menu
 bool cardOpen = false;        // creature info card (tap the name on the main screen)
@@ -154,7 +168,7 @@ uint32_t bathUntil = 0;
 bool bathPending = false;
 struct { int16_t x, y; uint8_t r, ph; } bubbles[14];
 uint32_t feedMenuUntil = 0;   // food picker open until this millis
-uint32_t playMenuUntil = 0;   // play picker (ball game / wild battle) open until this millis
+uint32_t playMenuUntil = 0;   // play picker (ball game / coin chase / training bag / wild battle) open until this millis
 
 // "keepy-uppy" minigame: keep the pokeball in the air
 bool gameOpen = false;
@@ -248,8 +262,8 @@ bool coinNewHi = false;
 #pragma endregion
 
 #pragma region Coin chase tuning
-#define COIN_START_TIME_MS 30000L
-#define COIN_BONUS_TIME_MS 5000L
+#define COIN_START_TIME_MS 20000L
+#define COIN_BONUS_TIME_MS 2000L
 #define COIN_MAX_TIME_MS 30000L    // the bonus never pushes the clock past 30 s
 #define COIN_WIN_POINTS 15
 #define COIN_STEP_MAX_MS 345       // abnormally late frame: do not take a huge jump
@@ -261,9 +275,10 @@ bool coinNewHi = false;
 #define COIN_LIFETIME_MS 3000      // an untouched coin vanishes and another appears elsewhere
 #pragma endregion
 
-// training bag (trains strength)
+// training bag (trains ATK)
 bool sackOpen = false;
-uint32_t sackUntil = 0, sackOverUntil = 0;
+uint32_t sackUntil = 0;
+bool sackOver = false;  // results screen up (OK closes it)
 uint16_t sackHits = 0;
 float sackShake = 0;
 uint8_t sackGain = 0;
@@ -781,6 +796,8 @@ bool inPetZone(int16_t x, int16_t y) {
   return abs(x - (int)beh.x) < SX(123) && y > SY(95) && y < SY(310);
 }
 
+bool isMinigameOkTapped(int16_t x, int16_t y);  // prototype (defined with the minigame results screen)
+
 // the touch is resolved when the finger LIFTS, to tell a tap from a swipe
 void handleTouch() {
   static uint32_t lastPoll = 0;
@@ -809,8 +826,16 @@ void handleTouch() {
   if (sackOpen) {
     if (pressed && !wasPressed) {
       lastInteract = millis();
-      if (y < SY(72)) sackOpen = false;  // touching the top = quit
-      else sackTap();
+      if (sackOver) {
+        if (isMinigameOkTapped(x, y)) {
+          sackOpen = false;
+          sfxPlay(SFX_TAP);
+        }
+      } else if (y < SY(72)) {
+        sackOpen = false;  // touching the top = quit
+      } else {
+        sackTap();
+      }
     }
     wasPressed = pressed;
     return;
@@ -868,7 +893,8 @@ void onSwipe(int dir) {
     closeGalleryToMainScreen();
     return;
   }
-  if (np > 9) np = 9;
+  rebuildGalleryFilteredList();
+  if (np > galleryPageCount() - 1) np = galleryPageCount() - 1;
   if (np != galleryPage) {
     galleryPage = np;
     galleryDirty = true;
@@ -965,7 +991,7 @@ void onTap(int16_t x, int16_t y) {
     feedMenuUntil = 0;
     return;
   }
-  #pragma region Play picker: item 0 = ball game, item 1 = coin chase, item 2 = wild battle; any other tap closes it
+  #pragma region Play picker: item 0 = ball game, item 1 = coin chase, item 2 = training bag, item 3 = wild battle; any other tap closes it
   if (playMenuUntil) {
     bool insideStrip = isTouchInsideRect(x, y, PLAY_MENU_X, PLAY_MENU_Y, PLAY_MENU_W, PLAY_MENU_H);
     bool pickerStillOpen = timeLeft(playMenuUntil) > 0;
@@ -976,6 +1002,7 @@ void onTap(int16_t x, int16_t y) {
       sfxPlay(SFX_TAP);
       if (item == 0) startGame();
       else if (item == 1) startCoinGame();
+      else if (item == 2) startSack();
       else startBattle();
     }
     return;
@@ -1041,7 +1068,7 @@ void onTap(int16_t x, int16_t y) {
       if (i == 0) {
         if (!pet.sleeping) feedMenuUntil = millis() + 6000;
       } else if (i == 1) {
-        if (!pet.sleeping) playMenuUntil = millis() + 6000;  // picker: ball game / wild battle
+        if (!pet.sleeping) playMenuUntil = millis() + 6000;  // picker: ball game / coin chase / training bag / wild battle
       } else if (i == 2) {
         pet.toggleLight();
       } else {
@@ -1947,6 +1974,9 @@ void render() {
     drawHeaderClock();
     drawStreakBadge();
     drawPet();
+    // right after drawPet: both are anchored on the sprite box it just drew
+    if (pet.showHeart()) drawPetHeart();
+    if (pet.sleeping) drawSleepBubble();
     drawBath();
     drawPoops();
     // bottom panel: clean base for bars and buttons over the landscape
@@ -1957,13 +1987,6 @@ void render() {
     if (pet.wantEvolveButton()) drawEvolveButton();        // red CTA: evolve
     else if (pet.canRunawayNow()) drawRunawayButton();     // somber CTA: runaway (neglect)
     else if (pet.wantFarewellButton()) drawFarewellButton();  // gold CTA: farewell
-  }
-
-  if (pet.sleeping) {
-    gfx->setTextColor(inkColor());  // the sky can be daytime now: night ink would vanish on it
-    setSize(TS(3));
-    setCur(SX(320), SY(130));
-    printT("Zz");
   }
 
   // food picker
@@ -1983,7 +2006,7 @@ void render() {
     }
   }
 
-  #pragma region Play picker: ball (minigame), coin (coin chase) and crossed swords (wild battle)
+  #pragma region Play picker: ball (minigame), coin (coin chase), boxing glove (training bag) and crossed swords (wild battle)
   if (playMenuUntil) {
     if (!timeLeft(playMenuUntil)) {
       playMenuUntil = 0;
@@ -1994,7 +2017,8 @@ void render() {
       const int playIconY = PLAY_MENU_Y + (PLAY_MENU_H - 16 * PLAY_MENU_ICON_S) / 2;
       drawMap(SPR_ICON_PLAY, 16, playIconX, playIconY, PLAY_MENU_ICON_S, false);
       drawMap(SPR_ICON_COIN, 16, playIconX + PLAY_MENU_ITEM, playIconY, PLAY_MENU_ICON_S, false);
-      drawMap(SPR_ICON_SWORDS, 16, playIconX + 2 * PLAY_MENU_ITEM, playIconY, PLAY_MENU_ICON_S, false);
+      drawMap(SPR_ICON_GLOVE, 16, playIconX + 2 * PLAY_MENU_ITEM, playIconY, PLAY_MENU_ICON_S, false);
+      drawMap(SPR_ICON_SWORDS, 16, playIconX + 3 * PLAY_MENU_ITEM, playIconY, PLAY_MENU_ICON_S, false);
     }
   }
   #pragma endregion
@@ -2267,9 +2291,10 @@ void drawMinigameResultLine(const char *text, int preferredSize, int top) {
   drawTextCenteredInBox(text, preferredSize, CX - BATTLE_RESULT_TEXT_MAX_W / 2, top, BATTLE_RESULT_TEXT_MAX_W, 8 * preferredSize);
 }
 
-// title: the score (green for a new record or a cleared coin chase);
+// title: the score in scoreFormat ("SCORE %u", "%u HITS"), green for a new record or a cleared coin chase;
 // lines: record (or NEW RECORD!), joy; reward: rewardFormat ("SPD +%u", "ATK +%u") when the stat went up
-void drawMinigameResults(uint8_t score, bool newRecord, bool cleared, uint16_t record, uint8_t statGain, StrId rewardFormat) {
+void drawMinigameResults(StrId scoreFormat, uint16_t score, bool newRecord, bool cleared, uint16_t record, uint8_t statGain,
+                         StrId rewardFormat) {
   drawGameScene();
   bool night = sceneHour() < 6 || sceneHour() >= 20;
   uint16_t resultInk = night ? UI_INK_NIGHT : UI_INK;
@@ -2288,7 +2313,7 @@ void drawMinigameResults(uint8_t score, bool newRecord, bool cleared, uint16_t r
 
   #pragma region Title, record line, joy line, reward line
   char scoreText[22];
-  snprintf(scoreText, sizeof(scoreText), T(S_SCORE_FMT), score);
+  snprintf(scoreText, sizeof(scoreText), T(scoreFormat), score);
   gfx->setTextColor(newRecord || cleared ? UI_BAR_OK : resultInk);
   drawMinigameResultLine(scoreText, BATTLE_RESULT_TITLE_SIZE, BATTLE_RESULT_TITLE_Y);
 
@@ -2488,7 +2513,7 @@ void renderCoinGame() {
   uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
 
   if (coinOver) {
-    drawMinigameResults(coinPoints, coinNewHi && coinPoints > 0, coinPoints >= COIN_WIN_POINTS, pet.coinHi, coinSpeedGain, S_SPD_GAIN_FMT);
+    drawMinigameResults(S_SCORE_FMT, coinPoints, coinNewHi && coinPoints > 0, coinPoints >= COIN_WIN_POINTS, pet.coinHi, coinSpeedGain, S_SPD_GAIN_FMT);
     return;
   }
 
@@ -2533,7 +2558,7 @@ void startSack() {
   if (!canStartSack()) return;
   sackOpen = true;
   sackUntil = millis() + 10000;
-  sackOverUntil = 0;
+  sackOver = false;
   sackHits = 0;
   sackShake = 0;
   sackNewHi = false;
@@ -2548,44 +2573,28 @@ void sackTap() {
 void drawGameScene();  // prototype (defined further down)
 
 void renderSack() {
+  //#region Results screen: same layout as the ball game and coin chase (OK closes it)
+  if (sackOver) {
+    drawMinigameResults(S_HITS_FMT, sackHits, sackNewHi && sackHits > 0, false, pet.strHi, sackGain, S_ATK_GAIN_FMT);
+    return;
+  }
+  //#endregion
+
   uint32_t now = millis();
   drawGameScene();  // habitat background
   bool night = sceneHour() < 6 || sceneHour() >= 20;
   uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
 
-  // result screen
-  if (sackOverUntil) {
-    if (!timeLeft(sackOverUntil)) { sackOpen = false; return; }
-    char b[20];
-    snprintf(b, sizeof(b), T(S_HITS_FMT), sackHits);
-    gfx->setTextColor(ink);
-    ctext(b, 4, SY(150));
-    char g[18];
-    snprintf(g, sizeof(g), T(S_STR_GAIN_FMT), sackGain);
-    gfx->setTextColor(UI_BAR_BAD);
-    ctext(g, 3, SY(210));
-    if (sackNewHi && sackHits > 0) {
-      gfx->setTextColor(UI_BAR_WARN);
-      ctext(T(S_NEW_RECORD), 2, SY(256));
-    } else {
-      char r[18];
-      snprintf(r, sizeof(r), T(S_RECORD_FMT), pet.strHi);
-      gfx->setTextColor(ink);
-      ctext(r, 2, SY(256));
-    }
-    gfx->flush();
-    return;
-  }
-
-  // the 10 s are over: apply training
+  //#region The 10 s are over: apply training (ATK), the results draw next frame
   if (!timeLeft(sackUntil)) {
     sackNewHi = (sackHits > pet.strHi);
     sackGain = pet.trainStrength(sackHits);
     sfxPlay(sackNewHi ? SFX_MEDAL : SFX_PLAY);
-    sackOverUntil = now + 3500;
+    sackOver = true;
     gfx->flush();
     return;
   }
+  //#endregion
 
   // active mashing
   sackShake *= 0.84f;
@@ -2642,7 +2651,7 @@ void renderGame() {
   uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
 
   if (gameOver) {
-    drawMinigameResults(gameScore, gameNewHi && gameScore > 0, false, pet.gameHi, gameAttackGain, S_ATK_GAIN_FMT);
+    drawMinigameResults(S_SCORE_FMT, gameScore, gameNewHi && gameScore > 0, false, pet.gameHi, gameAttackGain, S_ATK_GAIN_FMT);
     return;
   }
 
@@ -3287,7 +3296,7 @@ void renderBattle() {
 // changes in the Latin-script languages).
 // Requires text size 2 to already be set, because textW() needs it.
 static int statBarX() {
-  const StrId ids[] = { S_STAT_ATK, S_STAT_DEF, S_STAT_SPE, S_STAT_WGT, S_VIN };
+  const StrId ids[] = { S_STAT_HP, S_STAT_ATK, S_STAT_DEF, S_STAT_SPE, S_STAT_WGT, S_VIN };
   int ancho = 0;
   for (StrId id : ids) {
     int w = textW(T(id), 2);
@@ -3297,15 +3306,21 @@ static int statBarX() {
   return x < SX(150) ? SX(150) : x;
 }
 
-void drawCardStat(int y, const char *label, uint16_t val, uint16_t maxBar, uint16_t color) {
+//#region Info card stats rows
+// label on the left and the number on the right, with no bar (the HP row)
+void drawCardStatLabelAndNumber(int y, const char *label, uint16_t value) {
   gfx->setTextColor(UI_INK);
   setSize(2);
   setCur(SX(96), y);
   printT(label);
-  char num[8];
-  snprintf(num, sizeof(num), "%u", val);
+  char valueText[8];
+  snprintf(valueText, sizeof(valueText), "%u", value);
   setCur(SX(330), y);
-  printT(num);
+  printT(valueText);
+}
+
+void drawCardStat(int y, const char *label, uint16_t val, uint16_t maxBar, uint16_t color) {
+  drawCardStatLabelAndNumber(y, label, val);
   int bx = statBarX();
   int bw = SX(310) - bx;   // the bar always ends at SX(310), leaving space before the number
   int fw = (int)val * bw / maxBar;
@@ -3313,6 +3328,7 @@ void drawCardStat(int y, const char *label, uint16_t val, uint16_t maxBar, uint1
   gfx->fillRoundRect(bx, y + 2, bw, 11, 3, UI_TRACK);
   if (fw > 2) gfx->fillRoundRect(bx, y + 2, fw, 11, 3, color);
 }
+//#endregion
 
 // ---------- on-screen time setting (settings menu > Time) ----------
 // The user sets their LOCAL time by eye; the firmware uses it as-is, so there
@@ -3369,9 +3385,18 @@ void drawTextCenteredInBox(const char *text, int preferredSize, int boxLeft, int
   printT(text);
 }
 
-// Line of text centered on CX in the title-wide box starting at top (titles and section labels)
+// Line of text centered on CX in the label-wide box starting at top (section labels)
 void drawSettingsLabel(const char *text, int top) {
   drawTextCenteredInBox(text, TS(3), SETTINGS_TITLE_X, top, SETTINGS_TITLE_MAX_W, 8 * TS(3));
+}
+
+// Large page title centered on CX at CARD_PROGRESS_TITLE_Y, shrunk to fit
+// CARD_PROGRESS_TITLE_MAXW (long translations): every settings screen and the
+// info card pages share it, so their titles always match
+void drawScreenTitle(const char *title) {
+  int titleSize = shrinkTextSizeToWidth(title, TS(5), CARD_PROGRESS_TITLE_MAXW);
+  setCur(centerX(title, titleSize), CARD_PROGRESS_TITLE_Y);
+  printT(title);
 }
 
 // Clears the screen and draws the title shared by every settings screen
@@ -3379,7 +3404,7 @@ void beginSettingsScreen(const char *title) {
   gfx->fillScreen(RGB565_BLACK);
   fillScreenBg(UI_BG_DAY);
   gfx->setTextColor(UI_INK);
-  drawSettingsLabel(title, SETTINGS_TITLE_Y);
+  drawScreenTitle(title);
 }
 
 // Round X at the top right: the only way out of every settings screen
@@ -3590,7 +3615,7 @@ void renderClock() {
   char timeText[8];
   if (clockUses24Hour) snprintf(timeText, sizeof(timeText), "%02d:%02d", clockH, clockM);
   else snprintf(timeText, sizeof(timeText), "%2d:%02d", clockHourOn12HourDial(), clockM);  // same 5 chars: stays centered
-  setSize(TS(7));
+  setSize(CLK_DIG_SIZE);
   setCur(CX - CLK_DIG_HALF, CLK_DIG_Y);
   printT(timeText);
 
@@ -3772,7 +3797,8 @@ void drawMedalBadge(int x, int y, int i) {
   printT(medalLabel(i));
 }
 
-// pencil next to the card name: as tall as the text line, never below the minimum
+// pencil next to the card name: as tall as a text line of this size, never below
+// the minimum (renderCardProfile() sizes it for TS(3) text, whatever the name's size)
 int cardPencilSizeForTextSize(int textSize) {
   return 8 * textSize < CARD_PENCIL_MIN_SIZE ? CARD_PENCIL_MIN_SIZE : 8 * textSize;
 }
@@ -3952,32 +3978,36 @@ void renderCardProfile() {
   // no level here: it has its own stat row below
   snprintf(head, sizeof(head), "%s%s", pet.shiny ? "*" : "", nm);
   gfx->setTextColor(d.accent);
-  // auto-shrink: long names do not fit at the large size. The width is MEASURED
-  // with textW() (strlen() counts bytes). On the round one: size 3 when the name
-  // plus the pencil fit in 198 px, otherwise 2; on the rectangular one the large size is TS(3).
-  const int big = TS(3);
-  setSize(big);
-  int hts = (textW(head, big) + CARD_PENCIL_GAP + cardPencilSizeForTextSize(big) <= CARD_HEAD_MAXW) ? big : big - 1;
-  setSize(hts);
+  // auto-shrink: same size and top as the Progress page title (TS(5) at
+  // CARD_PROGRESS_TITLE_Y), stepped down one size at a time until the name plus
+  // the pencil fit CARD_HEAD_MAXW (kept clear of the close button). The width is
+  // MEASURED with textW() (strlen() counts bytes). The pencil keeps the size it
+  // has next to TS(3) text whatever size the name ends up at.
+  const int pencilSize = cardPencilSizeForTextSize(TS(3));
+  int hts = shrinkTextSizeToWidth(head, TS(5), CARD_HEAD_MAXW - CARD_PENCIL_GAP - pencilSize);
+  int headLineHeight = cardTextLineHeight();
   //#region Name and rename pencil, centered together as one group
   int headWidth = textW(head, hts);
-  int pencilSize = cardPencilSizeForTextSize(hts);
   int groupLeft = CX - (headWidth + CARD_PENCIL_GAP + pencilSize) / 2;
-  int headTop = hts == big ? SY(34) : SY(40);
+  int headTop = CARD_PROGRESS_TITLE_Y;
   setCur(groupLeft, headTop);
   printT(head);
   cardPencilLeft = groupLeft + headWidth + CARD_PENCIL_GAP;
-  cardPencilTop = headTop + (8 * hts - pencilSize) / 2;  // centered on the text line
+  cardPencilTop = headTop + (headLineHeight - pencilSize) / 2;  // centered on the text line
   cardPencilSize = pencilSize;
   drawPencilIcon(gfx, cardPencilLeft, cardPencilTop, cardPencilSize, UI_INK);
   //#endregion
-  if (pet.nick[0]) {  // real species under the nickname
+  //#region Real species under the nickname, just below the title line
+  if (pet.nick[0]) {
     const char *sp = dexName(pet.speciesId);
     char par[32];
     snprintf(par, sizeof(par), "(%s)", sp);
     gfx->setTextColor(UI_TRACK);
-    ctext(par, 2, SY(64));   // measured, not counted in bytes
+    setSize(CARD_PROFILE_SUBTITLE_SIZE);
+    setCur(centerX(par, CARD_PROFILE_SUBTITLE_SIZE), headTop + headLineHeight + CARD_PROFILE_SUBTITLE_GAP);
+    printT(par);   // measured, not counted in bytes
   }
+  //#endregion
 
   //#region Animated portrait (left column)
   drawCardProfilePortrait();
@@ -4015,31 +4045,50 @@ void renderCardProfile() {
   //#endregion
 }
 
-// page 1: battle (4 bars + train button)
+// page 1: stats (HP number, then 4 bars)
 void renderCardStats() {
   gfx->setTextColor(UI_INK);
-  ctext(T(S_BATTLE), 3, SY(48));
+  //#region Title (same style as the progress page)
+  drawScreenTitle(T(S_CARD_STATS));
+  //#endregion
 
-  drawCardStat(SY(118), T(S_STAT_ATK), pet.atkStat(), 260, UI_BAR_BAD);
-  drawCardStat(SY(160), T(S_STAT_DEF), pet.defStat(), 260, 0x4C98);
-  drawCardStat(SY(202), T(S_STAT_SPE), pet.speStat(), 260, UI_BAR_WARN);
-  drawCardStat(SY(244), T(S_STAT_WGT), pet.weight, 100, 0xB3C8);
+  //#region Type chips centered under the title (an egg has no species yet)
+  if (!pet.isEgg() && pet.speciesId >= 1 && pet.speciesId <= DEX_COUNT) {
+    const DexEntry &speciesEntry = DEX_TBL[pet.speciesId];
+    int typesWidth = typeChipsTotalWidth(speciesEntry, GALLERY_TYPE_CHIP_STYLE);
+    drawTypeChips(CX - typesWidth / 2, CARD_STATS_TYPES_Y, speciesEntry, false, GALLERY_TYPE_CHIP_STYLE);
+  }
+  //#endregion
 
-  // button: strength training bag (greyed out while it can't start, e.g. asleep)
-  gfx->fillRoundRect(TRAIN_X, TRAIN_Y, TRAIN_W, TRAIN_H, 12, canStartSack() ? UI_BAR_BAD : UI_TRACK);
-  gfx->setTextColor(UI_BG_DAY);
-  ctext(T(S_TRAIN_STR), 2, TRAIN_Y + TRAIN_TY, TRAIN_W - 8);
+  //#region Stat rows, evenly spaced below the chips (CARD_STATS_* in boards/layout.h)
+  int rowTop = CARD_STATS_ROW_Y0;
+  // max HP the pet starts a battle with; an egg does not battle
+  uint16_t maxHp = pet.isEgg() ? 0 : battleMaxHpFor(petBattleStats());
+  drawCardStatLabelAndNumber(rowTop, T(S_STAT_HP), maxHp);
+  rowTop += CARD_STATS_ROW_STEP;
+  drawCardStat(rowTop, T(S_STAT_ATK), pet.atkStat(), 260, UI_BAR_BAD);
+  rowTop += CARD_STATS_ROW_STEP;
+  drawCardStat(rowTop, T(S_STAT_DEF), pet.defStat(), 260, 0x4C98);
+  rowTop += CARD_STATS_ROW_STEP;
+  drawCardStat(rowTop, T(S_STAT_SPE), pet.speStat(), 260, UI_BAR_WARN);
+  rowTop += CARD_STATS_ROW_STEP;
+  drawCardStat(rowTop, T(S_STAT_WGT), pet.weight, 100, 0xB3C8);
+  rowTop += CARD_STATS_ROW_STEP;
+  //#endregion
+
+  //#region Battle record: the player's lifetime wild battle wins and losses (no bar)
+  drawCardStatLabelAndNumber(rowTop, T(S_STAT_WINS), pet.battleWins);
+  rowTop += CARD_STATS_ROW_STEP;
+  drawCardStatLabelAndNumber(rowTop, T(S_STAT_LOSSES), pet.battleLosses);
+  //#endregion
 }
 
 // page 2: medals with descriptive labels
 void renderCardMedals() {
-  int got = 0;
-  for (int i = 0; i < MED_COUNT; i++)
-    if (pet.hasMedal(1 << i)) got++;
-  char head[24];
-  snprintf(head, sizeof(head), T(S_MEDALS_FMT), got, MED_COUNT);
   gfx->setTextColor(UI_INK);
-  ctext(head, 3, SY(48));
+  //#region Title (same style as the progress page)
+  drawScreenTitle(T(S_MEDALS));
+  //#endregion
 
   for (int i = 0; i < MED_COUNT; i++) {
     int x = MED_X0 + (i % 2) * MED_COLSTEP, y = MED_Y0 + (i / 2) * MED_STEP;
@@ -4066,9 +4115,7 @@ void renderCardProgress() {
   const DexEntry &d = DEX_TBL[pet.speciesId];
   gfx->setTextColor(UI_INK);
   // large title, shrunk to fit the circle / screen width (long translations)
-  int titleSize = shrinkTextSizeToWidth(T(S_PROGRESS), TS(5), CARD_PROGRESS_TITLE_MAXW);
-  setCur(centerX(T(S_PROGRESS), titleSize), CARD_PROGRESS_TITLE_Y);
-  printT(T(S_PROGRESS));
+  drawScreenTitle(T(S_PROGRESS));
 
   // level under the title
   char lv[10];
@@ -4141,8 +4188,8 @@ void renderCard() {
   gfx->flush();
 }
 
-// taps on the info card: close button, rename pencil (page 0), page arrows and
-// the TRAIN STRENGTH button (page 1). Anywhere else does nothing.
+// taps on the info card: close button, rename pencil (page 0) and page arrows.
+// Anywhere else does nothing.
 void handleInfoCardTap(int16_t x, int16_t y) {
   //#region Close button, drawn circle (wins over the pencil's padded box)
   if (isTouchInsideCircle(x, y, CLOSE_BTN_CX, CLOSE_BTN_CY, CLOSE_BTN_R)) {
@@ -4177,15 +4224,6 @@ void handleInfoCardTap(int16_t x, int16_t y) {
       isTouchInsideRect(x, y, LCD_WIDTH - CARD_ARROW_HIT_W, arrowHitTop, CARD_ARROW_HIT_W, CARD_ARROW_HIT_H)) {
     cardPage++;
     return;
-  }
-  //#endregion
-
-  //#region TRAIN STRENGTH button (page 1)
-  // the card only closes when the bag can actually open (not while asleep)
-  if (cardPage == 1 && y >= TRAIN_Y && y <= TRAIN_Y + TRAIN_H && x >= TRAIN_X && x <= TRAIN_X + TRAIN_W &&
-      canStartSack()) {
-    cardOpen = false;
-    startSack();
   }
   //#endregion
 }
@@ -4261,7 +4299,7 @@ void keyboardTap(int16_t x, int16_t y) {
 // The round board's grid is smaller (GALLERY_CELL in boards/layout.h) so it clears
 // the close button; the thumbnails are drawn at GALLERY_THUMB_SCALE_NUM/DEN.
 #define GAL_CELL GALLERY_CELL
-#define GAL_X ((LCD_WIDTH - 4 * GAL_CELL) / 2)
+#define GAL_X GALLERY_GRID_X
 #define GAL_Y GALLERY_GRID_Y
 
 void drawGalleryNavigation(bool showLeftArrow, bool showRightArrow);  // defined after renderGallery
@@ -4349,7 +4387,7 @@ void renderGallery() {
       ctext(T(S_CAUGHT_MARK), 2, SY(392), LCD_WIDTH - 2 * CARD_ARROW_HIT_W);
     }
     #pragma endregion
-    drawGalleryNavigation(galleryDetail > 1, galleryDetail < 151);
+    drawGalleryNavigation(galleryDetailHasNeighbor(-1), galleryDetailHasNeighbor(1));
     gfx->flush();
     return;
   }
@@ -4359,17 +4397,26 @@ void renderGallery() {
 
   gfx->fillScreen(RGB565_BLACK);
   fillScreenBg(UI_BG_DAY);
-  char head[24];
-  snprintf(head, sizeof(head), T(S_POKEDEX_FMT), pet.registeredCount());
+
+  #pragma region Title and the raised / caught counts (unfiltered totals)
   gfx->setTextColor(UI_INK);
-  setSize(3);
-  setCur(centerX(head, 3), SY(36));
-  printT(head);
+  drawGlyphCenteredText(T(S_POKEDEX_TITLE), GALLERY_TITLE_SIZE, GALLERY_TITLE_Y);
+  char countsText[24];
+  snprintf(countsText, sizeof(countsText), "R: %u  C: %u", pet.registeredCount(), pet.caughtCount());
+  drawGlyphCenteredText(countsText, GALLERY_COUNTS_SIZE, GALLERY_COUNTS_Y);
+  #pragma endregion
+
+  drawGalleryFilterButtons();
+
+  rebuildGalleryFilteredList();
+  int pageCount = galleryPageCount();
+  if (galleryPage > pageCount - 1) galleryPage = pageCount - 1;
 
   for (int r = 0; r < 4; r++) {
     for (int c = 0; c < 4; c++) {
-      int16_t dex = galleryPage * 16 + r * 4 + c + 1;
-      if (dex > 151) break;
+      int listIndex = galleryPage * 16 + r * 4 + c;
+      if (listIndex >= galleryFilteredCount) break;
+      int16_t dex = galleryFilteredDex[listIndex];
       int x = GAL_X + c * GAL_CELL, y = GAL_Y + r * GAL_CELL;
       const uint8_t *t = thumbs.get(dex);
       if (t) {
@@ -4400,25 +4447,108 @@ void renderGallery() {
       }
     }
   }
-  // page dots: centered (the original's fixed x=170 only fit at 466 px)
-  int dotsX0 = CX - (9 * SX(14)) / 2;
-  for (int i = 0; i < 10; i++) {
+  // page dots: one per page of the filtered list, centered under the grid
+  int dotsCenterX = GAL_X + 2 * GAL_CELL;
+  int dotsX0 = dotsCenterX - ((pageCount - 1) * SX(14)) / 2;
+  for (int i = 0; i < pageCount; i++) {
     if (i == galleryPage) gfx->fillCircle(dotsX0 + i * SX(14), SY(436), 4, UI_INK);
     else gfx->drawCircle(dotsX0 + i * SX(14), SY(436), 3, UI_INK);
   }
-  drawGalleryNavigation(galleryPage > 0, galleryPage < 9);
+  drawGalleryNavigation(galleryPage > 0, galleryPage < pageCount - 1);
   gfx->flush();
 }
 
+#pragma region Gallery filter: matching, the filtered list and the filter buttons
+bool dexPassesGalleryFilter(int16_t dex) {
+  switch (galleryFilter) {
+    case GALLERY_FILTER_RAISED: return pet.isRegistered(dex);
+    case GALLERY_FILTER_CAUGHT: return pet.isCaught(dex);
+    case GALLERY_FILTER_SHINY: return pet.isShinyRegistered(dex);
+    default: return true;
+  }
+}
+
+void rebuildGalleryFilteredList() {
+  galleryFilteredCount = 0;
+  for (int16_t dex = 1; dex <= 151; dex++)
+    if (dexPassesGalleryFilter(dex)) galleryFilteredDex[galleryFilteredCount++] = dex;
+}
+
+// pages of 16 over the filtered list; an empty filter still shows one (empty) page
+int galleryPageCount() {
+  return galleryFilteredCount ? (galleryFilteredCount + 15) / 16 : 1;
+}
+
+// position of dex in the filtered list, -1 when it does not pass the filter
+int galleryFilteredIndexOf(int16_t dex) {
+  for (int listIndex = 0; listIndex < galleryFilteredCount; listIndex++)
+    if (galleryFilteredDex[listIndex] == dex) return listIndex;
+  return -1;
+}
+
+int galleryFilterButtonTop(int filterIndex) {
+  return GALLERY_FILTER_Y + filterIndex * (GALLERY_FILTER_H + GALLERY_FILTER_GAP);
+}
+
+// stacked buttons left of the grid; the active filter is filled green with light text
+void drawGalleryFilterButtons() {
+  static const StrId filterLabels[GALLERY_FILTER_COUNT] = { S_FILTER_ALL, S_FILTER_RAISED, S_FILTER_CAUGHT, S_FILTER_SHINY };
+
+  #pragma region One text size for every label: the largest that fits the longest one
+  int labelTextSize = GALLERY_FILTER_TEXT_SIZE;
+  for (int filterIndex = 0; filterIndex < GALLERY_FILTER_COUNT; filterIndex++) {
+    int fittingSize = shrinkTextSizeToWidth(T(filterLabels[filterIndex]), GALLERY_FILTER_TEXT_SIZE,
+                                            GALLERY_FILTER_W - 2 * SETTINGS_TEXT_SIDE_PAD);
+    if (fittingSize < labelTextSize) labelTextSize = fittingSize;
+  }
+  #pragma endregion
+
+  for (int filterIndex = 0; filterIndex < GALLERY_FILTER_COUNT; filterIndex++) {
+    int buttonTop = galleryFilterButtonTop(filterIndex);
+    bool active = filterIndex == galleryFilter;
+    gfx->fillRoundRect(GALLERY_FILTER_X, buttonTop, GALLERY_FILTER_W, GALLERY_FILTER_H, GALLERY_FILTER_R,
+                       active ? UI_BAR_OK : UI_WHITE);
+    gfx->drawRoundRect(GALLERY_FILTER_X, buttonTop, GALLERY_FILTER_W, GALLERY_FILTER_H, GALLERY_FILTER_R, UI_INK);
+    gfx->setTextColor(active ? UI_BG_DAY : UI_INK);
+    drawTextCenteredInBox(T(filterLabels[filterIndex]), labelTextSize, GALLERY_FILTER_X, buttonTop,
+                          GALLERY_FILTER_W, GALLERY_FILTER_H);
+  }
+}
+
+// true when the tap hit a filter button: switches to it and goes back to page 1
+bool handleGalleryFilterTap(int16_t x, int16_t y) {
+  for (int filterIndex = 0; filterIndex < GALLERY_FILTER_COUNT; filterIndex++) {
+    if (!isTouchInsideRect(x, y, GALLERY_FILTER_X, galleryFilterButtonTop(filterIndex), GALLERY_FILTER_W, GALLERY_FILTER_H)) continue;
+    if (galleryFilter != filterIndex) {
+      galleryFilter = (GalleryFilter)filterIndex;
+      galleryPage = 0;
+      galleryDirty = true;
+      sfxPlay(SFX_TAP);
+    }
+    return true;
+  }
+  return false;
+}
+#pragma endregion
+
 #pragma region Gallery navigation buttons (close X and page/species arrows)
 // Shows the species `step` positions away (+1 next, -1 previous) in the detail
-// view, if there is one: any dex 1..151 can open detail (same rule as a grid tap).
+// view among those that pass the active filter, if there is one.
 void galleryShowNeighborSpecies(int step) {
-  int16_t neighborDex = galleryDetail + step;
-  if (neighborDex < 1 || neighborDex > 151) return;
+  rebuildGalleryFilteredList();
+  int neighborIndex = galleryFilteredIndexOf(galleryDetail) + step;
+  if (neighborIndex < 0 || neighborIndex >= galleryFilteredCount) return;
+  int16_t neighborDex = galleryFilteredDex[neighborIndex];
   galleryDetail = neighborDex;
-  galleryPage = (neighborDex - 1) / 16;  // the grid shows this species' page when going back
+  galleryPage = neighborIndex / 16;  // the grid shows this species' page when going back
   galleryPmd.load(neighborDex, pet.isShinyRegistered(neighborDex));
+}
+
+// detail arrows: is there a filtered species before / after the one shown?
+bool galleryDetailHasNeighbor(int step) {
+  rebuildGalleryFilteredList();
+  int neighborIndex = galleryFilteredIndexOf(galleryDetail) + step;
+  return galleryFilteredIndexOf(galleryDetail) >= 0 && neighborIndex >= 0 && neighborIndex < galleryFilteredCount;
 }
 
 // Opens the gallery on its first page (Pokedex button on the main screen)
@@ -4468,7 +4598,7 @@ void galleryTap(int16_t x, int16_t y) {
   bool closeHit;
   if (galleryDetail) {
     // Only the X returns to the grid; the arrows switch species; other taps do nothing
-    if (!galleryNavigationHit(x, y, galleryDetail > 1, galleryDetail < 151, navigationStep, closeHit)) return;
+    if (!galleryNavigationHit(x, y, galleryDetailHasNeighbor(-1), galleryDetailHasNeighbor(1), navigationStep, closeHit)) return;
     if (!closeHit) {
       galleryShowNeighborSpecies(navigationStep);
       return;
@@ -4478,7 +4608,8 @@ void galleryTap(int16_t x, int16_t y) {
     galleryDirty = true;
     return;
   }
-  if (galleryNavigationHit(x, y, galleryPage > 0, galleryPage < 9, navigationStep, closeHit)) {
+  rebuildGalleryFilteredList();
+  if (galleryNavigationHit(x, y, galleryPage > 0, galleryPage < galleryPageCount() - 1, navigationStep, closeHit)) {
     if (closeHit) {
       closeGalleryToMainScreen();
     } else {
@@ -4487,12 +4618,14 @@ void galleryTap(int16_t x, int16_t y) {
     }
     return;
   }
+  if (handleGalleryFilterTap(x, y)) return;
   // same reason as in the keyboard: filter before dividing
   if (x < GAL_X || y < GAL_Y) return;
   int c = (x - GAL_X) / GAL_CELL, r = (y - GAL_Y) / GAL_CELL;
   if (c > 3 || r > 3) return;
-  int16_t dex = galleryPage * 16 + r * 4 + c + 1;
-  if (dex > 151) return;
+  int listIndex = galleryPage * 16 + r * 4 + c;
+  if (listIndex >= galleryFilteredCount) return;
+  int16_t dex = galleryFilteredDex[listIndex];
   galleryDetail = dex;
   galleryPmd.load(dex, pet.isShinyRegistered(dex));
 }
@@ -4782,6 +4915,7 @@ void drawEvolveFX(uint32_t now) {
 }
 
 void drawPet() {
+  lastSpriteDrawnBounds.valid = false;  // each path below fills it (sleep bubble anchor)
   if (pmd.loaded) {
     drawPetPMD();
     return;
@@ -4827,6 +4961,7 @@ void drawPet() {
   if (m == MOOD_HAPPY && (millis() / 500) % 2) y -= 6;  // little hop
 
   drawMap(sp.sprite, SPRITE_H, x, y, s, false);
+  lastSpriteDrawnBounds = { (int16_t)x, (int16_t)y, (int16_t)(x + SPRITE_W * s - 1), (int16_t)(y + SPRITE_H * s - 1), true };
 
   // overlaid expressions using the species' anchors
   bool blink = (millis() % 3500 < 300);
@@ -4836,9 +4971,85 @@ void drawPet() {
   }
   if (m == MOOD_EATING) overlayMouth(sp, x, y, s, true);
   else if (m == MOOD_SAD) overlayMouth(sp, x, y, s, false);
-
-  if (pet.showHeart()) drawMap(SPR_HEART, 32, x + 20 * s, y - 2 * s, 2, false);
+  // the "likes it" heart is drawn by render() next to the head (drawPetHeart)
 }
+
+#pragma region Sleep bubble ("Zzz" speech bubble next to the head of the sleeping creature)
+// White rounded bubble above and to the right of the drawn sprite box, with a
+// tail pointing down at the head. Without a box (nothing drawn) it sits where the
+// old "Zz" text was. Kept inside the screen; sizes in boards/layout.h (SLEEP_BUBBLE_*).
+// A point on the head, three quarters across the drawn sprite box (where the
+// sleep bubble tail and the heart sit); a fixed spot when nothing was drawn
+void findPetHeadAnchor(int &headX, int &headY) {
+  headX = SX(320);
+  headY = SY(150);
+  if (!lastSpriteDrawnBounds.valid) return;
+  int boxWidth = lastSpriteDrawnBounds.right - lastSpriteDrawnBounds.left + 1;
+  headX = lastSpriteDrawnBounds.left + boxWidth * 3 / 4;
+  headY = lastSpriteDrawnBounds.top + SLEEP_BUBBLE_HEAD_INSET;
+}
+
+// "likes it" heart by the head, like the sleep bubble: its lower-left corner just
+// above and right of the anchor. Asleep, the bubble takes that side, so the heart
+// mirrors to the left of the anchor. Kept inside the same screen limits.
+// SPR_HEART only fills columns 5..26 and rows 6..21 of its 32x32 grid
+#define HEART_VISIBLE_LEFT_COL 5
+#define HEART_VISIBLE_RIGHT_COL 26
+#define HEART_VISIBLE_TOP_ROW 6
+#define HEART_VISIBLE_BOTTOM_ROW 21
+
+void drawPetHeart() {
+  int headX, headY;
+  findPetHeadAnchor(headX, headY);
+  #pragma region Place the visible heart: tip just above the anchor, beside it
+  int heartTop = headY - (HEART_VISIBLE_BOTTOM_ROW + 1) * PET_HEART_SCALE - SLEEP_BUBBLE_GAP;
+  int heartLeft = pet.sleeping ? headX - SLEEP_BUBBLE_GAP - (HEART_VISIBLE_RIGHT_COL + 1) * PET_HEART_SCALE
+                               : headX + SLEEP_BUBBLE_GAP - HEART_VISIBLE_LEFT_COL * PET_HEART_SCALE;
+  #pragma endregion
+  #pragma region Keep the visible heart inside the same limits as the bubble
+  int maxLeft = SLEEP_BUBBLE_MAX_RIGHT - (HEART_VISIBLE_RIGHT_COL + 1) * PET_HEART_SCALE;
+  int minLeft = -HEART_VISIBLE_LEFT_COL * PET_HEART_SCALE;
+  int minTop = SLEEP_BUBBLE_MIN_TOP - HEART_VISIBLE_TOP_ROW * PET_HEART_SCALE;
+  if (heartLeft > maxLeft) heartLeft = maxLeft;
+  if (heartLeft < minLeft) heartLeft = minLeft;
+  if (heartTop < minTop) heartTop = minTop;
+  #pragma endregion
+  drawMap(SPR_HEART, 32, heartLeft, heartTop, PET_HEART_SCALE, false);
+}
+
+void drawSleepBubble() {
+  const char *sleepText = "Zzz";
+  int textWidth = textW(sleepText, SLEEP_BUBBLE_TEXT_SIZE);
+  int bubbleWidth = textWidth + 2 * SLEEP_BUBBLE_PAD_X;
+  int bubbleHeight = 8 * SLEEP_BUBBLE_TEXT_SIZE + 2 * SLEEP_BUBBLE_PAD_Y;
+
+  int headX, headY;
+  findPetHeadAnchor(headX, headY);
+
+  #pragma region Bubble box: bottom-left corner just above the anchor, clamped inside the screen
+  int bubbleLeft = headX + SLEEP_BUBBLE_GAP;
+  int bubbleTop = headY - SLEEP_BUBBLE_TAIL - bubbleHeight;
+  if (bubbleLeft > SLEEP_BUBBLE_MAX_RIGHT - bubbleWidth) bubbleLeft = SLEEP_BUBBLE_MAX_RIGHT - bubbleWidth;
+  if (bubbleTop < SLEEP_BUBBLE_MIN_TOP) bubbleTop = SLEEP_BUBBLE_MIN_TOP;
+  #pragma endregion
+
+  #pragma region Tail toward the head, then the bubble over its base, then the text
+  int tailBaseY = bubbleTop + bubbleHeight - 1;
+  int tailBaseLeft = bubbleLeft + SLEEP_BUBBLE_PAD_X / 2;
+  int tailBaseRight = tailBaseLeft + SLEEP_BUBBLE_TAIL;
+  gfx->fillTriangle(tailBaseLeft, tailBaseY, tailBaseRight, tailBaseY, headX, headY, UI_WHITE);
+  gfx->drawLine(tailBaseLeft, tailBaseY, headX, headY, UI_INK);
+  gfx->drawLine(tailBaseRight, tailBaseY, headX, headY, UI_INK);
+  gfx->fillRoundRect(bubbleLeft, bubbleTop, bubbleWidth, bubbleHeight, SLEEP_BUBBLE_R, UI_WHITE);
+  gfx->drawRoundRect(bubbleLeft, bubbleTop, bubbleWidth, bubbleHeight, SLEEP_BUBBLE_R, UI_INK);
+  gfx->drawLine(tailBaseLeft + 1, tailBaseY, tailBaseRight - 1, tailBaseY, UI_WHITE);  // opens the border onto the tail
+  gfx->setTextColor(UI_INK);  // always dark on the white bubble, day or night
+  setSize(SLEEP_BUBBLE_TEXT_SIZE);
+  setCur(bubbleLeft + SLEEP_BUBBLE_PAD_X, bubbleTop + SLEEP_BUBBLE_PAD_Y);
+  printT(sleepText);
+  #pragma endregion
+}
+#pragma endregion
 
 // ---------- bath scene ----------
 
@@ -5062,9 +5273,7 @@ void drawPetPMD() {
   }
 
   drawPmdAct(act, (int)beh.x, PET_GROUND, now - beh.t0, loop || act == PMD_IDLE, false, 5);
-
-  // SX/SY: unscaled, the CYD drew it at y -34 and only its tip showed at the top edge
-  if (pet.showHeart()) drawMap(SPR_HEART, 32, (int)beh.x + SX(50), PET_GROUND - SY(190), PET_HEART_SCALE, false);
+  // the "likes it" heart is drawn by render() next to the head (drawPetHeart)
 }
 
 // animated sprite from the SD: integer per-pixel zoom, frames at their own pace
@@ -5092,9 +5301,10 @@ void drawPetSD() {
       gfx->fillRect(x + c * s, y + r * s, s, s, sil ? INK_K : mon.pal[idx]);
     }
   }
+  lastSpriteDrawnBounds = { (int16_t)x, (int16_t)y, (int16_t)(x + w - 1), (int16_t)(y + h - 1), true };
 
-  // emotes instead of expressions (imported sprites have no anchors)
-  if (pet.showHeart()) drawMap(SPR_HEART, 32, x + w - 30, y - 50, 2, false);
+  // emotes instead of expressions (imported sprites have no anchors): the heart
+  // is drawn by render() next to the head (drawPetHeart)
 }
 
 // closed eye: erases the 3x4 eye and draws the eyelid

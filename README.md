@@ -199,7 +199,8 @@ If one bottoms out it counts as a *slip-up*.
 **Buttons (bottom arc, icons):**
 - 🍴 **Feed** → food menu: apple, hamburger and pizza (each species has a hidden
   favourite that gives a bonus) and a candy (+happiness but it fattens; weight makes it sluggish).
-- ⚽ **Play** → the pokeball minigame (trains SPEED).
+- ⚽ **Play** → picker: pokeball minigame, coin chase, 🥊 training bag (trains
+  STRENGTH) or a wild battle.
 - 🌙 **Light** → sleep/wake (recovers energy, dims the screen). While asleep,
   needs decay much slower (rest).
 - 🛁 **Bath** → a foam scene that cleans up the poops.
@@ -209,8 +210,7 @@ If one bottoms out it counts as a *slip-up*.
 - Horizontal swipe = open the **Pokédex / gallery**.
 - Tap the creature's name = open the **stat card** (4 pages: Profile / Battle / Medals /
   Progress; switch with the side arrows or a horizontal swipe; tap the pencil next to
-  the name on Profile to rename; on Battle the "Train strength" button opens the bag;
-  the X in the top-right corner closes it).
+  the name on Profile to rename; the X in the top-right corner closes it).
 - Swipe down = **set the clock** and pick the **language** + sound on/off.
 - Long press (3 s) on the creature = **release** dialog.
 

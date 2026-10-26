@@ -25,10 +25,12 @@ enum StrId : uint8_t {
   S_EGG_HDR, S_EGG_LEGEND, S_EGG_RARE, S_EGG_TOUCH, S_EGG_MOVES, S_EGG_ALMOST,
   // shared formats
   S_POKEDEX_FMT,   // "POKEDEX %u/151"
+  // pokedex gallery: title and the filter buttons (All / Raised / Caught / Shiny)
+  S_POKEDEX_TITLE, S_FILTER_ALL, S_FILTER_RAISED, S_FILTER_CAUGHT, S_FILTER_SHINY,
   // release dialog
   S_RELEASE_FMT, S_YES, S_NO,
   // minigame and punching bag
-  S_HITS_FMT, S_STR_GAIN_FMT, S_NEW_RECORD, S_RECORD_FMT, S_HIT_FAST,
+  S_HITS_FMT, S_NEW_RECORD, S_RECORD_FMT, S_HIT_FAST,
   S_SCORE_FMT, S_GREAT_JOY, S_PLUS_JOY,
   // clock / settings
   S_SET_TIME, S_HOUR, S_MIN,
@@ -39,10 +41,10 @@ enum StrId : uint8_t {
   // info card: profile stat rows (labels, then the age value "%lud")
   S_CARD_LEVEL, S_CARD_STREAK_BEST, S_CARD_BOND, S_CARD_FAV_FOOD, S_CARD_AGE,
   S_CARD_AGE_FMT,
-  // info card: battle
-  S_BATTLE, S_STAT_ATK, S_STAT_DEF, S_STAT_SPE, S_STAT_WGT, S_TRAIN_STR,
-  // info card: medals
-  S_MEDALS_FMT,
+  // battle screen title, then the info card stats page (title and row labels)
+  S_BATTLE, S_CARD_STATS, S_STAT_HP, S_STAT_ATK, S_STAT_DEF, S_STAT_SPE, S_STAT_WGT, S_STAT_WINS, S_STAT_LOSSES,
+  // info card: medals page title
+  S_MEDALS,
   // keyboard and gallery
   S_NAME,
   // bars

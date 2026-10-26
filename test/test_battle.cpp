@@ -206,6 +206,17 @@ TEST(battle, runtime_starts_with_scaled_hp) {
   CHECK(!battle.counterReady);
 }
 
+// the info card shows battleMaxHpFor(): it must match the HP a battle starts with
+TEST(battle, max_hp_wrapper_matches_runtime_start) {
+  BattleStats player = { 0, 60, 40, 50, 10 };
+  BattleStats enemy = { 0, 58, 42, 48, 10 };
+  BattleRuntime battle = beginBattleRuntime(player, enemy);
+  CHECK_EQ(battleMaxHpFor(player), battle.playerMaxHp);
+  CHECK_EQ(battleMaxHpFor(enemy), battle.enemyMaxHp);
+  BattleStats levelZero = { 0, 0, 0, 0, 0 };
+  CHECK_EQ(battleMaxHpFor(levelZero), (uint16_t)(30 + 1 * 5));
+}
+
 TEST(battle, attack_steps_one_round_and_avoids_normal_one_hit) {
   BattleRuntime battle = beginBattleRuntime({ 0, 120, 55, 70, 20 },
                                             { 0, 45, 45, 40, 19 });

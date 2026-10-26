@@ -605,25 +605,53 @@ def icon_swords():
 
 #region Coin icon (play menu: coin chase)
 def icon_coin():
-    # play menu item 1: gold coin with a shine; swords move to item 2.
-    # Dark outline, darker gold rim with brown shading toward the bottom
-    # right, white shine at the upper left and an embossed bar in the middle
+    # gold coin turned slightly, as if spinning: a narrow upright oval face
+    # (10x14) with its edge showing as a thin band on the right side
+    # (cream at the top, brown below), darker gold rim with brown shading
+    # toward the bottom right, white shine at the upper left and a
+    # foreshortened 1 px embossed bar in the middle of the face
     return [
         "................",
         ".....kkkkkk.....",
-        "...kkYYYYYYkk...",
-        "..kYYffffffYYk..",
-        ".kYfwwfffffffYk.",
-        ".kYwwffYYffffYk.",
-        ".kYwfffYYffffYk.",
-        ".kYffffYYffffYk.",
-        ".kYffffYYfffYCk.",
-        ".kYffffYYfffYCk.",
-        ".kYffffYYffYYCk.",
-        ".kYfffffffYYYCk.",
-        "..kYYYYYYYYCCk..",
-        "...kkCCCCCCkk...",
+        "....kYYYYkYk....",
+        "...kYwwffYkYk...",
+        "...kwwfffYkCk...",
+        "..kYwffYffYkCk..",
+        "..kYfffYffYkCk..",
+        "..kYfffYffYkCk..",
+        "..kYfffYfYYkCk..",
+        "..kYfffYfYYkCk..",
+        "..kYffffYYCkCk..",
+        "...kYffYYCkCk...",
+        "...kYYYYCCkCk...",
+        "....kCCCCkCk....",
         ".....kkkkkk.....",
+        "................",
+    ]
+#endregion
+
+
+#region Boxing glove icon (play menu: training bag)
+def icon_glove():
+    # play menu item 2: red boxing glove seen from the side, swords move to
+    # item 3. Thumb bulges out on the left with a dark seam, white shine at
+    # the upper left, darker red shading on the right and a white cuff
+    return [
+        "................",
+        ".....kkkkkk.....",
+        "...kkrrrrrrkk...",
+        "..krrwwrrrrrRk..",
+        "..krwwrrrrrrRk..",
+        ".kkkrrrrrrrrRRk.",
+        "krrRkrrrrrrrRRk.",
+        "krrrRkrrrrrrRRk.",
+        "krrrrRkrrrrRRRk.",
+        ".krrrrrrrrRRRk..",
+        "..kRrrrrrRRRk...",
+        "...kkkkkkkkk....",
+        "...kwwwwwwSk....",
+        "...kwwwwwwSk....",
+        "...kkkkkkkkk....",
         "................",
     ]
 #endregion
@@ -790,6 +818,7 @@ SPRITES = {
     "ICON_CONTROLLER": icon_controller(),
     "ICON_SWORDS": icon_swords(),
     "ICON_COIN": icon_coin(),
+    "ICON_GLOVE": icon_glove(),
     "ICON_POKEDEX": icon_pokedex(),
     "EGG": egg(),
     "POOP": poop(),
