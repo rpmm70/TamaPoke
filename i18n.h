@@ -76,6 +76,12 @@ enum StrId : uint8_t {
   S_CATCH_WILD, S_LEAVE_WILD, S_CAUGHT_OK, S_ESCAPED, S_CLOSE_CHANCE,
   S_ATK_GAIN_FMT, S_DEF_GAIN_FMT, S_SPD_GAIN_FMT, S_OK, S_CAUGHT_MARK,
   //#endregion
+  //#region WiFi strings
+  // settings menu button and screen title, scan button, status line, open network
+  // label, then the keyboard title when it asks for a WiFi password
+  S_MENU_WIFI, S_WIFI_SCAN, S_WIFI_SCANNING, S_WIFI_NO_NETWORKS,
+  S_WIFI_CONNECTING, S_WIFI_CONNECTED, S_WIFI_FAILED, S_WIFI_OPEN, S_PASSWORD,
+  //#endregion
   STR_COUNT
 };
 

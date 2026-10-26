@@ -34,6 +34,7 @@
 #include "audio.h"
 #include "ui_icons.h"  // close button, pencil, page arrows and their hit tests
 #include "battle.h"    // wild battles: turn engine, wild species/level picks, day phase
+#include "wifi_manager.h"  // WiFi on/off, scan, connection, encrypted saved password
 
 // Firmware version. Bump this number on every release (and manifest.json for
 // the web installer). Shown on the settings screen and over serial at boot.
@@ -57,7 +58,7 @@ Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, 
 Arduino_ILI9341 *panel = new Arduino_ILI9341(bus, TFT_RST, 1 /*rotation*/, false /*ips*/);
 // Full framebuffer (320x240x2 = 150 KB) in INTERNAL RAM: the CYD has no PSRAM
 // and 150 KB in one piece never fits (largest free block ~110 KB), so
-// BandCanvas splits it into 64-row bands (see band_canvas.h). If even the bands
+// BandCanvas splits it into 32-row bands (see band_canvas.h). If even the bands
 // do not fit, setup() falls back to drawing directly on the panel (gfx = panel;
 // works but flickers). The base type Arduino_GFX* is used so they can be
 // swapped; flush() is virtual in the base.
@@ -128,10 +129,17 @@ bool galleryDetailHasNeighbor(int step);
 
 bool screenOff = false;       // short press of the PWR / BOOT button, or Screen Off in the settings menu
 bool cardOpen = false;        // creature info card (tap the name on the main screen)
-bool kbOpen = false;          // keyboard to rename the creature
-char nameBuf[12] = "";
-uint8_t nameLen = 0;
-uint8_t cardPage = 0;         // 0 profile, 1 stats, 2 medals, 3 progress
+bool kbOpen = false;          // keyboard: renames the creature or asks for a WiFi password
+#pragma region Keyboard state
+enum KeyboardPurpose : uint8_t { KEYBOARD_FOR_NAME, KEYBOARD_FOR_WIFI_PASSWORD };
+KeyboardPurpose keyboardPurpose = KEYBOARD_FOR_NAME;
+char keyboardText[WIFI_PASSWORD_MAX_LENGTH + 1] = "";  // fits a nickname (11) and a WPA passphrase (63)
+uint8_t keyboardTextLength = 0;
+uint8_t keyboardTextMaxLength = 0;
+bool keyboardShiftOn = false;    // letters: upper case; 123 page: second symbols page
+bool keyboardSymbolsOn = false;  // 123 page instead of the letters
+#pragma endregion
+uint8_t cardPage = 0;        // 0 profile, 1 stats, 2 medals, 3 progress
 #define CARD_PAGE_COUNT 4
 //#region Hit boxes recorded while drawing (the touch code reads them)
 int16_t headerNameLeft = 0, headerNameWidth = 0;  // name in drawHeader(): tap = info card
@@ -147,9 +155,12 @@ enum SettingsScreen : uint8_t {
   SETTINGS_MENU,
   SETTINGS_AUDIO_VIDEO,
   SETTINGS_TIME,
-  SETTINGS_LANGUAGE
+  SETTINGS_LANGUAGE,
+  SETTINGS_WIFI
 };
 SettingsScreen settingsScreen = SETTINGS_CLOSED;
+uint8_t wifiListPage = 0;                                // page of the WiFi scan results
+char wifiPasswordTargetSsid[WIFI_SSID_MAX_LENGTH + 1] = "";  // network the password keyboard is for
 int clockH = 12, clockM = 0;  // time being edited (always 0..23, also in 12h mode)
 bool clockUses24Hour = true;  // time screen display format, persisted in NVS
 // Brightness slider: level 0..SETTINGS_BRIGHTNESS_MAX maps linearly onto the
@@ -304,7 +315,7 @@ BattleReward battleReward = {};
 bool battleFromWildEncounter = false;
 char battlePlayerMoveText[64] = "";
 char battleWildMoveText[64] = "";
-bool battleAttackMenuOpen = false;  // Quick / Heavy overlay over the action buttons
+bool battleAttackMenuOpen = false;  // Quick / Attack / Heavy overlay over the action buttons
 bool battleCatchOffered = false;
 bool battleCatchTried = false;
 bool battleCatchDone = false;
@@ -468,6 +479,10 @@ void setup() {
   Serial.printf("CYD heap: libre=%u mayor_bloque=%u (framebuffer necesita %u)\n",
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
                 (unsigned)(LCD_WIDTH * LCD_HEIGHT * 2));
+  // SD BEFORE the framebuffer: mounting needs one ~14 KB contiguous block (4 KB
+  // FAT sectors, one cache per open file), and once the 20 KB bands fill the
+  // heap's gaps no block that size is left (esp_vfs_fat_register 0x101)
+  sdBegin();
   // the panel is already initialized: GFX_SKIP_OUTPUT_BEGIN only allocates the
   // bands, and if they do not fit it draws straight to the panel
   bool useCanvas = fbCanvas->begin(GFX_SKIP_OUTPUT_BEGIN);
@@ -481,7 +496,9 @@ void setup() {
   touchHalBegin();
 
   pet.begin();
-  sdBegin();
+#if BOARD_IS_ROUND
+  sdBegin();  // the CYD mounts it before allocating the framebuffer (see above)
+#endif
   thumbs.load();
 
   // real clock: applies the time it was powered off
@@ -507,6 +524,7 @@ void setup() {
   pet.syncClock(e);
 
   audioBegin();  // ES8311 + I2S + amplifier (plays a startup jingle)
+  wifiBegin();   // after the framebuffer: the WiFi stack's RAM comes from what is left
 
   lastInteract = millis();
 }
@@ -554,6 +572,7 @@ void loop() {
 
   handleTouch();
   handleSerial();
+  wifiUpdate(now);  // scan results, connection result and timeout
   ensureMon();
   maybeOfferWildEncounter(now);  // random wild prompt (only on the idle main screen)
 
@@ -768,9 +787,10 @@ void handleSerial() {
     Serial.println();
     Serial.println("DONE");
   } else if (line == "HEALTH") {
-    Serial.printf("up=%lus heap=%u min=%u sd=%d mon=%d\n",
+    Serial.printf("up=%lus heap=%u min=%u maxblock=%u sd=%d mon=%d wifi=%d\n",
                   (unsigned long)(millis() / 1000), ESP.getFreeHeap(),
-                  ESP.getMinFreeHeap(), sdReady, pmd.loaded || mon.loaded);
+                  ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), sdReady, pmd.loaded || mon.loaded,
+                  wifiIsEnabled());
     Serial.println("DONE");
   } else if (line == "STATS") {
     Serial.printf("spec=%d nv=%u com=%u fel=%u ene=%u lim=%u desc=%u sd=%d mon=%d bat=%d usb=%d rtc=%u\n",
@@ -1869,8 +1889,8 @@ void drawGlyphCenteredText(const char *text, int requestedSize, int y, int maxWi
 // truly bold font at this size merges the strokes and ruins the kana.
 // Redrawing thickens the stroke without distorting the glyph. Tested on the
 // board by usakomint, who compared both options in Japanese.
-// The nickname keyboard is alphabet-only (left that way on purpose), so there
-// is never CJK here and nothing needs thickening.
+// The keyboard is ASCII-only (left that way on purpose), so there is never CJK
+// here and nothing needs thickening.
 void printT(char c) { gfx->print(c); }
 
 void printT(const char *s) {
@@ -2879,7 +2899,8 @@ void finishBattle() {
 void performBattleAction(BattleAction action) {
   if (battleResolved) return;
   battleAttackMenuOpen = false;
-  battleTurn = stepBattle(battleRun, action, (uint8_t)random(100));
+  BattleAction enemyAction = pickEnemyAction(battleRun, (uint8_t)random(100));
+  battleTurn = stepBattle(battleRun, action, (uint8_t)random(100), enemyAction);
 
   #pragma region Our move (under our sprite): rest, dodge, or the damage our attack did
   if (battleTurn.restFailed) {
@@ -2898,7 +2919,8 @@ void performBattleAction(BattleAction action) {
   #pragma region Move of the wild one (under its sprite): dodge, or the damage its attack did
   if (battleTurn.restFailed) {
     battleWildMoveText[0] = 0;  // no turn was played
-  } else if (battleTurn.enemyDodged && battleTurn.enemyDamage == 0) {
+  } else if ((battleTurn.enemyAction == BATTLE_DODGE && battleRun.enemyHp > 0) ||
+             (battleTurn.enemyDodged && battleTurn.enemyDamage == 0)) {
     snprintf(battleWildMoveText, sizeof(battleWildMoveText), "%s", T(S_DODGED));
   } else if (battleTurn.enemyDamage > 0) {
     snprintf(battleWildMoveText, sizeof(battleWildMoveText), T(S_HIT_FMT), battleTurn.enemyDamage);
@@ -2972,11 +2994,16 @@ void battleTap(int16_t x, int16_t y) {
   }
   #pragma endregion
 
-  #pragma region Quick / Heavy overlay: any other tap closes it
+  #pragma region Quick / Attack / Heavy overlay: any other tap closes it
   if (battleAttackMenuOpen) {
     if (isTouchInsidePaddedRect(x, y, BATTLE_QUICK_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H,
                                 BATTLE_ATTACK_MENU_HIT_PAD_X, BATTLE_ATTACK_MENU_HIT_PAD_Y)) {
       performBattleAction(BATTLE_ATTACK_QUICK);
+      return;
+    }
+    if (isTouchInsidePaddedRect(x, y, BATTLE_NORMAL_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H,
+                                BATTLE_ATTACK_MENU_HIT_PAD_X, BATTLE_ATTACK_MENU_HIT_PAD_Y)) {
+      performBattleAction(BATTLE_ATTACK);
       return;
     }
     if (isTouchInsidePaddedRect(x, y, BATTLE_HEAVY_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H,
@@ -3259,12 +3286,14 @@ void renderBattle() {
     }
     #pragma endregion
 
-    #pragma region Quick / Heavy overlay (after Attack)
+    #pragma region Quick / Attack / Heavy overlay (after Attack)
     if (battleAttackMenuOpen) {
       gfx->fillRoundRect(BATTLE_QUICK_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, BATTLE_ATTACK_MENU_R, UI_BAR_BAD);
+      gfx->fillRoundRect(BATTLE_NORMAL_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, BATTLE_ATTACK_MENU_R, 0xB104);
       gfx->fillRoundRect(BATTLE_HEAVY_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, BATTLE_ATTACK_MENU_R, UI_BAR_WARN);
       gfx->setTextColor(UI_BG_DAY);
       drawBattleButtonLabel(BATTLE_QUICK_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, T(S_QUICK_ATTACK), BATTLE_BTN_TEXT_SIZE);
+      drawBattleButtonLabel(BATTLE_NORMAL_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, T(S_ATTACK), BATTLE_BTN_TEXT_SIZE);
       drawBattleButtonLabel(BATTLE_HEAVY_X, BATTLE_ATTACK_MENU_Y, BATTLE_ATTACK_MENU_W, BATTLE_ATTACK_MENU_H, T(S_HEAVY_ATTACK), BATTLE_BTN_TEXT_SIZE);
     }
     #pragma endregion
@@ -3418,9 +3447,15 @@ bool isTouchOnSettingsCloseButton(int16_t touchX, int16_t touchY) {
 #pragma endregion
 
 #pragma region Settings menu screen
-// Title, four large rows (Screen Off, Audio / Video, Time, Language) and the firmware version
+// Title, four large rows and the firmware version. Row 0 is split in two buttons,
+// WiFi (left, green while WiFi is on) and Screen Off (right); on a board without
+// WiFi (the CYD) Screen Off takes the whole row. The other rows are Audio / Video,
+// Time and Language (row 0's entry in the label table is the Screen Off button's label).
 #define SETTINGS_MENU_ROW_COUNT 4
 static const StrId SETTINGS_MENU_ROW_LABELS[SETTINGS_MENU_ROW_COUNT] = { S_MENU_SCREEN_OFF, S_MENU_AV, S_MENU_TIME, S_MENU_LANG };
+void openWifiSettings();  // prototype (defined with the WiFi settings screen)
+// icon slot of a row 0 button: 1.5 x the icon size (the WiFi fan is ~1.4 x as wide as tall)
+#define SETTINGS_MENU_ICON_SLOT_W (SETTINGS_MENU_ICON_SIZE * 3 / 2)
 
 void openSettingsMenu() { settingsScreen = SETTINGS_MENU; }
 
@@ -3428,12 +3463,63 @@ int settingsMenuRowTop(int rowIndex) {
   return SETTINGS_MENU_ROW_Y + rowIndex * (SETTINGS_MENU_ROW_H + SETTINGS_MENU_ROW_GAP);
 }
 
+#pragma region Row 0: WiFi (left half) and Screen Off (right half, or the whole row without WiFi)
+int settingsMenuHalfButtonWidth() { return (SETTINGS_MENU_ROW_W - SETTINGS_MENU_SPLIT_GAP) / 2; }
+int settingsMenuScreenOffButtonWidth() { return BOARD_HAS_WIFI ? settingsMenuHalfButtonWidth() : SETTINGS_MENU_ROW_W; }
+int settingsMenuScreenOffButtonLeft() { return SETTINGS_MENU_ROW_X + SETTINGS_MENU_ROW_W - settingsMenuScreenOffButtonWidth(); }
+int settingsMenuButtonLabelWidth(int buttonWidth) { return buttonWidth - 2 * SETTINGS_MENU_ICON_INSET - SETTINGS_MENU_ICON_SLOT_W; }
+
+// Icon (WiFi fan or screen off) centered in its slot at the left, label centered in the rest of the button.
+// Plain parameter types: the .ino prototypes are generated above the sketch's own enums.
+void drawSettingsMenuIconButton(int buttonLeft, int buttonTop, int buttonWidth, bool showsWifiIcon, bool filled,
+                                const char *label, int labelTextSize) {
+  uint16_t fillColor = filled ? UI_BAR_OK : UI_WHITE;
+  uint16_t foregroundColor = filled ? UI_BG_DAY : UI_INK;
+  gfx->fillRoundRect(buttonLeft, buttonTop, buttonWidth, SETTINGS_MENU_ROW_H, SETTINGS_MENU_ROW_R, fillColor);
+  gfx->drawRoundRect(buttonLeft, buttonTop, buttonWidth, SETTINGS_MENU_ROW_H, SETTINGS_MENU_ROW_R, UI_INK);
+
+  #pragma region Icon
+  int iconSlotLeft = buttonLeft + SETTINGS_MENU_ICON_INSET;
+  if (showsWifiIcon) {
+    drawWifiIcon(gfx, iconSlotLeft + SETTINGS_MENU_ICON_SLOT_W / 2, buttonTop + (SETTINGS_MENU_ROW_H + SETTINGS_MENU_ICON_SIZE) / 2,
+                 SETTINGS_MENU_ICON_SIZE, 4, foregroundColor, foregroundColor);
+  } else {
+    drawScreenOffIcon(gfx, iconSlotLeft + (SETTINGS_MENU_ICON_SLOT_W - SETTINGS_MENU_ICON_SIZE) / 2,
+                      buttonTop + (SETTINGS_MENU_ROW_H - SETTINGS_MENU_ICON_SIZE) / 2, SETTINGS_MENU_ICON_SIZE,
+                      foregroundColor, fillColor);
+  }
+  #pragma endregion
+
+  gfx->setTextColor(foregroundColor);
+  drawTextCenteredInBox(label, labelTextSize, iconSlotLeft + SETTINGS_MENU_ICON_SLOT_W, buttonTop,
+                        settingsMenuButtonLabelWidth(buttonWidth), SETTINGS_MENU_ROW_H);
+}
+
+void drawSettingsMenuFirstRow() {
+  int rowTop = settingsMenuRowTop(0);
+  const int screenOffLabelMaxWidth = settingsMenuButtonLabelWidth(settingsMenuScreenOffButtonWidth()) - 2 * SETTINGS_TEXT_SIDE_PAD;
+  int labelTextSize = shrinkTextSizeToWidth(T(SETTINGS_MENU_ROW_LABELS[0]), TS(3), screenOffLabelMaxWidth);
+#if BOARD_HAS_WIFI
+  #pragma region WiFi button, sharing one text size with Screen Off (the largest at which both fit)
+  const int wifiLabelMaxWidth = settingsMenuButtonLabelWidth(settingsMenuHalfButtonWidth()) - 2 * SETTINGS_TEXT_SIDE_PAD;
+  labelTextSize = shrinkTextSizeToWidth(T(S_MENU_WIFI), labelTextSize, wifiLabelMaxWidth);
+  drawSettingsMenuIconButton(SETTINGS_MENU_ROW_X, rowTop, settingsMenuHalfButtonWidth(), true, wifiIsEnabled(), T(S_MENU_WIFI),
+                             labelTextSize);
+  #pragma endregion
+#endif
+  drawSettingsMenuIconButton(settingsMenuScreenOffButtonLeft(), rowTop, settingsMenuScreenOffButtonWidth(), false, false,
+                             T(SETTINGS_MENU_ROW_LABELS[0]), labelTextSize);
+}
+#pragma endregion
+
 void renderSettingsMenu() {
   beginSettingsScreen(T(S_MENU_TITLE));
 
-  #pragma region Rows: label centered, arrow at the right (equal margin on the left keeps it centered)
+  drawSettingsMenuFirstRow();
+
+  #pragma region Rows 1 to 3: label centered, arrow at the right (equal margin on the left keeps it centered)
   const int labelMargin = SETTINGS_MENU_ARROW_INSET + SETTINGS_MENU_ARROW_SIZE / 2;
-  for (int rowIndex = 0; rowIndex < SETTINGS_MENU_ROW_COUNT; rowIndex++) {
+  for (int rowIndex = 1; rowIndex < SETTINGS_MENU_ROW_COUNT; rowIndex++) {
     int rowTop = settingsMenuRowTop(rowIndex);
     gfx->fillRoundRect(SETTINGS_MENU_ROW_X, rowTop, SETTINGS_MENU_ROW_W, SETTINGS_MENU_ROW_H, SETTINGS_MENU_ROW_R, UI_WHITE);
     gfx->drawRoundRect(SETTINGS_MENU_ROW_X, rowTop, SETTINGS_MENU_ROW_W, SETTINGS_MENU_ROW_H, SETTINGS_MENU_ROW_R, UI_INK);
@@ -3463,13 +3549,23 @@ void handleSettingsMenuTap(int16_t touchX, int16_t touchY) {
     settingsScreen = SETTINGS_CLOSED;
     return;
   }
-  for (int rowIndex = 0; rowIndex < SETTINGS_MENU_ROW_COUNT; rowIndex++) {
+  #pragma region Row 0: WiFi screen (left, boards with WiFi only) or Screen Off
+#if BOARD_HAS_WIFI
+  if (isTouchInsideRect(touchX, touchY, SETTINGS_MENU_ROW_X, settingsMenuRowTop(0), settingsMenuHalfButtonWidth(), SETTINGS_MENU_ROW_H)) {
+    openWifiSettings();  // only opens the screen: WiFi is switched there
+    return;
+  }
+#endif
+  if (isTouchInsideRect(touchX, touchY, settingsMenuScreenOffButtonLeft(), settingsMenuRowTop(0), settingsMenuScreenOffButtonWidth(),
+                        SETTINGS_MENU_ROW_H)) {  // back to the main screen with the panel dark (see turnScreenOff)
+    settingsScreen = SETTINGS_CLOSED;
+    turnScreenOff();
+    return;
+  }
+  #pragma endregion
+  for (int rowIndex = 1; rowIndex < SETTINGS_MENU_ROW_COUNT; rowIndex++) {
     if (!isTouchInsideRect(touchX, touchY, SETTINGS_MENU_ROW_X, settingsMenuRowTop(rowIndex), SETTINGS_MENU_ROW_W, SETTINGS_MENU_ROW_H)) continue;
-    if (rowIndex == 0) {  // Screen Off: back to the main screen with the panel dark (see turnScreenOff)
-      settingsScreen = SETTINGS_CLOSED;
-      turnScreenOff();
-    }
-    else if (rowIndex == 1) settingsScreen = SETTINGS_AUDIO_VIDEO;
+    if (rowIndex == 1) settingsScreen = SETTINGS_AUDIO_VIDEO;
     else if (rowIndex == 2) openClock();  // loads the current time into the editor
     else settingsScreen = SETTINGS_LANGUAGE;
     return;
@@ -3724,12 +3820,222 @@ void handleLanguageSettingsTap(int16_t touchX, int16_t touchY) {
 }
 #pragma endregion
 
+#pragma region WiFi settings screen
+// On/Off pill (green while on), Scan button (grayed while it cannot scan), one
+// status line and the scan results, strongest first, WIFI_ROWS_PER_PAGE per page
+// with up/down arrows. A row shows the signal, SSID, band, security and dBm; the
+// connected network is filled green with a check mark. Tapping a network asks
+// for its password on the keyboard (open networks connect right away).
+void openKeyboardForWifiPassword(const char *ssid);  // prototype (defined with the keyboard)
+
+void openWifiSettings() {
+  wifiListPage = 0;
+  settingsScreen = SETTINGS_WIFI;
+}
+
+int wifiListPageCount() {
+  int resultCount = wifiScanResultCount();
+  return resultCount == 0 ? 1 : (resultCount + WIFI_ROWS_PER_PAGE - 1) / WIFI_ROWS_PER_PAGE;
+}
+
+int wifiListRowTop(int rowIndex) { return WIFI_LIST_Y + rowIndex * WIFI_ROW_STEP; }
+
+bool isWifiScanButtonEnabled() {
+  return wifiIsEnabled() && !wifiIsScanning() && wifiConnectionState() != WIFI_CONNECTION_CONNECTING;
+}
+
+// Prints an SSID at (left, top), cut with ".." so it fits maxWidth at textSize
+void drawSsidCutToWidth(const char *ssid, int textSize, int left, int top, int maxWidth) {
+  char fittedText[WIFI_SSID_MAX_LENGTH + 3];  // the SSID plus ".."
+  size_t fittedLength = strnlen(ssid, WIFI_SSID_MAX_LENGTH);
+  memcpy(fittedText, ssid, fittedLength);
+  fittedText[fittedLength] = 0;
+  setSize(textSize);
+  if (textW(fittedText, textSize) > maxWidth) {
+    do {
+      fittedLength--;
+      memcpy(fittedText + fittedLength, "..", 3);
+    } while (fittedLength > 0 && textW(fittedText, textSize) > maxWidth);
+  }
+  setCur(left, top);
+  printT(fittedText);
+}
+
+void drawWifiNetworkRow(const WifiScanResult &network, int rowTop) {
+  bool connected = wifiIsConnectedToSsid(network.ssid);
+  uint16_t rowInk = connected ? UI_BG_DAY : UI_INK;
+  gfx->fillRoundRect(WIFI_LIST_X, rowTop, WIFI_LIST_W, WIFI_ROW_H, WIFI_ROW_R, connected ? UI_BAR_OK : UI_WHITE);
+  gfx->drawRoundRect(WIFI_LIST_X, rowTop, WIFI_LIST_W, WIFI_ROW_H, WIFI_ROW_R, UI_INK);
+
+  #pragma region Signal strength: WiFi fan lit by the RSSI, vertically centered
+  const int iconWidth = WIFI_ROW_ICON_SIZE * 3 / 2;
+  drawWifiIcon(gfx, WIFI_LIST_X + WIFI_ROW_PAD + iconWidth / 2, rowTop + (WIFI_ROW_H + WIFI_ROW_ICON_SIZE) / 2,
+               WIFI_ROW_ICON_SIZE, wifiSignalBarsForRssi(network.rssi), rowInk, UI_TRACK);
+  #pragma endregion
+
+  #pragma region Check mark at the right edge (connected network only)
+  int textRight = WIFI_LIST_X + WIFI_LIST_W - WIFI_ROW_PAD;
+  if (connected) {
+    int checkLeft = textRight - WIFI_ROW_CHECK_SIZE;
+    drawCheckIcon(gfx, checkLeft, rowTop + (WIFI_ROW_H - WIFI_ROW_CHECK_SIZE) / 2, WIFI_ROW_CHECK_SIZE, rowInk);
+    textRight = checkLeft - WIFI_ROW_PAD;
+  }
+  #pragma endregion
+
+  #pragma region SSID, then band, security and signal in dBm
+  const int textLeft = WIFI_LIST_X + 2 * WIFI_ROW_PAD + iconWidth;
+  const int textWidth = textRight - textLeft;
+  gfx->setTextColor(rowInk);
+  drawSsidCutToWidth(network.ssid, WIFI_ROW_SSID_SIZE, textLeft, rowTop + WIFI_ROW_SSID_DY, textWidth);
+  const char *securityText = wifiSecurityLabel(network.authMode);
+  if (securityText[0] == 0) securityText = T(S_WIFI_OPEN);
+  char detailText[48];
+  snprintf(detailText, sizeof(detailText), "%s  %s  %ld dBm", wifiIsChannelOn5GHz(network.channel) ? "5 GHz" : "2.4 GHz",
+           securityText, (long)network.rssi);
+  shrinkTextSizeToWidth(detailText, WIFI_ROW_DETAIL_SIZE, textWidth);  // leaves the fitted size applied
+  gfx->setTextColor(connected ? UI_BG_DAY : UI_LABEL);
+  setCur(textLeft, rowTop + WIFI_ROW_DETAIL_DY);
+  printT(detailText);
+  #pragma endregion
+}
+
+void renderWifiSettings() {
+  beginSettingsScreen(T(S_MENU_WIFI));
+  bool wifiOn = wifiIsEnabled();
+
+  #pragma region On/Off pill (green when on) and the Scan button (grayed when it cannot scan)
+  gfx->fillRoundRect(WIFI_TOGGLE_X, WIFI_BUTTON_Y, WIFI_TOGGLE_W, WIFI_BUTTON_H, WIFI_BUTTON_R, wifiOn ? UI_BAR_OK : UI_WHITE);
+  gfx->drawRoundRect(WIFI_TOGGLE_X, WIFI_BUTTON_Y, WIFI_TOGGLE_W, WIFI_BUTTON_H, WIFI_BUTTON_R, UI_INK);
+  gfx->setTextColor(wifiOn ? UI_BG_DAY : UI_INK);
+  drawTextCenteredInBox(wifiOn ? T(S_ON) : T(S_OFF), TS(3), WIFI_TOGGLE_X, WIFI_BUTTON_Y, WIFI_TOGGLE_W, WIFI_BUTTON_H);
+
+  bool scanEnabled = isWifiScanButtonEnabled();
+  gfx->fillRoundRect(WIFI_SCAN_X, WIFI_BUTTON_Y, WIFI_SCAN_W, WIFI_BUTTON_H, WIFI_BUTTON_R, UI_WHITE);
+  gfx->drawRoundRect(WIFI_SCAN_X, WIFI_BUTTON_Y, WIFI_SCAN_W, WIFI_BUTTON_H, WIFI_BUTTON_R, scanEnabled ? UI_INK : UI_TRACK);
+  gfx->setTextColor(scanEnabled ? UI_INK : UI_TRACK);
+  drawTextCenteredInBox(T(S_WIFI_SCAN), TS(3), WIFI_SCAN_X, WIFI_BUTTON_Y, WIFI_SCAN_W, WIFI_BUTTON_H);
+  #pragma endregion
+
+  #pragma region Status line: connecting / failed first, then scanning, the connected network, nothing found
+  char statusText[64] = "";
+  uint16_t statusColor = UI_LABEL;
+  WifiConnectionState connectionState = wifiConnectionState();
+  if (wifiOn) {
+    if (connectionState == WIFI_CONNECTION_CONNECTING) {
+      snprintf(statusText, sizeof(statusText), "%s", T(S_WIFI_CONNECTING));
+    } else if (connectionState == WIFI_CONNECTION_FAILED) {
+      snprintf(statusText, sizeof(statusText), "%s", T(S_WIFI_FAILED));
+      statusColor = UI_BAR_BAD;
+    } else if (wifiIsScanning()) {
+      snprintf(statusText, sizeof(statusText), "%s", T(S_WIFI_SCANNING));
+    } else if (connectionState == WIFI_CONNECTION_CONNECTED) {
+      snprintf(statusText, sizeof(statusText), "%s: %s", T(S_WIFI_CONNECTED), wifiConnectedSsid());
+    } else if (wifiHasScanned() && wifiScanResultCount() == 0) {
+      snprintf(statusText, sizeof(statusText), "%s", T(S_WIFI_NO_NETWORKS));
+    }
+  }
+  if (statusText[0]) {
+    gfx->setTextColor(statusColor);
+    int statusTextSize = shrinkTextSizeToWidth(statusText, WIFI_STATUS_SIZE, WIFI_STATUS_MAX_W);
+    setCur(centerX(statusText, statusTextSize), WIFI_STATUS_Y);
+    printT(statusText);
+  }
+  #pragma endregion
+
+  #pragma region Network rows of the current page
+  int pageCount = wifiListPageCount();
+  if (wifiListPage >= pageCount) wifiListPage = pageCount - 1;
+  for (int rowIndex = 0; rowIndex < WIFI_ROWS_PER_PAGE; rowIndex++) {
+    int resultIndex = wifiListPage * WIFI_ROWS_PER_PAGE + rowIndex;
+    if (resultIndex >= wifiScanResultCount()) break;
+    drawWifiNetworkRow(wifiScanResultAt(resultIndex), wifiListRowTop(rowIndex));
+  }
+  #pragma endregion
+
+  #pragma region Page arrows and "page/pages" (only with more than one page; a hidden arrow ignores taps)
+  if (pageCount > 1) {
+    if (wifiListPage > 0) drawVerticalPageArrow(gfx, WIFI_ARROW_CX, WIFI_ARROW_UP_CY, WIFI_ARROW_SIZE, -1, UI_INK);
+    if (wifiListPage < pageCount - 1) drawVerticalPageArrow(gfx, WIFI_ARROW_CX, WIFI_ARROW_DOWN_CY, WIFI_ARROW_SIZE, 1, UI_INK);
+    char pageText[8];
+    snprintf(pageText, sizeof(pageText), "%d/%d", wifiListPage + 1, pageCount);
+    gfx->setTextColor(UI_LABEL);
+    setSize(WIFI_PAGE_TEXT_SIZE);
+    setCur(WIFI_ARROW_CX - (int)textW(pageText, WIFI_PAGE_TEXT_SIZE) / 2, WIFI_PAGE_TEXT_Y);
+    printT(pageText);
+  }
+  #pragma endregion
+
+  drawSettingsCloseButton();
+  gfx->flush();
+}
+
+void handleWifiSettingsTap(int16_t touchX, int16_t touchY) {
+  if (isTouchOnSettingsCloseButton(touchX, touchY)) {  // back to the menu
+    settingsScreen = SETTINGS_MENU;
+    return;
+  }
+
+  #pragma region On/Off pill (persists) and Scan
+  if (isTouchInsideRect(touchX, touchY, WIFI_TOGGLE_X, WIFI_BUTTON_Y, WIFI_TOGGLE_W, WIFI_BUTTON_H)) {
+    bool turningOn = !wifiIsEnabled();
+    wifiSetEnabled(turningOn);
+    wifiListPage = 0;
+    sfxPlay(turningOn && !wifiIsEnabled() ? SFX_DENY : SFX_TAP);  // the WiFi stack could not start
+    return;
+  }
+  if (isTouchInsideRect(touchX, touchY, WIFI_SCAN_X, WIFI_BUTTON_Y, WIFI_SCAN_W, WIFI_BUTTON_H)) {
+    if (isWifiScanButtonEnabled() && wifiStartScan()) {
+      wifiListPage = 0;
+      sfxPlay(SFX_TAP);
+    }
+    return;
+  }
+  #pragma endregion
+
+  #pragma region Page arrows
+  int pageCount = wifiListPageCount();
+  const int arrowHitLeft = WIFI_ARROW_CX - WIFI_ARROW_HIT_W / 2;
+  if (wifiListPage > 0 &&
+      isTouchInsideRect(touchX, touchY, arrowHitLeft, WIFI_ARROW_UP_CY - WIFI_ARROW_HIT_H / 2, WIFI_ARROW_HIT_W, WIFI_ARROW_HIT_H)) {
+    wifiListPage--;
+    return;
+  }
+  if (wifiListPage < pageCount - 1 &&
+      isTouchInsideRect(touchX, touchY, arrowHitLeft, WIFI_ARROW_DOWN_CY - WIFI_ARROW_HIT_H / 2, WIFI_ARROW_HIT_W, WIFI_ARROW_HIT_H)) {
+    wifiListPage++;
+    return;
+  }
+  #pragma endregion
+
+  #pragma region Network rows: password prompt, or connect right away to an open network
+  if (wifiConnectionState() == WIFI_CONNECTION_CONNECTING) return;  // one attempt at a time
+  for (int rowIndex = 0; rowIndex < WIFI_ROWS_PER_PAGE; rowIndex++) {
+    int resultIndex = wifiListPage * WIFI_ROWS_PER_PAGE + rowIndex;
+    if (resultIndex >= wifiScanResultCount()) break;
+    if (!isTouchInsideRect(touchX, touchY, WIFI_LIST_X, wifiListRowTop(rowIndex), WIFI_LIST_W, WIFI_ROW_H)) continue;
+    const WifiScanResult &network = wifiScanResultAt(resultIndex);
+    if (wifiIsConnectedToSsid(network.ssid)) return;  // already connected
+    WifiSecurityKind securityKind = wifiSecurityKindOf(network.authMode);
+    if (securityKind == WIFI_SECURITY_ENTERPRISE) {  // needs a user name too: not supported
+      sfxPlay(SFX_DENY);
+      return;
+    }
+    sfxPlay(SFX_TAP);
+    if (securityKind == WIFI_SECURITY_OPEN) wifiConnectToNetwork(network.ssid, "");
+    else openKeyboardForWifiPassword(network.ssid);
+    return;
+  }
+  #pragma endregion
+}
+#pragma endregion
+
 #pragma region Settings dispatch (render and tap for whichever settings screen is open)
 void renderSettingsScreen() {
   switch (settingsScreen) {
     case SETTINGS_AUDIO_VIDEO: renderAudioVideoSettings(); break;
     case SETTINGS_TIME: renderClock(); break;
     case SETTINGS_LANGUAGE: renderLanguageSettings(); break;
+    case SETTINGS_WIFI: renderWifiSettings(); break;
     default: renderSettingsMenu(); break;
   }
 }
@@ -3739,6 +4045,7 @@ void handleSettingsTap(int16_t touchX, int16_t touchY) {
     case SETTINGS_AUDIO_VIDEO: handleAudioVideoSettingsTap(touchX, touchY); break;
     case SETTINGS_TIME: clockTap(touchX, touchY); break;
     case SETTINGS_LANGUAGE: handleLanguageSettingsTap(touchX, touchY); break;
+    case SETTINGS_WIFI: handleWifiSettingsTap(touchX, touchY); break;
     default: handleSettingsMenuTap(touchX, touchY); break;
   }
 }
@@ -4228,69 +4535,184 @@ void handleInfoCardTap(int16_t x, int16_t y) {
   //#endregion
 }
 
-// ---------- rename keyboard ----------
+// ---------- keyboard (nickname and WiFi password) ----------
 
-static const char KB_KEYS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ.-";  // 28 + DEL + OK = 30
-#define KB_COLS 6
+#pragma region Keyboard layout
+// 7 x 5 keys. The bottom row is the same on every page: Shift, 123/ABC, a
+// 3-key-wide space bar, delete and OK. Shift switches the letters' case, or to
+// the second symbols page while the 123 page is up (the two symbol pages hold
+// every printable ASCII symbol). Control codes mark the special keys.
 // KB_X/Y/W/H and the rest: boards/layout.h
+#define KB_COLS 7
+#define KB_ROWS 5
+#define KB_KEY_COUNT (KB_COLS * KB_ROWS)
+#define KB_KEY_SHIFT '\x01'
+#define KB_KEY_MODE '\x02'
+#define KB_KEY_DELETE '\x03'
+#define KB_KEY_OK '\x04'
+#define KB_BOTTOM_ROW "\x01\x02   \x03\x04"
+static const char KB_LETTER_KEYS[] = "ABCDEFG" "HIJKLMN" "OPQRSTU" "VWXYZ.-" KB_BOTTOM_ROW;
+static const char KB_SYMBOL_KEYS[] = "1234567" "890@#$%" "&*()-_+" "=!?.,:;" KB_BOTTOM_ROW;
+static const char KB_MORE_SYMBOL_KEYS[] = "1234567" "890\"'/\\" "|~`<>[]" "{}^-_.," KB_BOTTOM_ROW;
+static_assert(sizeof(KB_LETTER_KEYS) == KB_KEY_COUNT + 1, "letters page must fill the 7 x 5 grid");
+static_assert(sizeof(KB_SYMBOL_KEYS) == KB_KEY_COUNT + 1, "symbols page must fill the 7 x 5 grid");
+static_assert(sizeof(KB_MORE_SYMBOL_KEYS) == KB_KEY_COUNT + 1, "second symbols page must fill the 7 x 5 grid");
 
-void openKeyboard() {
+// key at keyIndex (row-major) on the page and case currently shown
+char keyboardKeyAt(int keyIndex) {
+  if (keyboardSymbolsOn) return (keyboardShiftOn ? KB_MORE_SYMBOL_KEYS : KB_SYMBOL_KEYS)[keyIndex];
+  char letterKey = KB_LETTER_KEYS[keyIndex];
+  if (!keyboardShiftOn && letterKey >= 'A' && letterKey <= 'Z') return (char)(letterKey - 'A' + 'a');
+  return letterKey;
+}
+#pragma endregion
+
+#pragma region Keyboard open / close
+// Names start in upper case (as before), passwords in lower case. Plain bool
+// parameter: the .ino prototypes are generated above the KeyboardPurpose enum.
+void openKeyboardWithText(bool forWifiPassword, const char *initialText, uint8_t maxLength) {
+  KeyboardPurpose purpose = forWifiPassword ? KEYBOARD_FOR_WIFI_PASSWORD : KEYBOARD_FOR_NAME;
+  keyboardPurpose = purpose;
+  keyboardTextMaxLength = maxLength;
+  strncpy(keyboardText, initialText, maxLength);
+  keyboardText[maxLength] = 0;
+  keyboardTextLength = strlen(keyboardText);
+  keyboardSymbolsOn = false;
+  keyboardShiftOn = (purpose == KEYBOARD_FOR_NAME);
   kbOpen = true;
-  strncpy(nameBuf, pet.nick, sizeof(nameBuf) - 1);
-  nameBuf[sizeof(nameBuf) - 1] = 0;
-  nameLen = strlen(nameBuf);
+}
+
+void openKeyboard() { openKeyboardWithText(false, pet.nick, sizeof(pet.nick) - 1); }
+
+void openKeyboardForWifiPassword(const char *ssid) {
+  strncpy(wifiPasswordTargetSsid, ssid, WIFI_SSID_MAX_LENGTH);
+  wifiPasswordTargetSsid[WIFI_SSID_MAX_LENGTH] = 0;
+  openKeyboardWithText(true, "", WIFI_PASSWORD_MAX_LENGTH);
+}
+
+// The text is wiped so a typed password does not linger in RAM
+void closeKeyboard() {
+  memset(keyboardText, 0, sizeof(keyboardText));
+  keyboardTextLength = 0;
+  kbOpen = false;
+}
+
+// OK: renames the creature, or starts connecting with the password (the WiFi
+// screen underneath shows the result)
+void submitKeyboardText() {
+  if (keyboardPurpose == KEYBOARD_FOR_WIFI_PASSWORD) {
+    if (keyboardTextLength == 0) {
+      sfxPlay(SFX_DENY);
+      return;
+    }
+    wifiConnectToNetwork(wifiPasswordTargetSsid, keyboardText);
+  } else {
+    pet.rename(keyboardText);
+  }
+  closeKeyboard();
+}
+#pragma endregion
+
+#pragma region Keyboard drawing
+// keyWidth spans the key's columns (the space bar is three); the gap between keys is 6 px
+void drawKeyboardKey(char key, int keyLeft, int keyTop, int keyWidth) {
+  const int keyHeight = KB_H - 6;
+  bool isSpecialKey = key == KB_KEY_SHIFT || key == KB_KEY_MODE || key == KB_KEY_DELETE || key == KB_KEY_OK;
+  bool isActiveShift = key == KB_KEY_SHIFT && keyboardShiftOn;
+  gfx->fillRoundRect(keyLeft, keyTop, keyWidth, keyHeight, 6, isActiveShift ? UI_BAR_OK : isSpecialKey ? UI_BAR_WARN : UI_WHITE);
+  gfx->drawRoundRect(keyLeft, keyTop, keyWidth, keyHeight, 6, UI_INK);
+
+  #pragma region Space bar: an open bracket under the middle of the key
+  if (key == ' ') {
+    int bracketWidth = keyWidth / 2, bracketLeft = keyLeft + (keyWidth - bracketWidth) / 2;
+    int bracketBottom = keyTop + keyHeight * 2 / 3, bracketHeight = keyHeight / 6;
+    gfx->drawFastHLine(bracketLeft, bracketBottom, bracketWidth, UI_INK);
+    gfx->drawFastVLine(bracketLeft, bracketBottom - bracketHeight, bracketHeight, UI_INK);
+    gfx->drawFastVLine(bracketLeft + bracketWidth - 1, bracketBottom - bracketHeight, bracketHeight, UI_INK);
+    return;
+  }
+  #pragma endregion
+
+  #pragma region Label: the character, or the name of the special key
+  char characterLabel[2] = { key, 0 };
+  const char *label = characterLabel;
+  if (key == KB_KEY_SHIFT) label = keyboardSymbolsOn ? (keyboardShiftOn ? "2/2" : "1/2") : "aA";
+  else if (key == KB_KEY_MODE) label = keyboardSymbolsOn ? "ABC" : "123";
+  else if (key == KB_KEY_DELETE) label = "<-";
+  else if (key == KB_KEY_OK) label = "OK";
+  gfx->setTextColor(UI_INK);
+  drawTextCenteredInBox(label, 2, keyLeft, keyTop, keyWidth, keyHeight);
+  #pragma endregion
 }
 
 void renderKeyboard() {
   gfx->fillScreen(RGB565_BLACK);
   fillScreenBg(UI_BG_DAY);
   gfx->setTextColor(UI_INK);
-  ctext(T(S_NAME), 2, KB_TITLE_Y);
-  // current buffer
+  ctext(keyboardPurpose == KEYBOARD_FOR_WIFI_PASSWORD ? T(S_PASSWORD) : T(S_NAME), 2, KB_TITLE_Y);
+
+  #pragma region Text box: the nickname, or one '*' per password character (the end stays visible when it overflows)
   gfx->fillRoundRect(KB_BOX_X, KB_BOX_Y, KB_BOX_W, KB_BOX_H, KB_BOX_R, UI_WHITE);
   gfx->drawRoundRect(KB_BOX_X, KB_BOX_Y, KB_BOX_W, KB_BOX_H, KB_BOX_R, UI_INK);
-  setSize(TS(3));
-  setCur(KB_BOX_TX, KB_BOX_TY);
-  printT(nameLen ? nameBuf : "_");
-
-  for (int i = 0; i < 30; i++) {
-    int x = KB_X + (i % KB_COLS) * KB_W, y = KB_Y + (i / KB_COLS) * KB_H;
-    bool special = (i >= 28);
-    gfx->fillRoundRect(x, y, KB_W - 6, KB_H - 6, 6, special ? UI_BAR_WARN : UI_WHITE);
-    gfx->drawRoundRect(x, y, KB_W - 6, KB_H - 6, 6, UI_INK);
-    gfx->setTextColor(UI_INK);
-    setSize(2);
-    if (i < 28) {
-      setCur(x + KB_W / 2 - KB_CH_DX, y + KB_H / 2 - KB_CH_DY);
-      printT(KB_KEYS[i]);
-    } else {
-      const char *lab = (i == 28) ? "<-" : "OK";
-      setCur(x + KB_W / 2 - KB_OK_DX, y + KB_H / 2 - KB_CH_DY);
-      printT(lab);
-    }
+  char shownText[sizeof(keyboardText)];
+  if (keyboardPurpose == KEYBOARD_FOR_WIFI_PASSWORD) {
+    memset(shownText, '*', keyboardTextLength);
+    shownText[keyboardTextLength] = 0;
+  } else {
+    memcpy(shownText, keyboardText, keyboardTextLength + 1);
   }
+  const char *visibleText = keyboardTextLength ? shownText : "_";
+  setSize(TS(3));
+  const int maxTextWidth = KB_BOX_W - 2 * (KB_BOX_TX - KB_BOX_X);
+  while (visibleText[1] && (int)textW(visibleText, TS(3)) > maxTextWidth) visibleText++;
+  setCur(KB_BOX_TX, KB_BOX_TY);
+  printT(visibleText);
+  #pragma endregion
+
+  #pragma region Keys (consecutive spaces in a row are one wide space bar)
+  for (int keyIndex = 0; keyIndex < KB_KEY_COUNT; keyIndex++) {
+    int column = keyIndex % KB_COLS;
+    char key = keyboardKeyAt(keyIndex);
+    if (key == ' ' && column > 0 && keyboardKeyAt(keyIndex - 1) == ' ') continue;  // part of the bar on its left
+    int spanColumns = 1;
+    while (key == ' ' && column + spanColumns < KB_COLS && keyboardKeyAt(keyIndex + spanColumns) == ' ') spanColumns++;
+    drawKeyboardKey(key, KB_X + column * KB_W, KB_Y + (keyIndex / KB_COLS) * KB_H, spanColumns * KB_W - 6);
+  }
+  #pragma endregion
+
+  drawSettingsCloseButton();  // closes without saving
   gfx->flush();
 }
+#pragma endregion
 
+#pragma region Keyboard touch
 void keyboardTap(int16_t x, int16_t y) {
+  if (isTouchOnSettingsCloseButton(x, y)) {  // cancel: nothing is renamed or connected
+    closeKeyboard();
+    return;
+  }
   // filter BEFORE dividing: with x/y below KB_X/KB_Y the subtraction is negative
   // and integer division truncates toward zero (not toward -inf), so col/row
   // would come out 0 instead of negative and the filter below would not catch it
   if (x < KB_X || y < KB_Y) return;
   int col = (x - KB_X) / KB_W, row = (y - KB_Y) / KB_H;
-  if (col >= KB_COLS || row >= 5) return;
-  int i = row * KB_COLS + col;
-  if (i >= 30) return;
-  if (i == 28) {  // delete
-    if (nameLen) nameBuf[--nameLen] = 0;
-  } else if (i == 29) {  // OK
-    pet.rename(nameBuf);
-    kbOpen = false;
-  } else if (nameLen < sizeof(nameBuf) - 1) {
-    nameBuf[nameLen++] = KB_KEYS[i];
-    nameBuf[nameLen] = 0;
+  if (col >= KB_COLS || row >= KB_ROWS) return;
+  char key = keyboardKeyAt(row * KB_COLS + col);
+  if (key == KB_KEY_SHIFT) {
+    keyboardShiftOn = !keyboardShiftOn;
+  } else if (key == KB_KEY_MODE) {  // the 123 page opens on its first page; back to letters in the purpose's case
+    keyboardSymbolsOn = !keyboardSymbolsOn;
+    keyboardShiftOn = !keyboardSymbolsOn && keyboardPurpose == KEYBOARD_FOR_NAME;
+  } else if (key == KB_KEY_DELETE) {
+    if (keyboardTextLength) keyboardText[--keyboardTextLength] = 0;
+  } else if (key == KB_KEY_OK) {
+    submitKeyboardText();
+  } else if (keyboardTextLength < keyboardTextMaxLength) {
+    keyboardText[keyboardTextLength++] = key;
+    keyboardText[keyboardTextLength] = 0;
   }
 }
+#pragma endregion
 
 // ---------- pokedex gallery ----------
 

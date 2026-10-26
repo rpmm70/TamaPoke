@@ -338,8 +338,11 @@ bool sdBegin() {
 #else
   // SD on its own SPI bus (pins 18/19/23, CS 5); not shared with the display or touch.
   // Not formatted if it fails to mount (unlike the Waveshare): better not to touch someone else's card.
+  // At most 3 open files (default 5): each costs a 4 KB sector cache in internal
+  // RAM, which the CYD needs for the framebuffer and WiFi. The game opens one
+  // file at a time; the LS serial command holds the directory plus one entry.
   SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
-  sdReady = SDHOST.begin(SD_CS, SPI, 20000000);
+  sdReady = SDHOST.begin(SD_CS, SPI, 20000000, "/sd", 3 /* max open files */);
 #endif
   if (sdReady) {
     Serial.printf("SD montada: %llu MB\n", SDHOST.cardSize() / (1024ULL * 1024ULL));

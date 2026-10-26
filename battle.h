@@ -56,6 +56,8 @@ struct BattleRuntime {
   uint16_t enemyDamageTotal;
   uint8_t restUsesLeft;
   bool counterReady;
+  bool enemyCounterReady;        // the wild one dodged an attack: its next hit lands harder
+  BattleAction enemyLastAction;  // stops the wild one from chaining dodges
 };
 
 // what happened in one stepBattle() call (for the UI log and effects)
@@ -71,6 +73,9 @@ struct BattleTurnResult {
   bool heavyRisk;
   bool counterReady;
   bool counterUsed;
+  BattleAction enemyAction;  // move the wild one played (never BATTLE_REST)
+  bool enemyCounterReady;
+  bool enemyCounterUsed;
   bool restFailed;
   bool battleEnded;
   bool playerWon;
@@ -93,7 +98,12 @@ int16_t pickWildSpecies(uint8_t roll, uint8_t phase = 1);
 BattleStats wildBattleStats(int16_t dex, uint8_t level);
 uint8_t battleTypeEffectPct(uint8_t attackType, uint8_t defendType1, uint8_t defendType2);
 BattleRuntime beginBattleRuntime(const BattleStats &player, const BattleStats &enemy);
-BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t luckRoll);
+// move the wild one plays this turn (attack, quick, heavy or dodge), weighted by
+// the state of the battle; choiceRoll is 0..99
+BattleAction pickEnemyAction(const BattleRuntime &battle, uint8_t choiceRoll);
+// enemyAction comes from pickEnemyAction(); BATTLE_REST is played as BATTLE_ATTACK
+BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t luckRoll,
+                            BattleAction enemyAction = BATTLE_ATTACK);
 
 BattleResult resolveBattle(const BattleStats &player,
                            const BattleStats &enemy,

@@ -3,7 +3,9 @@
 // Full-screen framebuffer split into horizontal bands, for boards WITHOUT
 // PSRAM (CYD). The ESP32 has ~300 KB of free internal RAM, but it is split
 // into regions: the largest contiguous block is ~110 KB, so a single 150 KB
-// Arduino_Canvas never fits. Several ~40 KB bands do. The scene is drawn ONCE
+// Arduino_Canvas never fits. Several 20 KB bands do (40 KB bands stopped
+// fitting once the WiFi library's static RAM shrank the region after .bss
+// to ~80 KB: small bands fill the leftover gaps). The scene is drawn ONCE
 // (same drawing code as with Arduino_Canvas) and flush() sends the bands one
 // after the other, so the panel never shows a half-drawn frame.
 // Rotation 0 only: the landscape rotation is done by the panel (rotation=1).
@@ -14,10 +16,10 @@
 #pragma endregion
 
 #pragma region Band geometry
-#define BAND_SHIFT 6                  // 64 rows per band: y >> 6 picks the band
+#define BAND_SHIFT 5                  // 32 rows per band (20 KB at 320 px): y >> 5 picks the band
 #define BAND_ROWS (1 << BAND_SHIFT)
 #define BAND_MASK (BAND_ROWS - 1)
-#define BAND_MAX 8                    // up to 512 rows
+#define BAND_MAX 8                    // up to 256 rows
 #pragma endregion
 
 class BandCanvas : public Arduino_GFX {

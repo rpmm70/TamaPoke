@@ -412,6 +412,153 @@ TEST(battle, step_after_end_does_nothing) {
 }
 #pragma endregion
 
+#pragma region Wild one's moves (pickEnemyAction and the enemyAction of stepBattle)
+TEST(battle, enemy_dodge_stance_avoids_attack_and_primes_counter) {
+  BattleRuntime battle = beginBattleRuntime({ 0, 90, 45, 70, 20 },
+                                            { 0, 50, 35, 40, 20 });
+  uint16_t enemyHpBefore = battle.enemyHp;
+
+  BattleTurnResult turn = stepBattle(battle, BATTLE_ATTACK, 10, BATTLE_DODGE);
+
+  CHECK(turn.enemyDodged);
+  CHECK_EQ(turn.enemyAction, BATTLE_DODGE);
+  CHECK_EQ(turn.playerDamage, (uint16_t)0);
+  CHECK_EQ(turn.enemyDamage, (uint16_t)0);
+  CHECK_EQ(battle.enemyHp, enemyHpBefore);
+  CHECK(turn.enemyCounterReady);
+  CHECK(battle.enemyCounterReady);
+}
+
+TEST(battle, enemy_failed_dodge_takes_full_hit_and_does_not_strike) {
+  BattleStats player = { 0, 90, 45, 70, 20 };
+  BattleStats enemy = { 0, 50, 35, 40, 20 };
+  BattleRuntime normal = beginBattleRuntime(player, enemy);
+  BattleRuntime stance = beginBattleRuntime(player, enemy);
+
+  BattleTurnResult normalTurn = stepBattle(normal, BATTLE_ATTACK, 90);
+  BattleTurnResult stanceTurn = stepBattle(stance, BATTLE_ATTACK, 90, BATTLE_DODGE);
+
+  CHECK(!stanceTurn.enemyDodged);
+  CHECK(!stance.enemyCounterReady);
+  CHECK_EQ(stanceTurn.playerDamage, normalTurn.playerDamage);
+  CHECK_EQ(stanceTurn.enemyDamage, (uint16_t)0);
+}
+
+TEST(battle, enemy_dodge_stance_reads_heavy_better_than_quick) {
+  BattleStats player = { 0, 90, 45, 70, 20 };
+  BattleStats enemy = { 0, 50, 35, 40, 20 };
+  BattleRuntime quick = beginBattleRuntime(player, enemy);
+  BattleRuntime heavy = beginBattleRuntime(player, enemy);
+
+  BattleTurnResult quickTurn = stepBattle(quick, BATTLE_ATTACK_QUICK, 50, BATTLE_DODGE);
+  BattleTurnResult heavyTurn = stepBattle(heavy, BATTLE_ATTACK_HEAVY, 50, BATTLE_DODGE);
+
+  CHECK(!quickTurn.enemyDodged);
+  CHECK(quickTurn.playerDamage > 0);
+  CHECK(heavyTurn.enemyDodged);
+  CHECK_EQ(heavyTurn.playerDamage, (uint16_t)0);
+  CHECK_EQ(heavyTurn.enemyDamage, (uint16_t)0);
+}
+
+TEST(battle, enemy_attack_variants_trade_power_for_openings) {
+  BattleStats player = { 0, 80, 45, 50, 20 };
+  BattleStats enemy = { 0, 60, 45, 50, 20 };
+  BattleRuntime normal = beginBattleRuntime(player, enemy);
+  BattleRuntime quick = beginBattleRuntime(player, enemy);
+  BattleRuntime heavy = beginBattleRuntime(player, enemy);
+
+  BattleTurnResult normalTurn = stepBattle(normal, BATTLE_ATTACK, 50, BATTLE_ATTACK);
+  BattleTurnResult quickTurn = stepBattle(quick, BATTLE_ATTACK, 50, BATTLE_ATTACK_QUICK);
+  BattleTurnResult heavyTurn = stepBattle(heavy, BATTLE_ATTACK, 50, BATTLE_ATTACK_HEAVY);
+
+  CHECK(quickTurn.enemyDamage < normalTurn.enemyDamage);
+  CHECK(heavyTurn.enemyDamage > normalTurn.enemyDamage);
+  CHECK_MSG(heavyTurn.playerDamage > normalTurn.playerDamage, "a heavy wind-up leaves the wild one open");
+  CHECK_EQ(quickTurn.playerDamage, normalTurn.playerDamage);
+}
+
+TEST(battle, enemy_quick_attack_is_harder_to_dodge) {
+  BattleStats player = { 0, 50, 40, 60, 10 };
+  BattleStats enemy = { 0, 90, 40, 50, 10 };
+  BattleRuntime versusNormal = beginBattleRuntime(player, enemy);
+  BattleRuntime versusQuick = beginBattleRuntime(player, enemy);
+
+  BattleTurnResult normalTurn = stepBattle(versusNormal, BATTLE_DODGE, 75, BATTLE_ATTACK);
+  BattleTurnResult quickTurn = stepBattle(versusQuick, BATTLE_DODGE, 75, BATTLE_ATTACK_QUICK);
+
+  CHECK(normalTurn.playerDodged);
+  CHECK_EQ(normalTurn.enemyDamage, (uint16_t)0);
+  CHECK(!quickTurn.playerDodged);
+  CHECK(quickTurn.enemyDamage > 0);
+}
+
+TEST(battle, enemy_counter_boosts_its_next_hit) {
+  BattleStats player = { 0, 80, 45, 50, 20 };
+  BattleStats enemy = { 0, 60, 45, 50, 20 };
+  BattleRuntime normal = beginBattleRuntime(player, enemy);
+  BattleRuntime counter = beginBattleRuntime(player, enemy);
+  counter.enemyCounterReady = true;
+
+  BattleTurnResult normalTurn = stepBattle(normal, BATTLE_ATTACK, 50, BATTLE_ATTACK);
+  BattleTurnResult counterTurn = stepBattle(counter, BATTLE_ATTACK, 50, BATTLE_ATTACK);
+
+  CHECK(counterTurn.enemyCounterUsed);
+  CHECK(!counter.enemyCounterReady);
+  CHECK_EQ(counterTurn.enemyDamage, (uint16_t)(normalTurn.enemyDamage * 3 / 2));
+}
+
+TEST(battle, enemy_rest_is_played_as_attack) {
+  BattleRuntime battle = beginBattleRuntime({ 0, 50, 40, 50, 10 },
+                                            { 0, 50, 40, 50, 10 });
+
+  BattleTurnResult turn = stepBattle(battle, BATTLE_ATTACK, 50, BATTLE_REST);
+
+  CHECK_EQ(turn.enemyAction, BATTLE_ATTACK);
+  CHECK_EQ(battle.enemyLastAction, BATTLE_ATTACK);
+}
+
+TEST(battle, enemy_picks_every_move_over_the_roll_range) {
+  BattleRuntime battle = beginBattleRuntime({ 0, 90, 45, 70, 20 },
+                                            { 0, 50, 35, 40, 20 });
+  bool seenMove[5] = { false, false, false, false, false };
+  for (int roll = 0; roll < 100; roll++) seenMove[pickEnemyAction(battle, (uint8_t)roll)] = true;
+
+  CHECK(seenMove[BATTLE_ATTACK]);
+  CHECK(seenMove[BATTLE_ATTACK_QUICK]);
+  CHECK(seenMove[BATTLE_ATTACK_HEAVY]);
+  CHECK(seenMove[BATTLE_DODGE]);
+  CHECK(!seenMove[BATTLE_REST]);
+}
+
+TEST(battle, enemy_never_chains_dodges_or_dodges_with_counter_ready) {
+  BattleRuntime afterDodge = beginBattleRuntime({ 0, 90, 45, 70, 20 },
+                                                { 0, 50, 35, 40, 20 });
+  afterDodge.enemyLastAction = BATTLE_DODGE;
+  BattleRuntime withCounter = afterDodge;
+  withCounter.enemyLastAction = BATTLE_ATTACK;
+  withCounter.enemyCounterReady = true;
+
+  for (int roll = 0; roll < 100; roll++) {
+    CHECK(pickEnemyAction(afterDodge, (uint8_t)roll) != BATTLE_DODGE);
+    CHECK(pickEnemyAction(withCounter, (uint8_t)roll) != BATTLE_DODGE);
+  }
+}
+
+TEST(battle, enemy_goes_heavy_when_player_hp_is_low) {
+  BattleRuntime fullHp = beginBattleRuntime({ 0, 90, 45, 70, 20 },
+                                            { 0, 50, 35, 40, 20 });
+  BattleRuntime lowHp = fullHp;
+  lowHp.playerHp = lowHp.playerMaxHp / 5;
+  int fullHpHeavyCount = 0, lowHpHeavyCount = 0;
+  for (int roll = 0; roll < 100; roll++) {
+    if (pickEnemyAction(fullHp, (uint8_t)roll) == BATTLE_ATTACK_HEAVY) fullHpHeavyCount++;
+    if (pickEnemyAction(lowHp, (uint8_t)roll) == BATTLE_ATTACK_HEAVY) lowHpHeavyCount++;
+  }
+
+  CHECK(lowHpHeavyCount > fullHpHeavyCount);
+}
+#pragma endregion
+
 #pragma region Type chart
 TEST(battle, type_advantage_lightly_changes_damage) {
   BattleStats neutral = { 0, 80, 50, 50, 20, TYPE_NORMAL, TYPE_NONE };

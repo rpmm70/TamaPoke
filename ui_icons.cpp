@@ -151,6 +151,75 @@ void drawPageArrow(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int16_
   int16_t baseX = centerX - pointingSign * halfSize;
   canvas->fillTriangle(tipX, centerY, baseX, centerY - halfSize, baseX, centerY + halfSize, color);
 }
+
+void drawVerticalPageArrow(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int16_t size, int8_t direction, uint16_t color) {
+  int16_t halfSize = size / 2;
+  if (halfSize < 1) halfSize = 1;
+  int16_t pointingSign = direction < 0 ? -1 : 1;
+  int16_t tipY = centerY + pointingSign * halfSize;
+  int16_t baseY = centerY - pointingSign * halfSize;
+  canvas->fillTriangle(centerX, tipY, centerX - halfSize, baseY, centerX + halfSize, baseY, color);
+}
+#pragma endregion
+
+#pragma region WiFi icon
+void drawWifiIcon(Arduino_GFX *canvas, int16_t centerX, int16_t bottomY, int16_t size, uint8_t litParts, uint16_t litColor, uint16_t dimColor) {
+  #pragma region Geometry: every arc is centered on the dot
+  int16_t dotRadius = size / 9 < 1 ? 1 : size / 9;
+  int16_t fanCenterY = bottomY - dotRadius;
+  int16_t outerRadius = size - dotRadius - 1;
+  int16_t arcThickness = strokeThicknessForExtent(outerRadius, 5);
+  const int16_t arcOuterRadii[3] = {
+    (int16_t)lroundf(outerRadius * 0.36f), (int16_t)lroundf(outerRadius * 0.68f), outerRadius
+  };
+  #pragma endregion
+
+  #pragma region Dot, then the three arcs inner to outer (225 to 315 degrees is the upper quarter)
+  canvas->fillCircle(centerX, fanCenterY, dotRadius, litParts >= 1 ? litColor : dimColor);
+  for (uint8_t arcIndex = 0; arcIndex < 3; arcIndex++) {
+    int16_t arcOuterRadius = arcOuterRadii[arcIndex];
+    int16_t arcInnerRadius = arcOuterRadius - arcThickness;
+    if (arcInnerRadius <= dotRadius) arcInnerRadius = dotRadius + 1;
+    canvas->fillArc(centerX, fanCenterY, arcOuterRadius, arcInnerRadius, 225.0f, 315.0f,
+                    litParts >= arcIndex + 2 ? litColor : dimColor);
+  }
+  #pragma endregion
+}
+#pragma endregion
+
+#pragma region Screen off icon
+void drawScreenOffIcon(Arduino_GFX *canvas, int16_t left, int16_t top, int16_t size, uint16_t color, uint16_t backgroundColor) {
+  #pragma region Geometry
+  int16_t thickness = strokeThicknessForExtent(size, 10);
+  int16_t screenHeight = (int16_t)lroundf(size * 0.66f);
+  int16_t centerX = left + size / 2;
+  int16_t standHeight = (int16_t)lroundf(size * 0.16f);
+  int16_t baseWidth = (int16_t)lroundf(size * 0.46f);
+  #pragma endregion
+
+  #pragma region Monitor outline, stand and base
+  canvas->fillRoundRect(left, top, size, screenHeight, thickness, color);
+  canvas->fillRect(left + thickness, top + thickness, size - 2 * thickness, screenHeight - 2 * thickness, backgroundColor);
+  canvas->fillRect(centerX - thickness / 2, top + screenHeight, thickness, standHeight, color);
+  canvas->fillRoundRect(centerX - baseWidth / 2, top + screenHeight + standHeight, baseWidth, thickness, thickness / 2, color);
+  #pragma endregion
+
+  #pragma region Slash, outlined in the background color
+  int16_t slashStartX = left + thickness, slashStartY = top;
+  int16_t slashEndX = left + size - 1 - thickness, slashEndY = top + screenHeight + standHeight;
+  drawThickLine(canvas, slashStartX, slashStartY, slashEndX, slashEndY, thickness * 3, backgroundColor);
+  drawThickLine(canvas, slashStartX, slashStartY, slashEndX, slashEndY, thickness, color);
+  #pragma endregion
+}
+#pragma endregion
+
+#pragma region Check icon
+void drawCheckIcon(Arduino_GFX *canvas, int16_t left, int16_t top, int16_t size, uint16_t color) {
+  int16_t thickness = strokeThicknessForExtent(size, 6);
+  int16_t elbowX = left + (int16_t)lroundf(size * 0.40f), elbowY = top + (int16_t)lroundf(size * 0.78f);
+  drawThickLine(canvas, left + (int16_t)lroundf(size * 0.12f), top + (int16_t)lroundf(size * 0.52f), elbowX, elbowY, thickness, color);
+  drawThickLine(canvas, elbowX, elbowY, left + (int16_t)lroundf(size * 0.88f), top + (int16_t)lroundf(size * 0.20f), thickness, color);
+}
 #pragma endregion
 
 #pragma region Touch hit tests

@@ -163,6 +163,47 @@
   #define SETTINGS_MENU_ARROW_SIZE 16
   #define SETTINGS_MENU_VERSION_Y 436
   //#endregion
+  //#region Settings menu row 0: WiFi (left) and Screen Off (right) buttons, icon then label
+  #define SETTINGS_MENU_SPLIT_GAP 10
+  #define SETTINGS_MENU_ICON_SIZE 24
+  #define SETTINGS_MENU_ICON_INSET 12
+  //#endregion
+  //#region WiFi screen: On/Off pill and Scan button (y 126..172), status line, 4 network rows, page arrows
+  // Rows x 76..356, y 206..394 (farthest corner (76, 394) is 225 px from the center);
+  // the page arrows column is centered on x 384 (its farthest point is 205 px from the center).
+  #define WIFI_TOGGLE_X 93
+  #define WIFI_TOGGLE_W 130
+  #define WIFI_SCAN_X 243
+  #define WIFI_SCAN_W 130
+  #define WIFI_BUTTON_Y 126
+  #define WIFI_BUTTON_H 46
+  #define WIFI_BUTTON_R 14
+  #define WIFI_STATUS_Y 182
+  #define WIFI_STATUS_SIZE 2
+  #define WIFI_STATUS_MAX_W 300
+  #define WIFI_LIST_X 76
+  #define WIFI_LIST_W 280
+  #define WIFI_LIST_Y 206
+  #define WIFI_ROW_H 44
+  #define WIFI_ROW_STEP 48
+  #define WIFI_ROWS_PER_PAGE 4
+  #define WIFI_ROW_R 10
+  #define WIFI_ROW_PAD 8
+  #define WIFI_ROW_ICON_SIZE 18
+  #define WIFI_ROW_SSID_SIZE 2
+  #define WIFI_ROW_SSID_DY 5
+  #define WIFI_ROW_DETAIL_SIZE 2
+  #define WIFI_ROW_DETAIL_DY 24
+  #define WIFI_ROW_CHECK_SIZE 20
+  #define WIFI_ARROW_CX 384
+  #define WIFI_ARROW_SIZE 18
+  #define WIFI_ARROW_UP_CY 228
+  #define WIFI_ARROW_DOWN_CY 372
+  #define WIFI_ARROW_HIT_W 50
+  #define WIFI_ARROW_HIT_H 70
+  #define WIFI_PAGE_TEXT_Y 292
+  #define WIFI_PAGE_TEXT_SIZE 2
+  //#endregion
   //#region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN squares) and bar
   // Under the TS(5) title (y 58..98): label 122..146 (below the close button's hit
   // circle, which ends at y 122), pill 158..210, label 240..264, -/+ row 276..334
@@ -345,22 +386,20 @@
   #define MED_MARK_R 11
   #define MED_TXT_X 44
   #define BAR_H_CARD 22
-  // keyboard
-  #define KB_X 40
+  //#region Keyboard: 7 x 5 keys (x 44..422, y 150..410), text box left of the close button (x < 340)
+  #define KB_X 44
   #define KB_Y 150
-  #define KB_W 64
+  #define KB_W 54
   #define KB_H 52
   #define KB_TITLE_Y 56
   #define KB_BOX_X 83
   #define KB_BOX_Y 84
-  #define KB_BOX_W 300
+  #define KB_BOX_W 250
   #define KB_BOX_H 40
   #define KB_BOX_R 8
   #define KB_BOX_TX 95
   #define KB_BOX_TY 94
-  #define KB_CH_DX 9
-  #define KB_CH_DY 10
-  #define KB_OK_DX 15
+  //#endregion
   // minigames / misc
   #define POOP_S 2
   #define POOP_X0 34
@@ -489,8 +528,9 @@
   #define BATTLE_MOVE_SIZE 2
   #define BATTLE_MOVE_W 180
   //#endregion
-  //#region Wild battle: Attack / Dodge / Rest buttons and the Quick / Heavy overlay
-  // hit boxes = the drawn box grown by the *_HIT_PAD_* margins (the fork's generous areas)
+  //#region Wild battle: Attack / Dodge / Rest buttons and the Quick / Attack / Heavy overlay
+  // hit boxes = the drawn box grown by the *_HIT_PAD_* margins (the fork's generous areas);
+  // the overlay buttons sit in the same columns as the action buttons below them
   #define BATTLE_ACTION_Y 358
   #define BATTLE_ACTION_W 108
   #define BATTLE_ACTION_H 58
@@ -501,12 +541,13 @@
   #define BATTLE_ACTION_HIT_PAD_X 12
   #define BATTLE_ACTION_HIT_PAD_Y 14
   #define BATTLE_ATTACK_MENU_Y 298
-  #define BATTLE_ATTACK_MENU_W 150
+  #define BATTLE_ATTACK_MENU_W 108
   #define BATTLE_ATTACK_MENU_H 46
   #define BATTLE_ATTACK_MENU_R 12
-  #define BATTLE_QUICK_X 74
-  #define BATTLE_HEAVY_X 242
-  #define BATTLE_ATTACK_MENU_HIT_PAD_X 8
+  #define BATTLE_QUICK_X 58
+  #define BATTLE_NORMAL_X 179
+  #define BATTLE_HEAVY_X 300
+  #define BATTLE_ATTACK_MENU_HIT_PAD_X 6
   #define BATTLE_ATTACK_MENU_HIT_PAD_Y 6
   #define BATTLE_BTN_TEXT_SIZE 2
   //#endregion
@@ -648,6 +689,46 @@
   #define SETTINGS_MENU_ARROW_INSET 16
   #define SETTINGS_MENU_ARROW_SIZE 10
   #define SETTINGS_MENU_VERSION_Y 222
+  //#endregion
+  //#region Settings menu row 0: icon then label (no WiFi on this board: Screen Off fills the row)
+  #define SETTINGS_MENU_SPLIT_GAP 8
+  #define SETTINGS_MENU_ICON_SIZE 14
+  #define SETTINGS_MENU_ICON_INSET 6
+  //#endregion
+  //#region WiFi screen: On/Off pill and Scan button (y 44..74), status line (y 80..88), 4 network rows (y 94..231)
+  // Rows x 8..276; the page arrows column (hit box x 278..318) sits on their right.
+  #define WIFI_TOGGLE_X 20
+  #define WIFI_TOGGLE_W 110
+  #define WIFI_SCAN_X 170
+  #define WIFI_SCAN_W 120
+  #define WIFI_BUTTON_Y 44
+  #define WIFI_BUTTON_H 30
+  #define WIFI_BUTTON_R 8
+  #define WIFI_STATUS_Y 80
+  #define WIFI_STATUS_SIZE 1
+  #define WIFI_STATUS_MAX_W 300
+  #define WIFI_LIST_X 8
+  #define WIFI_LIST_W 268
+  #define WIFI_LIST_Y 94
+  #define WIFI_ROW_H 32
+  #define WIFI_ROW_STEP 35
+  #define WIFI_ROWS_PER_PAGE 4
+  #define WIFI_ROW_R 6
+  #define WIFI_ROW_PAD 5
+  #define WIFI_ROW_ICON_SIZE 12
+  #define WIFI_ROW_SSID_SIZE 2
+  #define WIFI_ROW_SSID_DY 4
+  #define WIFI_ROW_DETAIL_SIZE 1
+  #define WIFI_ROW_DETAIL_DY 22
+  #define WIFI_ROW_CHECK_SIZE 14
+  #define WIFI_ARROW_CX 298
+  #define WIFI_ARROW_SIZE 14
+  #define WIFI_ARROW_UP_CY 110
+  #define WIFI_ARROW_DOWN_CY 216
+  #define WIFI_ARROW_HIT_W 40
+  #define WIFI_ARROW_HIT_H 50
+  #define WIFI_PAGE_TEXT_Y 159
+  #define WIFI_PAGE_TEXT_SIZE 1
   //#endregion
   //#region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN squares) and bar
   // Under the TS(5) title (y 12..36): label 50..66, pill 74..110, label 130..146, -/+ row 154..198
@@ -821,21 +902,20 @@
   #define MED_MARK_R 8
   #define MED_TXT_X 28
   #define BAR_H_CARD 12
-  #define KB_X 10
+  //#region Keyboard: 7 x 5 keys (x 13..307, y 62..232), text box left of the close button (x < 292)
+  #define KB_X 13
   #define KB_Y 62
-  #define KB_W 50
+  #define KB_W 42
   #define KB_H 34
   #define KB_TITLE_Y 8
   #define KB_BOX_X 10
   #define KB_BOX_Y 28
-  #define KB_BOX_W 300
+  #define KB_BOX_W 280
   #define KB_BOX_H 26
   #define KB_BOX_R 6
   #define KB_BOX_TX 16
   #define KB_BOX_TY 32
-  #define KB_CH_DX 6
-  #define KB_CH_DY 8
-  #define KB_OK_DX 12
+  //#endregion
   #define POOP_S 1
   #define POOP_X0 6
   #define POOP_DX 34
@@ -966,7 +1046,8 @@
   #define BATTLE_MOVE_SIZE 2
   #define BATTLE_MOVE_W 152
   //#endregion
-  //#region Wild battle: Attack / Dodge / Rest buttons (y 192..236) and the Quick / Heavy overlay (y 128..172)
+  //#region Wild battle: Attack / Dodge / Rest buttons (y 192..236) and the Quick / Attack / Heavy overlay (y 128..172)
+  // the overlay buttons sit in the same columns as the action buttons below them
   #define BATTLE_ACTION_Y 192
   #define BATTLE_ACTION_W 100
   #define BATTLE_ACTION_H 44
@@ -977,11 +1058,12 @@
   #define BATTLE_ACTION_HIT_PAD_X 2
   #define BATTLE_ACTION_HIT_PAD_Y 2
   #define BATTLE_ATTACK_MENU_Y 128
-  #define BATTLE_ATTACK_MENU_W 148
+  #define BATTLE_ATTACK_MENU_W 100
   #define BATTLE_ATTACK_MENU_H 44
   #define BATTLE_ATTACK_MENU_R 10
-  #define BATTLE_QUICK_X 8
-  #define BATTLE_HEAVY_X 164
+  #define BATTLE_QUICK_X 5
+  #define BATTLE_NORMAL_X 110
+  #define BATTLE_HEAVY_X 215
   #define BATTLE_ATTACK_MENU_HIT_PAD_X 2
   #define BATTLE_ATTACK_MENU_HIT_PAD_Y 2
   #define BATTLE_BTN_TEXT_SIZE 2

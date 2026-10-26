@@ -18,6 +18,9 @@
   #define BOARD_HAS_RTC_CHIP 0
   #define BOARD_HAS_I2S_AUDIO 0
   #define BOARD_HAS_BATTERY 0
+  // No WiFi: without PSRAM the WiFi stack (~50 KB at runtime, ~25 KB static)
+  // does not fit next to the 150 KB framebuffer, and game performance comes first
+  #define BOARD_HAS_WIFI 0
   #include "pin_config_cyd.h"
 #else
   #define BOARD_CYD_RECT 0
@@ -27,5 +30,6 @@
   #define BOARD_HAS_RTC_CHIP 1
   #define BOARD_HAS_I2S_AUDIO 1
   #define BOARD_HAS_BATTERY 1
+  #define BOARD_HAS_WIFI 1
   #include "../pin_config.h"  // original Waveshare pins, not duplicated
 #endif

@@ -35,7 +35,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolucionar?", "Mantener forma", "Despedirse?", "Despedirse", "Quedaros juntos",
     "Elige tu inicial",
     "Sin sprites", "C\240rgalos en la SD",
-    "AJUSTES", "Apagar pantalla", "Audio / V\241deo", "Hora", "Idioma",
+    "AJUSTES", "Apagar", "Audio / V\241deo", "Hora", "Idioma",
     "Sonido", "Brillo", "On", "Off",
     //#region ES wild battle strings
     "COMBATE SALVAJE", "Combate salvaje?", "LUCHAR", "Luego", "HUIR",
@@ -45,6 +45,10 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Contra Listo", "Sin Descanso", "Cura +%u PS", "Guardia",
     "Atrapar", "Dejar", "Atrapado!", "Se Fue", "Cerca!",
     "FUE +%u", "DEF +%u", "VEL +%u", "OK", "ATRAPADO",
+    //#endregion
+    //#region ES WiFi strings
+    "WiFi", "Buscar", "Buscando...", "No hay redes",
+    "Conectando...", "Conectado", "Error al conectar", "Abierta", "CONTRASE\245A:",
     //#endregion
   },
   // ---------------- EN ----------------
@@ -86,6 +90,10 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Catch", "Leave", "Caught!", "Escaped", "Close!",
     "ATK +%u", "DEF +%u", "SPD +%u", "OK", "CAUGHT",
     //#endregion
+    //#region EN WiFi strings
+    "WiFi", "Scan", "Scanning...", "No networks found",
+    "Connecting...", "Connected", "Connection failed", "Open", "PASSWORD:",
+    //#endregion
   },
   // ---------------- FR ----------------
   {
@@ -115,7 +123,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "\220voluer?", "Garder forme", "Dire adieu?", "Adieu", "Rester ensemble",
     "Choisis ton starter",
     "Pas de sprites", "Charge-les sur la SD",
-    "R\220GLAGES", "\220teindre l'\202cran", "Audio / Vid\202o", "Heure", "Langue",
+    "R\220GLAGES", "\220teindre", "Audio / Vid\202o", "Heure", "Langue",
     "Son", "Luminosit\202", "On", "Off",
     //#region FR wild battle strings
     "COMBAT SAUVAGE", "Combat sauvage?", "COMBAT", "Apr\212s", "FUIR",
@@ -125,6 +133,10 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Contre Pr\210t", "Plus De Repos", "Soin +%u PV", "Garde",
     "Capture", "Laisser", "Captur\202!", "\220chapp\202", "Presque!",
     "ATQ +%u", "DEF +%u", "VIT +%u", "OK", "CAPTUR\220",
+    //#endregion
+    //#region FR WiFi strings
+    "WiFi", "Chercher", "Recherche...", "Aucun r\202seau",
+    "Connexion...", "Connect\202", "\220chec connexion", "Ouvert", "MOT DE PASSE:",
     //#endregion
   },
   // ---------------- DE ----------------
@@ -171,6 +183,10 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Fangen", "Lassen", "Gefangen!", "Entkommen", "Knapp!",
     "ANG +%u", "VER +%u", "INI +%u", "OK", "GEFANGEN",
     //#endregion
+    //#region DE WiFi strings
+    "WLAN", "Suchen", "Suche...", "Keine Netzwerke",
+    "Verbinde...", "Verbunden", "Fehlgeschlagen", "Offen", "PASSWORT:",
+    //#endregion
   },
   // ---------------- IT ----------------
   {
@@ -211,6 +227,10 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Prendi", "Lascia", "Preso!", "Fuggito", "Quasi!",
     "ATT +%u", "DIF +%u", "VEL +%u", "OK", "PRESO",
     //#endregion
+    //#region IT WiFi strings
+    "WiFi", "Cerca", "Ricerca...", "Nessuna rete",
+    "Connessione...", "Connesso", "Connessione fallita", "Aperta", "PASSWORD:",
+    //#endregion
   },
   // ---------------- PT ----------------
   {
@@ -250,6 +270,10 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Contra Pronto", "Sem Descanso", "Cura +%u PS", "Guarda",
     "Apanhar", "Deixar", "Apanhado!", "Fugiu", "Perto!",
     "ATQ +%u", "DEF +%u", "VEL +%u", "OK", "APANHADO",
+    //#endregion
+    //#region PT WiFi strings
+    "WiFi", "Procurar", "A procurar...", "Nenhuma rede",
+    "A ligar...", "Ligado", "Falha ao ligar", "Aberta", "PALAVRA-PASSE:",
     //#endregion
   },
   // ---------------- JA ----------------
@@ -316,6 +340,10 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "つかまえる", "にがす", "つかまえた！", "にげられた...", "おしい！",
     "こうげき +%u", "ぼうぎょ +%u", "すばやさ +%u", "OK", "ゲット",
     //#endregion
+    //#region JA WiFi strings
+    "Wi-Fi", "スキャン", "スキャンちゅう...", "みつかりません",
+    "せつぞくちゅう...", "せつぞくずみ", "せつぞくしっぱい", "オープン", "パスワード:",
+    //#endregion
   },
   // ---------------- KO ----------------
   // The specifiers go in the SAME ORDER as in the English row even though
@@ -360,6 +388,10 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "반격 준비", "휴식 불가", "회복 +%u HP", "가드",
     "잡기", "놓아주기", "잡았다!", "도망쳤다...", "아깝다!",
     "공격 +%u", "방어 +%u", "속도 +%u", "OK", "포획",
+    //#endregion
+    //#region KO WiFi strings
+    "Wi-Fi", "검색", "검색 중...", "네트워크 없음",
+    "연결 중...", "연결됨", "연결 실패", "개방", "비밀번호:",
     //#endregion
   },
 };

@@ -221,6 +221,31 @@ uint8_t enemyDodgeChanceFor(const BattleRuntime &battle, BattleAction action) {
   if (dodgeChance > 45) dodgeChance = 45;
   return (uint8_t)dodgeChance;
 }
+
+// the wild one chose to dodge: quick attacks are harder to read, heavy ones easier
+uint8_t enemyStanceDodgeChanceFor(BattleAction action) {
+  if (action == BATTLE_ATTACK_QUICK) return 40;
+  if (action == BATTLE_ATTACK_HEAVY) return 80;
+  return 60;
+}
+
+// the player chose to dodge: a quick enemy attack is harder to avoid, a heavy one easier
+uint8_t playerDodgeChanceFor(BattleAction enemyAction) {
+  if (enemyAction == BATTLE_ATTACK_QUICK) return 70;
+  if (enemyAction == BATTLE_ATTACK_HEAVY) return 95;
+  return 85;
+}
+
+// a wild one winding up a heavy attack is left open: the player's attack lands harder
+uint8_t playerPowerPctFor(BattleAction action, BattleAction enemyAction) {
+  uint16_t powerPercent = attackPowerPctFor(action);
+  if (enemyAction == BATTLE_ATTACK_HEAVY) powerPercent = powerPercent * 120 / 100;
+  return (uint8_t)powerPercent;
+}
+
+bool isHpLow(uint16_t hp, uint16_t maxHp) {
+  return (uint32_t)hp * 100 <= (uint32_t)maxHp * 30;
+}
 #pragma endregion
 
 #pragma region Wild species helpers
@@ -333,7 +358,46 @@ BattleRuntime beginBattleRuntime(const BattleStats &player, const BattleStats &e
   return battle;
 }
 
-BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t luckRoll) {
+BattleAction pickEnemyAction(const BattleRuntime &battle, uint8_t choiceRoll) {
+  #pragma region Base weights
+  int attackWeight = 40;
+  int quickWeight = 20;
+  int heavyWeight = 20;
+  int dodgeWeight = 20;
+  #pragma endregion
+
+  #pragma region Adjust to the state of the battle
+  if (battle.enemy.spe > battle.player.spe) { quickWeight += 10; attackWeight -= 10; }  // fast species jab
+  if (isHpLow(battle.enemyHp, battle.enemyMaxHp)) {  // hurt: play it safe
+    dodgeWeight += 10; quickWeight += 10; heavyWeight -= 15; attackWeight -= 5;
+  }
+  if (isHpLow(battle.playerHp, battle.playerMaxHp)) {  // go for the finish
+    heavyWeight += 20; dodgeWeight -= 10; attackWeight -= 10;
+  }
+  if (battle.counterReady) dodgeWeight += 15;  // the player is primed to strike back hard
+  // a primed counter is spent on an attack, and dodges are never chained (no stalling)
+  if (battle.enemyCounterReady || battle.enemyLastAction == BATTLE_DODGE) dodgeWeight = 0;
+  #pragma endregion
+
+  #pragma region Weighted pick
+  const BattleAction moves[4] = { BATTLE_ATTACK, BATTLE_ATTACK_QUICK, BATTLE_ATTACK_HEAVY, BATTLE_DODGE };
+  int weights[4] = { attackWeight, quickWeight, heavyWeight, dodgeWeight };
+  int totalWeight = 0;
+  for (uint8_t i = 0; i < 4; i++) {
+    if (weights[i] < 0) weights[i] = 0;
+    totalWeight += weights[i];
+  }
+  if (totalWeight == 0) return BATTLE_ATTACK;
+  int pick = (int)clampLuckRoll(choiceRoll) * totalWeight / 100;
+  for (uint8_t i = 0; i < 4; i++) {
+    if (pick < weights[i]) return moves[i];
+    pick -= weights[i];
+  }
+  return BATTLE_ATTACK;
+  #pragma endregion
+}
+
+BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t luckRoll, BattleAction enemyAction) {
   BattleTurnResult turn = {};
 
   #pragma region Already finished
@@ -355,6 +419,9 @@ BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t 
   }
   #pragma endregion
 
+  if (enemyAction == BATTLE_REST) enemyAction = BATTLE_ATTACK;  // the wild one never rests
+  turn.enemyAction = enemyAction;
+  battle.enemyLastAction = enemyAction;
   battle.round++;
 
   #pragma region Player action
@@ -367,12 +434,21 @@ BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t 
     turn.playerHeal = heal > missingHp ? missingHp : heal;
     battle.playerHp += turn.playerHeal;
   } else if (isAttackAction(action)) {
-    uint8_t dodgeChance = enemyDodgeChanceFor(battle, action);
-    turn.enemyDodged = ((uint16_t)luck + battle.enemy.spe / 2) % 100 < dodgeChance;
+    if (enemyAction == BATTLE_DODGE) {
+      // a dodge stance replaces the passive dodge roll; a success primes the wild one's counter
+      turn.enemyDodged = luck < enemyStanceDodgeChanceFor(action);
+      if (turn.enemyDodged) {
+        battle.enemyCounterReady = true;
+        turn.enemyCounterReady = true;
+      }
+    } else {
+      uint8_t dodgeChance = enemyDodgeChanceFor(battle, action);
+      turn.enemyDodged = ((uint16_t)luck + battle.enemy.spe / 2) % 100 < dodgeChance;
+    }
     if (!turn.enemyDodged) {
       turn.counterUsed = battle.counterReady;
       turn.playerDamage = computeCappedTurnDamage(battle.player, battle.enemy, battle.enemyMaxHp,
-                                                  luck, battle.counterReady, attackPowerPctFor(action));
+                                                  luck, battle.counterReady, playerPowerPctFor(action, enemyAction));
       battle.counterReady = false;
       applyHitToHp(battle.enemyHp, turn.playerDamage, battle.playerDamageTotal);
     }
@@ -380,12 +456,15 @@ BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t 
   #pragma endregion
 
   #pragma region Enemy action
-  // a dodged heavy attack leaves the player open: the enemy still strikes
-  bool enemyActs = battle.enemyHp > 0 && (!turn.enemyDodged || action == BATTLE_ATTACK_HEAVY);
+  // a dodging wild one does not strike; a passive dodge also uses up its turn,
+  // except against a heavy attack, which leaves the player open
+  bool enemyActs = enemyAction != BATTLE_DODGE && battle.enemyHp > 0 &&
+                   (!turn.enemyDodged || action == BATTLE_ATTACK_HEAVY);
   if (enemyActs) {
-    uint16_t enemyHit = computeCappedTurnDamage(battle.enemy, battle.player, battle.playerMaxHp, 99 - luck, false, 100);
+    uint16_t enemyHit = computeCappedTurnDamage(battle.enemy, battle.player, battle.playerMaxHp, 99 - luck,
+                                                battle.enemyCounterReady, attackPowerPctFor(enemyAction));
     if (action == BATTLE_DODGE) {
-      if (luck < 85) {
+      if (luck < playerDodgeChanceFor(enemyAction)) {
         turn.playerDodged = true;
         battle.counterReady = true;
         turn.counterReady = true;
@@ -407,6 +486,8 @@ BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t 
       if (enemyHit == 0) enemyHit = 1;
     }
     if (enemyHit > 0) {
+      turn.enemyCounterUsed = battle.enemyCounterReady;
+      battle.enemyCounterReady = false;
       turn.enemyDamage = enemyHit;
       applyHitToHp(battle.playerHp, turn.enemyDamage, battle.enemyDamageTotal);
     }
