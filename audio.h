@@ -1,8 +1,14 @@
 #pragma once
-#include <stdint.h>
 
-// Game sound effects (queued, non-blocking). The order matches the SFX table
-// in audio.cpp.
+// Game sound effects (queued, non-blocking). The engine is audio_core.cpp; the
+// board's sound hardware sits behind audio_backend.h.
+
+#pragma region Includes
+#include <stdint.h>
+#pragma endregion
+
+#pragma region Effect ids
+// The order matches the SFX table in audio_core.cpp.
 enum Sfx : uint8_t {
   SFX_TAP = 0,  // tap / button
   SFX_EAT,      // eat
@@ -27,9 +33,12 @@ enum Sfx : uint8_t {
   //#endregion
   SFX_COUNT
 };
+#pragma endregion
 
-void audioBegin();          // init ES8311 + I2S + amplifier + audio task
+#pragma region Public API
+void audioBegin();          // starts the sound hardware, loads the sound switch, starts the audio task
 void sfxPlay(uint8_t id);   // queues an effect (does not block the loop)
-void audioSetEnabled(bool on);
+void audioSetEnabled(bool on);  // sound switch (persisted)
 bool audioEnabled();
-void audioSetSleeping(bool sleeping);  // asleep: amplifier off
+void audioSetSleeping(bool sleeping);  // asleep: no effects, the backend may power down
+#pragma endregion

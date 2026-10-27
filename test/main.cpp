@@ -1,8 +1,13 @@
+// Test runner: runs every registered TEST (optionally filtered) and prints a summary.
+
+#pragma region Includes
 #include "framework.h"
 #include "shim/Arduino.h"
 #include <cstdio>
 #include <cstring>
+#pragma endregion
 
+#pragma region Registry and failure collection
 std::vector<TestCase> &testRegistry() {
   static std::vector<TestCase> reg;
   return reg;
@@ -17,7 +22,9 @@ void testFail(const char *file, int line, const std::string &msg) {
   os << (base ? base + 1 : file) << ":" << line << ": " << msg;
   gFailures.push_back(os.str());
 }
+#pragma endregion
 
+#pragma region Entry point
 int main(int argc, char **argv) {
   const char *filter = argc > 1 ? argv[1] : 0;
   mockSerialSilence(true);
@@ -44,7 +51,7 @@ int main(int argc, char **argv) {
     tc.fn();
     if (tc.knownIssue) {
       if (gFailures.empty()) {
-        printf("  \033[33mXPASS\033[0m %s  (ya no falla: quita TEST_KNOWN_ISSUE)\n", tc.name.c_str());
+        printf("  \033[33mXPASS\033[0m %s  (no longer fails: remove TEST_KNOWN_ISSUE)\n", tc.name.c_str());
         xpass++;
         fixedIssues.push_back(full);
       } else {
@@ -71,21 +78,22 @@ int main(int argc, char **argv) {
   printf("\n----------------------------------------\n");
   printf("%d tests, %d asserts, %d passed, %d failed", passed + failed + xfail + xpass,
          gAssertCount, passed, failed);
-  if (xfail) printf(", %d bugs conocidos", xfail);
-  if (xpass) printf(", %d bugs ya arreglados", xpass);
-  if (skipped) printf(", %d filtrados", skipped);
+  if (xfail) printf(", %d known bugs", xfail);
+  if (xpass) printf(", %d bugs already fixed", xpass);
+  if (skipped) printf(", %d filtered out", skipped);
   printf("\n");
   if (failed) {
-    printf("\nFallos:\n");
+    printf("\nFailures:\n");
     for (size_t i = 0; i < failedNames.size(); i++) printf("  - %s\n", failedNames[i].c_str());
   }
   if (xfail) {
-    printf("\nBugs conocidos (documentados, no rompen la suite):\n");
+    printf("\nKnown bugs (documented, they do not break the suite):\n");
     for (size_t i = 0; i < knownIssues.size(); i++) printf("  - %s\n", knownIssues[i].c_str());
   }
   if (xpass) {
-    printf("\nBugs conocidos que ya NO fallan (quita TEST_KNOWN_ISSUE):\n");
+    printf("\nKnown bugs that NO longer fail (remove TEST_KNOWN_ISSUE):\n");
     for (size_t i = 0; i < fixedIssues.size(); i++) printf("  - %s\n", fixedIssues[i].c_str());
   }
   return failed ? 1 : 0;
 }
+#pragma endregion

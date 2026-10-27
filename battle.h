@@ -11,6 +11,14 @@
 #pragma endregion
 
 #pragma region Data structures
+// time of day returned by dayPhaseFromHour() (it changes which species appear)
+enum DayPhase : uint8_t {
+  DAY_PHASE_MORNING = 0,  // 6-12
+  DAY_PHASE_DAY = 1,      // 12-18
+  DAY_PHASE_EVENING = 2,  // 18-22
+  DAY_PHASE_NIGHT = 3,    // 22-6
+};
+
 struct BattleStats {
   uint16_t hp;      // 0 = derive from level and defense
   uint16_t atk;
@@ -51,7 +59,7 @@ struct BattleRuntime {
   uint16_t enemyHp;
   uint16_t playerMaxHp;
   uint16_t enemyMaxHp;
-  uint8_t round;
+  uint16_t round;  // no round limit: a turn battle lasts until one side is out of HP
   uint16_t playerDamageTotal;
   uint16_t enemyDamageTotal;
   uint8_t restUsesLeft;
@@ -85,7 +93,7 @@ struct BattleTurnResult {
 #pragma endregion
 
 #pragma region Public API
-// 0 morning 6-12, 1 day 12-18, 2 evening 18-22, 3 night 22-6
+// DayPhase: 0 morning 6-12, 1 day 12-18, 2 evening 18-22, 3 night 22-6
 uint8_t dayPhaseFromHour(int hour);
 // clamps the pet level (up to 999) to the battle range (BATTLE_LEVEL_CAP)
 uint8_t battleLevelFor(uint16_t petLevel);
@@ -94,7 +102,7 @@ uint16_t battleMaxHpFor(const BattleStats &stats);
 
 bool canStartWildBattle(bool isEgg, bool sleeping, uint8_t ceremony);
 uint8_t wildLevelFor(uint8_t petLevel, uint8_t luckRoll);
-int16_t pickWildSpecies(uint8_t roll, uint8_t phase = 1);
+int16_t pickWildSpecies(uint8_t roll, uint8_t phase = DAY_PHASE_DAY);
 BattleStats wildBattleStats(int16_t dex, uint8_t level);
 uint8_t battleTypeEffectPct(uint8_t attackType, uint8_t defendType1, uint8_t defendType2);
 BattleRuntime beginBattleRuntime(const BattleStats &player, const BattleStats &enemy);

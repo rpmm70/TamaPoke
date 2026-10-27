@@ -1,7 +1,7 @@
-# artefactos de compilacion
+# build artifacts
 build/
 
-# cacheas y artefactos regenerables del taller
+# regenerable caches and artifacts of the sprite workshop
 tools/downloads/
 tools/__pycache__/
 __pycache__/
@@ -15,7 +15,11 @@ tools/demo_compare.js
 tools/pmd_cache/
 test/build/
 
-# borrador local de la ficha de MakerWorld y modelado abandonado de la carcasa
+# web installer outputs (rebuilt by tools/build_web.sh and tools/pack_bundle.py)
+web/sprites.pak
+web/firmware/tamapoke.bin
+
+# local draft of the MakerWorld listing and abandoned case modeling
 MAKERWORLD.md
 case/
 
@@ -24,3 +28,4 @@ case/
 .vscode/.browse.c_cpp.db*
 .vscode/c_cpp_properties.json
 .vscode/ipch
+.vscode/launch.json

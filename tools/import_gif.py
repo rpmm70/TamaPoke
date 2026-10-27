@@ -5,124 +5,134 @@ Converts animated GIFs to game-ready 48x48 frames: crop that is stable across
 frames, frame reduction to keyframes, scaling, binary alpha and per-species
 color quantization. (Helper script, not part of the current pipeline.)
 
-  python3 tools/import_gif.py            # converts downloads/*.gif and
+  python3 tools/import_gif.py            # converts tools/downloads/*.gif and
                                          # renders tools/import_sheet.png
 """
+#region Imports
 import os
 import sys
+
 from PIL import Image
 
-CELL = 48          # game grid
-KEYFRAMES = 4      # idle frames we keep
-MAX_COLORS = 24    # maximum palette per species
-ALPHA_T = 96       # binary alpha threshold
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tamapoke_common import TOOLS_DIR, render_contact_sheet
+#endregion
 
+#region Configuration
+CELL_SIZE = 48         # game grid
+KEYFRAME_COUNT = 4     # idle frames we keep
+MAX_COLORS = 24        # maximum palette per species
+ALPHA_THRESHOLD = 96   # binary alpha threshold
+SOURCE_DIR = os.path.join(TOOLS_DIR, 'downloads')
+SHEET_PATH = os.path.join(TOOLS_DIR, 'import_sheet.png')
+#endregion
 
-def load_frames(path):
-    im = Image.open(path)
-    n = getattr(im, 'n_frames', 1)
+#region Internal helpers
+
+def load_gif_frames(path):
+    gif_image = Image.open(path)
+    frame_count = getattr(gif_image, 'n_frames', 1)
     frames = []
-    for i in range(n):
-        im.seek(i)
-        frames.append(im.convert('RGBA'))
+    for frame_index in range(frame_count):
+        gif_image.seek(frame_index)
+        frames.append(gif_image.convert('RGBA'))
     return frames
 
 
-def union_bbox(frames):
+def compute_union_bounding_box(frames):
     # box shared by all frames so it does not "dance" when cropped
-    x0, y0, x1, y1 = frames[0].size[0], frames[0].size[1], 0, 0
-    for f in frames:
-        bbox = f.getchannel('A').point(lambda a: 255 if a >= ALPHA_T else 0).getbbox()
-        if not bbox:
+    left, top, right, bottom = frames[0].size[0], frames[0].size[1], 0, 0
+    for frame in frames:
+        frame_box = frame.getchannel('A').point(
+            lambda alpha: 255 if alpha >= ALPHA_THRESHOLD else 0).getbbox()
+        if not frame_box:
             continue
-        x0, y0 = min(x0, bbox[0]), min(y0, bbox[1])
-        x1, y1 = max(x1, bbox[2]), max(y1, bbox[3])
-    return (x0, y0, x1, y1)
+        left, top = min(left, frame_box[0]), min(top, frame_box[1])
+        right, bottom = max(right, frame_box[2]), max(bottom, frame_box[3])
+    return (left, top, right, bottom)
 
 
-def pick_keyframes(frames, k=KEYFRAMES):
-    if len(frames) <= k:
+def pick_keyframes(frames, keyframe_count=KEYFRAME_COUNT):
+    if len(frames) <= keyframe_count:
         return frames
-    step = len(frames) / k
-    return [frames[int(i * step)] for i in range(k)]
+    step = len(frames) / keyframe_count
+    return [frames[int(i * step)] for i in range(keyframe_count)]
 
 
-def to_cell(frame, bbox):
-    crop = frame.crop(bbox)
-    w, h = crop.size
-    scale = min(CELL / w, CELL / h, 1.0)
-    nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
-    crop = crop.resize((nw, nh), Image.LANCZOS)
-    cell = Image.new('RGBA', (CELL, CELL), (0, 0, 0, 0))
-    cell.paste(crop, ((CELL - nw) // 2, CELL - nh))  # resting on the ground
-    # binary alpha
-    px = cell.load()
-    for y in range(CELL):
-        for x in range(CELL):
-            r, g, b, a = px[x, y]
-            px[x, y] = (r, g, b, 255) if a >= ALPHA_T else (0, 0, 0, 0)
+def fit_frame_into_cell(frame, bounding_box):
+    cropped = frame.crop(bounding_box)
+    width, height = cropped.size
+    scale = min(CELL_SIZE / width, CELL_SIZE / height, 1.0)
+    new_width, new_height = max(1, round(width * scale)), max(1, round(height * scale))
+    cropped = cropped.resize((new_width, new_height), Image.LANCZOS)
+    cell = Image.new('RGBA', (CELL_SIZE, CELL_SIZE), (0, 0, 0, 0))
+    cell.paste(cropped, ((CELL_SIZE - new_width) // 2, CELL_SIZE - new_height))  # resting on the ground
+    #region Binary alpha
+    cell_pixels = cell.load()
+    for y in range(CELL_SIZE):
+        for x in range(CELL_SIZE):
+            red, green, blue, alpha = cell_pixels[x, y]
+            cell_pixels[x, y] = (red, green, blue, 255) if alpha >= ALPHA_THRESHOLD else (0, 0, 0, 0)
+    #endregion
     return cell
 
 
-def quantize_set(cells, max_colors=MAX_COLORS):
+def quantize_cells_together(cells, max_colors=MAX_COLORS):
     # palette shared by all frames of the species (so the color does not flicker)
-    strip = Image.new('RGBA', (CELL * len(cells), CELL))
-    for i, c in enumerate(cells):
-        strip.paste(c, (i * CELL, 0))
-    rgb = strip.convert('RGB').quantize(colors=max_colors, method=Image.MEDIANCUT)
-    rgb = rgb.convert('RGB')
-    out = []
+    strip = Image.new('RGBA', (CELL_SIZE * len(cells), CELL_SIZE))
+    for i, cell in enumerate(cells):
+        strip.paste(cell, (i * CELL_SIZE, 0))
+    quantized_strip = strip.convert('RGB').quantize(colors=max_colors, method=Image.MEDIANCUT)
+    quantized_strip = quantized_strip.convert('RGB')
+    quantized_cells = []
     for i in range(len(cells)):
-        q = rgb.crop((i * CELL, 0, (i + 1) * CELL, CELL)).convert('RGBA')
-        qpx, apx = q.load(), cells[i].load()
-        for y in range(CELL):
-            for x in range(CELL):
-                if apx[x, y][3] == 0:
-                    qpx[x, y] = (0, 0, 0, 0)
-        out.append(q)
-    return out
+        quantized_cell = quantized_strip.crop((i * CELL_SIZE, 0, (i + 1) * CELL_SIZE, CELL_SIZE)).convert('RGBA')
+        quantized_pixels, original_pixels = quantized_cell.load(), cells[i].load()
+        for y in range(CELL_SIZE):
+            for x in range(CELL_SIZE):
+                if original_pixels[x, y][3] == 0:
+                    quantized_pixels[x, y] = (0, 0, 0, 0)
+        quantized_cells.append(quantized_cell)
+    return quantized_cells
 
 
-def convert(path):
-    frames = load_frames(path)
-    bbox = union_bbox(frames)
-    keys = pick_keyframes(frames)
-    cells = [to_cell(f, bbox) for f in keys]
-    return quantize_set(cells)
+def convert_gif_to_cells(path):
+    frames = load_gif_frames(path)
+    bounding_box = compute_union_bounding_box(frames)
+    keyframes = pick_keyframes(frames)
+    cells = [fit_frame_into_cell(frame, bounding_box) for frame in keyframes]
+    return quantize_cells_together(cells)
 
 
-def render_sheet(results, path='tools/import_sheet.png', scale=4):
-    pad = 12
-    bgs = ['#f2efe1', '#141828']
-    rows = len(results)
-    cols = KEYFRAMES
-    cw = CELL * scale + pad
-    img_w = len(bgs) * (cols * cw + pad * 2) + pad
-    img_h = rows * (CELL * scale + pad + 16) + pad
-    from PIL import ImageDraw
-    img = Image.new('RGB', (img_w, img_h), '#888888')
-    d = ImageDraw.Draw(img)
-    for bi, bg in enumerate(bgs):
-        gx = pad + bi * (cols * cw + pad * 2)
-        for ri, (name, cells) in enumerate(results.items()):
-            oy = pad + ri * (CELL * scale + pad + 16)
-            for ci, cell in enumerate(cells):
-                ox = gx + ci * cw
-                d.rectangle([ox, oy, ox + CELL * scale, oy + CELL * scale], fill=bg)
-                big = cell.resize((CELL * scale, CELL * scale), Image.NEAREST)
-                img.paste(big, (ox, oy), big)
-            d.text((gx, oy + CELL * scale + 2), name, fill='#000')
-    img.save(path)
-    print(f"guardado {path}")
+def render_import_sheet(cells_by_name, path=SHEET_PATH, scale=4):
+    """One row per GIF (its name under the first frame), one column per keyframe."""
+    def make_cell_painter(cell):
+        enlarged = cell.resize((CELL_SIZE * scale, CELL_SIZE * scale), Image.NEAREST)
+        return lambda image, draw, left, top: image.paste(enlarged, (left, top), enlarged)
+
+    tiles = []
+    for row, (name, cells) in enumerate(cells_by_name.items()):
+        for column, cell in enumerate(cells):
+            tiles.append((row, column, name if column == 0 else None, make_cell_painter(cell)))
+    render_contact_sheet(tiles, path, tile_size=CELL_SIZE * scale, pad=12, label_height=16,
+                         label_offset=2, group_gap=24, column_count=KEYFRAME_COUNT)
+
+#endregion
+
+#region Public API
+
+def main():
+    cells_by_name = {}
+    for file_name in sorted(os.listdir(SOURCE_DIR)):
+        if file_name.endswith('.gif'):
+            cells_by_name[file_name[:-4]] = convert_gif_to_cells(os.path.join(SOURCE_DIR, file_name))
+    if not cells_by_name:
+        print(f"no GIFs in {SOURCE_DIR}")
+        sys.exit(1)
+    render_import_sheet(cells_by_name)
 
 
 if __name__ == '__main__':
-    srcdir = 'tools/downloads'
-    results = {}
-    for f in sorted(os.listdir(srcdir)):
-        if f.endswith('.gif'):
-            results[f[:-4]] = convert(os.path.join(srcdir, f))
-    if not results:
-        print(f"no hay GIFs en {srcdir}")
-        sys.exit(1)
-    render_sheet(results)
+    main()
+
+#endregion

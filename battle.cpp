@@ -5,13 +5,14 @@
 #pragma region Includes
 #include "battle.h"
 #include "dex.h"
+#include "ceremony.h"
+#include "countof.h"
 #pragma endregion
 
 namespace {
 
 #pragma region Constants
-constexpr uint8_t MAX_BATTLE_ROUNDS = 50;  // resolveBattle() auto battle
-constexpr uint8_t MAX_TURN_ROUNDS = 20;    // stepBattle() turn battle
+constexpr uint8_t MAX_BATTLE_ROUNDS = 50;  // resolveBattle() auto battle (turn battles have no limit)
 #pragma endregion
 
 #pragma region Shared helpers
@@ -24,103 +25,49 @@ uint16_t legacyHpFor(const BattleStats &stats) {
 uint8_t clampLuckRoll(uint8_t luckRoll) {
   return luckRoll > 99 ? 99 : luckRoll;
 }
+
+// value * percent / 100, truncated to 16 bits, never below 1
+uint16_t scaleByPercentAtLeastOne(uint16_t value, uint16_t percent) {
+  uint16_t scaledValue = (uint16_t)((uint32_t)value * percent / 100);
+  return scaledValue == 0 ? 1 : scaledValue;
+}
 #pragma endregion
 
 #pragma region Type chart
-// relation of one attacking type against one defending type (modern chart):
-// 1 super effective, 0 neutral, -1 not very effective, -2 immune.
+// relation of one attacking type against one defending type (modern chart).
 // Immunities are softened to a strong resistance by computeTypeEffectPct().
+enum TypeRelation : int8_t { IMMUNE = -2, RESIST = -1, EVEN = 0, SUPER = 1 };
+
+// [attack type][defend type], indexed by the TYPE_* enum in dex.h. TYPE_NONE
+// (row and column 0) is always EVEN.
+// Columns: NONE NORMAL FIRE WATER ELECTRIC GRASS ICE FIGHTING POISON GROUND
+//          FLYING PSYCHIC BUG ROCK GHOST DRAGON DARK STEEL FAIRY
+constexpr int8_t TYPE_RELATIONS[TYPE_COUNT][TYPE_COUNT] = {
+  { EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN },  // NONE
+  { EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   RESIST, IMMUNE, EVEN,   EVEN,   RESIST, EVEN },  // NORMAL
+  { EVEN,   EVEN,   RESIST, RESIST, EVEN,   SUPER,  SUPER,  EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  RESIST, EVEN,   RESIST, EVEN,   SUPER,  EVEN },  // FIRE
+  { EVEN,   EVEN,   SUPER,  RESIST, EVEN,   RESIST, EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   RESIST, EVEN,   EVEN,   EVEN },  // WATER
+  { EVEN,   EVEN,   EVEN,   SUPER,  RESIST, RESIST, EVEN,   EVEN,   EVEN,   IMMUNE, SUPER,  EVEN,   EVEN,   EVEN,   EVEN,   RESIST, EVEN,   EVEN,   EVEN },  // ELECTRIC
+  { EVEN,   EVEN,   RESIST, SUPER,  EVEN,   RESIST, EVEN,   EVEN,   RESIST, SUPER,  RESIST, EVEN,   RESIST, SUPER,  EVEN,   RESIST, EVEN,   RESIST, EVEN },  // GRASS
+  { EVEN,   EVEN,   RESIST, RESIST, EVEN,   SUPER,  RESIST, EVEN,   EVEN,   SUPER,  SUPER,  EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   RESIST, EVEN },  // ICE
+  { EVEN,   SUPER,  EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   RESIST, EVEN,   RESIST, RESIST, RESIST, SUPER,  IMMUNE, EVEN,   SUPER,  SUPER,  RESIST },  // FIGHTING
+  { EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   EVEN,   RESIST, RESIST, EVEN,   EVEN,   EVEN,   RESIST, RESIST, EVEN,   EVEN,   IMMUNE, SUPER },  // POISON
+  { EVEN,   EVEN,   SUPER,  EVEN,   SUPER,  RESIST, EVEN,   EVEN,   SUPER,  EVEN,   IMMUNE, EVEN,   RESIST, SUPER,  EVEN,   EVEN,   EVEN,   SUPER,  EVEN },  // GROUND
+  { EVEN,   EVEN,   EVEN,   EVEN,   RESIST, SUPER,  EVEN,   SUPER,  EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  RESIST, EVEN,   EVEN,   EVEN,   RESIST, EVEN },  // FLYING
+  { EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  SUPER,  EVEN,   EVEN,   RESIST, EVEN,   EVEN,   EVEN,   EVEN,   IMMUNE, RESIST, EVEN },  // PSYCHIC
+  { EVEN,   EVEN,   RESIST, EVEN,   EVEN,   SUPER,  EVEN,   RESIST, RESIST, EVEN,   RESIST, SUPER,  EVEN,   EVEN,   RESIST, EVEN,   SUPER,  RESIST, RESIST },  // BUG
+  { EVEN,   EVEN,   SUPER,  EVEN,   EVEN,   EVEN,   SUPER,  RESIST, EVEN,   RESIST, SUPER,  EVEN,   SUPER,  EVEN,   EVEN,   EVEN,   EVEN,   RESIST, EVEN },  // ROCK
+  { EVEN,   IMMUNE, EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   EVEN,   SUPER,  EVEN,   RESIST, EVEN,   EVEN },  // GHOST
+  { EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   RESIST, IMMUNE },  // DRAGON
+  { EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   RESIST, EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   EVEN,   SUPER,  EVEN,   RESIST, EVEN,   RESIST },  // DARK
+  { EVEN,   EVEN,   RESIST, RESIST, RESIST, EVEN,   SUPER,  EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  EVEN,   EVEN,   EVEN,   RESIST, SUPER },  // STEEL
+  { EVEN,   EVEN,   RESIST, EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  RESIST, EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   EVEN,   SUPER,  SUPER,  RESIST, EVEN },  // FAIRY
+};
+
+// out-of-range types (never produced by dex.h) are neutral
 int8_t typeRelationFor(uint8_t attackType, uint8_t defendType) {
-  if (attackType == TYPE_NONE || defendType == TYPE_NONE) return 0;
-  switch (attackType) {
-    case TYPE_NORMAL:
-      if (defendType == TYPE_ROCK || defendType == TYPE_STEEL) return -1;
-      if (defendType == TYPE_GHOST) return -2;
-      return 0;
-    case TYPE_FIRE:
-      if (defendType == TYPE_BUG || defendType == TYPE_STEEL || defendType == TYPE_GRASS || defendType == TYPE_ICE) return 1;
-      if (defendType == TYPE_ROCK || defendType == TYPE_FIRE || defendType == TYPE_WATER || defendType == TYPE_DRAGON) return -1;
-      return 0;
-    case TYPE_WATER:
-      if (defendType == TYPE_GROUND || defendType == TYPE_ROCK || defendType == TYPE_FIRE) return 1;
-      if (defendType == TYPE_WATER || defendType == TYPE_GRASS || defendType == TYPE_DRAGON) return -1;
-      return 0;
-    case TYPE_ELECTRIC:
-      if (defendType == TYPE_FLYING || defendType == TYPE_WATER) return 1;
-      if (defendType == TYPE_GRASS || defendType == TYPE_ELECTRIC || defendType == TYPE_DRAGON) return -1;
-      if (defendType == TYPE_GROUND) return -2;
-      return 0;
-    case TYPE_GRASS:
-      if (defendType == TYPE_GROUND || defendType == TYPE_ROCK || defendType == TYPE_WATER) return 1;
-      if (defendType == TYPE_FLYING || defendType == TYPE_POISON || defendType == TYPE_BUG ||
-          defendType == TYPE_STEEL || defendType == TYPE_FIRE || defendType == TYPE_GRASS ||
-          defendType == TYPE_DRAGON) return -1;
-      return 0;
-    case TYPE_ICE:
-      if (defendType == TYPE_FLYING || defendType == TYPE_GROUND || defendType == TYPE_GRASS || defendType == TYPE_DRAGON) return 1;
-      if (defendType == TYPE_STEEL || defendType == TYPE_FIRE || defendType == TYPE_WATER || defendType == TYPE_ICE) return -1;
-      return 0;
-    case TYPE_FIGHTING:
-      if (defendType == TYPE_NORMAL || defendType == TYPE_ROCK || defendType == TYPE_STEEL ||
-          defendType == TYPE_ICE || defendType == TYPE_DARK) return 1;
-      if (defendType == TYPE_FLYING || defendType == TYPE_POISON || defendType == TYPE_BUG ||
-          defendType == TYPE_PSYCHIC || defendType == TYPE_FAIRY) return -1;
-      if (defendType == TYPE_GHOST) return -2;
-      return 0;
-    case TYPE_POISON:
-      if (defendType == TYPE_GRASS || defendType == TYPE_FAIRY) return 1;
-      if (defendType == TYPE_POISON || defendType == TYPE_GROUND || defendType == TYPE_ROCK || defendType == TYPE_GHOST) return -1;
-      if (defendType == TYPE_STEEL) return -2;
-      return 0;
-    case TYPE_GROUND:
-      if (defendType == TYPE_POISON || defendType == TYPE_ROCK || defendType == TYPE_STEEL ||
-          defendType == TYPE_FIRE || defendType == TYPE_ELECTRIC) return 1;
-      if (defendType == TYPE_BUG || defendType == TYPE_GRASS) return -1;
-      if (defendType == TYPE_FLYING) return -2;
-      return 0;
-    case TYPE_FLYING:
-      if (defendType == TYPE_FIGHTING || defendType == TYPE_BUG || defendType == TYPE_GRASS) return 1;
-      if (defendType == TYPE_ROCK || defendType == TYPE_STEEL || defendType == TYPE_ELECTRIC) return -1;
-      return 0;
-    case TYPE_PSYCHIC:
-      if (defendType == TYPE_FIGHTING || defendType == TYPE_POISON) return 1;
-      if (defendType == TYPE_STEEL || defendType == TYPE_PSYCHIC) return -1;
-      if (defendType == TYPE_DARK) return -2;
-      return 0;
-    case TYPE_BUG:
-      if (defendType == TYPE_GRASS || defendType == TYPE_PSYCHIC || defendType == TYPE_DARK) return 1;
-      if (defendType == TYPE_FIGHTING || defendType == TYPE_FLYING || defendType == TYPE_POISON ||
-          defendType == TYPE_GHOST || defendType == TYPE_STEEL || defendType == TYPE_FIRE ||
-          defendType == TYPE_FAIRY) return -1;
-      return 0;
-    case TYPE_ROCK:
-      if (defendType == TYPE_FLYING || defendType == TYPE_BUG || defendType == TYPE_FIRE || defendType == TYPE_ICE) return 1;
-      if (defendType == TYPE_FIGHTING || defendType == TYPE_GROUND || defendType == TYPE_STEEL) return -1;
-      return 0;
-    case TYPE_GHOST:
-      if (defendType == TYPE_GHOST || defendType == TYPE_PSYCHIC) return 1;
-      if (defendType == TYPE_DARK) return -1;
-      if (defendType == TYPE_NORMAL) return -2;
-      return 0;
-    case TYPE_DRAGON:
-      if (defendType == TYPE_DRAGON) return 1;
-      if (defendType == TYPE_STEEL) return -1;
-      if (defendType == TYPE_FAIRY) return -2;
-      return 0;
-    case TYPE_DARK:
-      if (defendType == TYPE_GHOST || defendType == TYPE_PSYCHIC) return 1;
-      if (defendType == TYPE_FIGHTING || defendType == TYPE_DARK || defendType == TYPE_FAIRY) return -1;
-      return 0;
-    case TYPE_STEEL:
-      if (defendType == TYPE_ROCK || defendType == TYPE_ICE || defendType == TYPE_FAIRY) return 1;
-      if (defendType == TYPE_STEEL || defendType == TYPE_FIRE || defendType == TYPE_WATER || defendType == TYPE_ELECTRIC) return -1;
-      return 0;
-    case TYPE_FAIRY:
-      if (defendType == TYPE_FIGHTING || defendType == TYPE_DRAGON || defendType == TYPE_DARK) return 1;
-      if (defendType == TYPE_POISON || defendType == TYPE_STEEL || defendType == TYPE_FIRE) return -1;
-      return 0;
-  }
-  return 0;
+  if (attackType >= TYPE_COUNT || defendType >= TYPE_COUNT) return EVEN;
+  return TYPE_RELATIONS[attackType][defendType];
 }
 
 // light type multiplier in percent: x1.2 per weakness, x0.85 per resistance,
@@ -128,11 +75,11 @@ int8_t typeRelationFor(uint8_t attackType, uint8_t defendType) {
 uint8_t computeTypeEffectPct(uint8_t attackType, uint8_t defendType1, uint8_t defendType2) {
   uint32_t effectPercent = 100;
   const uint8_t defendTypes[2] = { defendType1, defendType2 };
-  for (uint8_t i = 0; i < 2; i++) {
+  for (size_t i = 0; i < countof(defendTypes); i++) {
     int8_t relation = typeRelationFor(attackType, defendTypes[i]);
-    if (relation > 0) effectPercent = effectPercent * 120 / 100;
-    else if (relation == -1) effectPercent = effectPercent * 85 / 100;
-    else if (relation == -2) effectPercent = effectPercent * 70 / 100;
+    if (relation == SUPER) effectPercent = effectPercent * 120 / 100;
+    else if (relation == RESIST) effectPercent = effectPercent * 85 / 100;
+    else if (relation == IMMUNE) effectPercent = effectPercent * 70 / 100;
   }
   if (effectPercent < 1) effectPercent = 1;
   return effectPercent > 255 ? 255 : (uint8_t)effectPercent;
@@ -183,8 +130,7 @@ uint16_t computeCappedTurnDamage(const BattleStats &attacker,
                                  bool counter,
                                  uint8_t powerPercent) {
   uint16_t damage = computeDamage(attacker, defender, luckRoll);
-  damage = (uint16_t)((uint32_t)damage * powerPercent / 100);
-  if (damage == 0) damage = 1;
+  damage = scaleByPercentAtLeastOne(damage, powerPercent);
   if (counter) damage = (uint16_t)((uint32_t)damage * 3 / 2);
   uint16_t damageCap = (uint16_t)((uint32_t)defenderMaxHp * 35 / 100);
   if (damageCap < 1) damageCap = 1;
@@ -193,10 +139,11 @@ uint16_t computeCappedTurnDamage(const BattleStats &attacker,
 }
 
 bool isBattleFinished(const BattleRuntime &battle) {
-  return battle.playerHp == 0 || battle.enemyHp == 0 || battle.round >= MAX_TURN_ROUNDS;
+  return battle.playerHp == 0 || battle.enemyHp == 0;
 }
 
-// at the round limit the side with more HP left wins (ties go to the player)
+// the side still standing wins; the HP comparison only matters if both reached 0
+// in the same exchange (ties go to the player)
 bool isPlayerWinner(const BattleRuntime &battle) {
   if (battle.enemyHp == 0) return true;
   if (battle.playerHp == 0) return false;
@@ -253,9 +200,9 @@ bool isHpLow(uint16_t hp, uint16_t maxHp) {
 bool isWildTypePreferredForPhase(uint8_t type1, uint8_t type2, uint8_t phase) {
   auto hasType = [&](uint8_t wantedType) { return type1 == wantedType || type2 == wantedType; };
   switch (phase) {
-    case 0: return hasType(TYPE_GRASS) || hasType(TYPE_FLYING) || hasType(TYPE_NORMAL) || hasType(TYPE_BUG);
-    case 2: return hasType(TYPE_WATER) || hasType(TYPE_FLYING) || hasType(TYPE_FIRE);
-    case 3: return hasType(TYPE_GHOST) || hasType(TYPE_POISON) || hasType(TYPE_BUG);
+    case DAY_PHASE_MORNING: return hasType(TYPE_GRASS) || hasType(TYPE_FLYING) || hasType(TYPE_NORMAL) || hasType(TYPE_BUG);
+    case DAY_PHASE_EVENING: return hasType(TYPE_WATER) || hasType(TYPE_FLYING) || hasType(TYPE_FIRE);
+    case DAY_PHASE_NIGHT: return hasType(TYPE_GHOST) || hasType(TYPE_POISON) || hasType(TYPE_BUG);
     default: return true;
   }
 }
@@ -265,10 +212,10 @@ bool isWildTypePreferredForPhase(uint8_t type1, uint8_t type2, uint8_t phase) {
 
 #pragma region Day phase and level helpers
 uint8_t dayPhaseFromHour(int hour) {
-  if (hour >= 6 && hour < 12) return 0;
-  if (hour >= 12 && hour < 18) return 1;
-  if (hour >= 18 && hour < 22) return 2;
-  return 3;
+  if (hour >= 6 && hour < 12) return DAY_PHASE_MORNING;
+  if (hour >= 12 && hour < 18) return DAY_PHASE_DAY;
+  if (hour >= 18 && hour < 22) return DAY_PHASE_EVENING;
+  return DAY_PHASE_NIGHT;
 }
 
 uint8_t battleLevelFor(uint16_t petLevel) {
@@ -288,7 +235,7 @@ uint8_t battleTypeEffectPct(uint8_t attackType, uint8_t defendType1, uint8_t def
 }
 
 bool canStartWildBattle(bool isEgg, bool sleeping, uint8_t ceremony) {
-  return !isEgg && !sleeping && ceremony == 0;
+  return !isEgg && !sleeping && ceremony == CER_NONE;
 }
 
 uint8_t wildLevelFor(uint8_t petLevel, uint8_t luckRoll) {
@@ -299,7 +246,7 @@ uint8_t wildLevelFor(uint8_t petLevel, uint8_t luckRoll) {
   else levelDelta = 2 + (int)(luckRoll % 2);                     // +2..+3, occasional danger
   int wildLevel = baseLevel + levelDelta;
   if (wildLevel < 1) wildLevel = 1;
-  return wildLevel > 100 ? 100 : (uint8_t)wildLevel;
+  return wildLevel > BATTLE_LEVEL_CAP ? BATTLE_LEVEL_CAP : (uint8_t)wildLevel;
 }
 
 // 25% rare, otherwise common (never legendary or evolution-only); prefers the
@@ -307,7 +254,7 @@ uint8_t wildLevelFor(uint8_t petLevel, uint8_t luckRoll) {
 int16_t pickWildSpecies(uint8_t roll, uint8_t phase) {
   int16_t candidatePool[DEX_COUNT];
   int candidateCount = 0;
-  uint8_t targetRarity = (roll % 100) < 25 ? R_RARO : R_COMUN;
+  uint8_t targetRarity = (roll % 100) < 25 ? R_RARE : R_COMMON;
 
   auto fillPoolForRarity = [&](uint8_t rarity, bool preferPhaseTypes) {
     candidateCount = 0;
@@ -321,9 +268,9 @@ int16_t pickWildSpecies(uint8_t roll, uint8_t phase) {
 
   fillPoolForRarity(targetRarity, true);
   if (candidateCount == 0) fillPoolForRarity(targetRarity, false);
-  if (candidateCount == 0 && targetRarity == R_RARO) {
-    fillPoolForRarity(R_COMUN, true);
-    if (candidateCount == 0) fillPoolForRarity(R_COMUN, false);
+  if (candidateCount == 0 && targetRarity == R_RARE) {
+    fillPoolForRarity(R_COMMON, true);
+    if (candidateCount == 0) fillPoolForRarity(R_COMMON, false);
   }
   return candidateCount > 0 ? candidatePool[roll % candidateCount] : 1;
 }
@@ -332,8 +279,7 @@ BattleStats wildBattleStats(int16_t dex, uint8_t level) {
   if (dex < 1 || dex > DEX_COUNT) dex = 1;
   const DexEntry &entry = DEX_TBL[dex];
   uint8_t wildLevel = level ? level : 1;
-  BattleStats stats = {};
-  stats.hp = 0;
+  BattleStats stats = {};  // hp stays 0: derived from level and defense
   stats.atk = entry.bAtk + wildLevel;
   stats.def = entry.bDef + wildLevel;
   stats.spe = entry.bSpe + wildLevel;
@@ -346,7 +292,7 @@ BattleStats wildBattleStats(int16_t dex, uint8_t level) {
 
 #pragma region Turn battle
 BattleRuntime beginBattleRuntime(const BattleStats &player, const BattleStats &enemy) {
-  BattleRuntime battle = {};
+  BattleRuntime battle = {};  // counters, flags and totals start at zero / false
   battle.player = player;
   battle.enemy = enemy;
   battle.playerMaxHp = computeTurnMaxHp(player);
@@ -354,7 +300,6 @@ BattleRuntime beginBattleRuntime(const BattleStats &player, const BattleStats &e
   battle.playerHp = battle.playerMaxHp;
   battle.enemyHp = battle.enemyMaxHp;
   battle.restUsesLeft = 2;
-  battle.counterReady = false;
   return battle;
 }
 
@@ -380,16 +325,16 @@ BattleAction pickEnemyAction(const BattleRuntime &battle, uint8_t choiceRoll) {
   #pragma endregion
 
   #pragma region Weighted pick
-  const BattleAction moves[4] = { BATTLE_ATTACK, BATTLE_ATTACK_QUICK, BATTLE_ATTACK_HEAVY, BATTLE_DODGE };
-  int weights[4] = { attackWeight, quickWeight, heavyWeight, dodgeWeight };
+  const BattleAction moves[] = { BATTLE_ATTACK, BATTLE_ATTACK_QUICK, BATTLE_ATTACK_HEAVY, BATTLE_DODGE };
+  int weights[countof(moves)] = { attackWeight, quickWeight, heavyWeight, dodgeWeight };
   int totalWeight = 0;
-  for (uint8_t i = 0; i < 4; i++) {
+  for (size_t i = 0; i < countof(weights); i++) {
     if (weights[i] < 0) weights[i] = 0;
     totalWeight += weights[i];
   }
   if (totalWeight == 0) return BATTLE_ATTACK;
   int pick = (int)clampLuckRoll(choiceRoll) * totalWeight / 100;
-  for (uint8_t i = 0; i < 4; i++) {
+  for (size_t i = 0; i < countof(weights); i++) {
     if (pick < weights[i]) return moves[i];
     pick -= weights[i];
   }
@@ -474,16 +419,13 @@ BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t 
       }
     } else if (action == BATTLE_ATTACK_QUICK) {
       turn.quickGuard = true;
-      enemyHit = (uint16_t)((uint32_t)enemyHit * 85 / 100);
-      if (enemyHit == 0) enemyHit = 1;
+      enemyHit = scaleByPercentAtLeastOne(enemyHit, 85);
     } else if (action == BATTLE_ATTACK_HEAVY) {
       turn.heavyRisk = true;
-      enemyHit = (uint16_t)((uint32_t)enemyHit * 120 / 100);
-      if (enemyHit == 0) enemyHit = 1;
+      enemyHit = scaleByPercentAtLeastOne(enemyHit, 120);
     } else if (action == BATTLE_REST) {
       turn.playerGuarded = true;
-      enemyHit = (uint16_t)((uint32_t)enemyHit * 70 / 100);
-      if (enemyHit == 0) enemyHit = 1;
+      enemyHit = scaleByPercentAtLeastOne(enemyHit, 70);
     }
     if (enemyHit > 0) {
       turn.enemyCounterUsed = battle.enemyCounterReady;
@@ -494,9 +436,11 @@ BattleTurnResult stepBattle(BattleRuntime &battle, BattleAction action, uint8_t 
   }
   #pragma endregion
 
+  #pragma region Outcome
   turn.battleEnded = isBattleFinished(battle);
   turn.playerWon = turn.battleEnded ? isPlayerWinner(battle) : false;
   return turn;
+  #pragma endregion
 }
 #pragma endregion
 

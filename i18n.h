@@ -69,7 +69,7 @@ enum StrId : uint8_t {
   // catch dialog and rewards. Folding markers inside the enum are comments:
   // GCC rejects #pragma region inside an enum or initializer body.
   S_WILD_BATTLE, S_WILD_Q, S_FIGHT, S_LATER, S_RUN_BATTLE,
-  S_ATTACK, S_DODGE, S_REST, S_QUICK_ATTACK, S_HEAVY_ATTACK,
+  S_ATTACK, S_DODGE, S_REST, S_QUICK_ATTACK, S_HEAVY_ATTACK, S_NORMAL_ATTACK,
   S_WIN, S_LOSS, S_ROUNDS_FMT, S_DAMAGE_FMT, S_ROUND_SHORT_FMT,
   S_HIT_FMT, S_EFFECTIVE, S_NOT_EFFECTIVE, S_MISSED, S_DODGED, S_ENEMY_DODGED,
   S_COUNTER_READY, S_NO_REST, S_RESTED_FMT, S_GUARD,

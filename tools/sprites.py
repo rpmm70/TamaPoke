@@ -7,10 +7,22 @@ pixel-level details (eyes, mouth, spots). The script validates, renders a
 PNG contact sheet for visual review, and emits the C and JS arrays:
 
   python3 tools/sprites.py        # validate + render tools/sheet.png
-  python3 tools/sprites.py emit   # regenerate species.h and emitted_sprites.js
-"""
-from PIL import Image, ImageDraw
+  python3 tools/sprites.py emit   # also regenerate species.h and emitted_sprites.js
 
+Pillow is only needed to render the sheet (--no-sheet skips it).
+"""
+#region Imports
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dex_data import DEX, TYPE_ACCENTS
+from tamapoke_common import REPO_ROOT, TOOLS_DIR, hex_to_rgb565, render_contact_sheet, write_generated_text
+#endregion
+
+#region Palette
 PALETTE = {
     'k': '#1b1b25',  # outline / eyes
     'w': '#ffffff',  # eye highlight
@@ -41,7 +53,9 @@ PALETTE = {
 }
 
 W = H = 32
+#endregion
 
+#region Sprite canvas
 
 class G:
     def __init__(self, size=W):
@@ -104,8 +118,9 @@ class G:
     def rows(self):
         return [''.join(r) for r in self.g]
 
+#endregion
 
-# ----------------------------------------------------------------- fire line
+#region Fire line
 
 def charmander():
     g = G()
@@ -195,7 +210,9 @@ def charizard():
     return g.rows()
 
 
-# ---------------------------------------------------------------- grass line
+#endregion
+
+#region Grass line
 
 def bulbasaur():
     g = G()
@@ -284,7 +301,9 @@ def venusaur():
     return g.rows()
 
 
-# ---------------------------------------------------------------- water line
+#endregion
+
+#region Water line
 
 def squirtle():
     g = G()
@@ -367,7 +386,9 @@ def blastoise():
     return g.rows()
 
 
-# ------------------------------------------------------------------- generic
+#endregion
+
+#region Generic sprites
 
 def egg():
     g = G()
@@ -421,7 +442,7 @@ def poop():
 
 def heart():
     # Hand-drawn and edited directly in species.h (commit 7c2b0f9,
-    # "animaciones epicas, corazon y biomas"), without coming back here: the
+    # "epic animations, heart and biomes"), without coming back here: the
     # generator kept a different procedural version and species.h could no
     # longer be regenerated identically. The heart that actually ships is pinned here.
     return [
@@ -460,7 +481,9 @@ def heart():
     ]
 
 
-# -------------------------------------------------------------- button icons
+#endregion
+
+#region Button icons
 
 # The icons are hand-drawn pixel art (approved in the CYD screen mockup), so
 # they are pinned as literal rows like heart(), not built procedurally.
@@ -795,6 +818,9 @@ def icon_clean():
         "................",
     ]
 
+#endregion
+
+#region Sprite table and expression anchors
 
 SPRITES = {
     "CHARMANDER": charmander(),
@@ -838,68 +864,81 @@ ANCHORS = {
     "BLASTOISE":  dict(eyeRow=6, eyeL=11, eyeR=19, mouthRow=12, mouthCol=15, body='N'),
 }
 
+#endregion
 
-def validate():
-    ok = True
+#region Validation and contact sheet
+
+def validate_sprites():
+    all_valid = True
     for name, rows in SPRITES.items():
-        n = len(rows)
-        for i, row in enumerate(rows):
-            if len(row) != n:
-                print(f"{name} fila {i}: {len(row)} chars (esperaba {n})")
-                ok = False
-            bad = set(row) - set(PALETTE) - {'.'}
-            if bad:
-                print(f"{name} fila {i}: chars desconocidos {bad}")
-                ok = False
-    return ok
+        expected_width = len(rows)
+        for row_index, row in enumerate(rows):
+            if len(row) != expected_width:
+                print(f"{name} row {row_index}: {len(row)} chars (expected {expected_width})")
+                all_valid = False
+            unknown_characters = set(row) - set(PALETTE) - {'.'}
+            if unknown_characters:
+                print(f"{name} row {row_index}: unknown chars {unknown_characters}")
+                all_valid = False
+    return all_valid
 
 
-def render(path="tools/sheet.png", scale=10, percol=3):
-    pad = 16
-    names = list(SPRITES)
-    ncols = percol
-    nrows = (len(names) + ncols - 1) // ncols
-    bgs = ['#f2efe1', '#141828']
-    cw, chh = W * scale + pad, H * scale + pad + 18
-    img = Image.new('RGB', (len(bgs) * (ncols * cw + pad) + pad, nrows * chh + pad), '#888888')
-    d = ImageDraw.Draw(img)
-    for bi, bg in enumerate(bgs):
-        gx = pad + bi * (ncols * cw + pad)
-        for i, name in enumerate(names):
-            ox = gx + (i % ncols) * cw
-            oy = pad + (i // ncols) * chh
-            d.rectangle([ox, oy, ox + W * scale, oy + H * scale], fill=bg)
-            sc = scale * W // len(SPRITES[name])
-            for r, row in enumerate(SPRITES[name]):
-                for c, ch in enumerate(row):
-                    if ch in PALETTE:
-                        d.rectangle([ox + c * sc, oy + r * sc,
-                                     ox + (c + 1) * sc - 1, oy + (r + 1) * sc - 1],
-                                    fill=PALETTE[ch])
-            d.text((ox, oy + H * scale + 3), name, fill='#000')
-    img.save(path)
-    print(f"guardado {path}")
+def render_sprite_sheet(path=os.path.join(TOOLS_DIR, 'sheet.png'), scale=10, column_count=3):
+    """Every sprite on a light and a dark background, for visual review."""
+    def make_sprite_painter(rows):
+        pixel_size = scale * W // len(rows)
 
+        def paint_sprite(image, draw, left, top):
+            for row_index, row in enumerate(rows):
+                for column_index, character in enumerate(row):
+                    if character in PALETTE:
+                        draw.rectangle([left + column_index * pixel_size, top + row_index * pixel_size,
+                                        left + (column_index + 1) * pixel_size - 1,
+                                        top + (row_index + 1) * pixel_size - 1],
+                                       fill=PALETTE[character])
+        return paint_sprite
 
-def rgb565(hexcol):
-    r, g, b = int(hexcol[1:3], 16), int(hexcol[3:5], 16), int(hexcol[5:7], 16)
-    return (r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)
+    tiles = [(sprite_index // column_count, sprite_index % column_count, name, make_sprite_painter(rows))
+             for sprite_index, (name, rows) in enumerate(SPRITES.items())]
+    render_contact_sheet(tiles, path, tile_size=W * scale, pad=16, label_height=18,
+                         label_offset=3, group_gap=16, column_count=column_count)
 
+#endregion
 
-# name -> (type, evolvesTo, evolveLevel, scale)
+#region Species metadata
+
+DEX_ROW_BY_DISPLAY_NAME = {row[2]: row for row in DEX}
+
+# name -> (evolveLevel, scale). The type accent and the evolution target come
+# from tools/dex_data.py. The levels are kept as shipped in species.h: note
+# IVYSAUR says 36 here but 32 in dex_data.py (the firmware evolves with the
+# dex_data.py value through dex.h; this field is not read by the firmware).
 SPECIES_META = {
-    "CHARMANDER": ("TYPE_FUEGO", "SP_CHARMELEON", 16, 5),
-    "CHARMELEON": ("TYPE_FUEGO", "SP_CHARIZARD", 36, 6),
-    "CHARIZARD":  ("TYPE_FUEGO", "-1", 0, 7),
-    "BULBASAUR":  ("TYPE_PLANTA", "SP_IVYSAUR", 16, 5),
-    "IVYSAUR":    ("TYPE_PLANTA", "SP_VENUSAUR", 36, 6),
-    "VENUSAUR":   ("TYPE_PLANTA", "-1", 0, 7),
-    "SQUIRTLE":   ("TYPE_AGUA", "SP_WARTORTLE", 16, 5),
-    "WARTORTLE":  ("TYPE_AGUA", "SP_BLASTOISE", 36, 6),
-    "BLASTOISE":  ("TYPE_AGUA", "-1", 0, 7),
+    "CHARMANDER": (16, 5),
+    "CHARMELEON": (36, 6),
+    "CHARIZARD":  (0, 7),
+    "BULBASAUR":  (16, 5),
+    "IVYSAUR":    (36, 6),
+    "VENUSAUR":   (0, 7),
+    "SQUIRTLE":   (16, 5),
+    "WARTORTLE":  (36, 6),
+    "BLASTOISE":  (0, 7),
 }
 
-ACCENT = {"TYPE_FUEGO": '#e8503a', "TYPE_PLANTA": '#3c8a4c', "TYPE_AGUA": '#4f93c4'}
+
+def species_accent_hex(name):
+    return TYPE_ACCENTS[DEX_ROW_BY_DISPLAY_NAME[name][3]]
+
+
+def species_evolution_target(name):
+    """Name of the flash species it evolves into, or None."""
+    evolves_to = DEX_ROW_BY_DISPLAY_NAME[name][4]
+    target_name = DEX[evolves_to - 1][2] if evolves_to else None
+    return target_name if target_name in SPECIES_META else None
+
+#endregion
+
+#region C header
 
 UI_COLORS = {
     'UI_BG_DAY': '#f2efe1', 'UI_BG_NIGHT': '#141828',
@@ -910,24 +949,33 @@ UI_COLORS = {
 }
 
 
-def emit_c(path="species.h"):
+def build_species_header_text():
+    """species.h text. Does not write anything."""
+    species_names = list(SPECIES_META)
     out = []
-    out.append("#pragma once\n#include <stdint.h>\n\n")
+
+    #region Includes and constants
+    out.append("#pragma once\n\n#pragma region Includes\n#include <stdint.h>\n#pragma endregion\n\n")
     out.append("// GENERATED by tools/sprites.py - edit there and run:\n")
     out.append("//   python3 tools/sprites.py emit\n\n")
+    out.append("#pragma region Constants and UI colors\n")
     out.append(f"#define SPRITE_W {W}\n#define SPRITE_H {H}\n\n")
-    for name, hexcol in UI_COLORS.items():
-        out.append(f"#define {name} 0x{rgb565(hexcol):04X}  // {hexcol}\n")
-    out.append("\nenum ElementType : uint8_t { TYPE_FUEGO, TYPE_PLANTA, TYPE_AGUA };\n\n")
-    ids = list(SPECIES_META)
+    for color_name, hex_color in UI_COLORS.items():
+        out.append(f"#define {color_name} 0x{hex_to_rgb565(hex_color):04X}  // {hex_color}\n")
+    out.append(f"#define SPRITE_OUTLINE_COLOR 0x{hex_to_rgb565(PALETTE['k']):04X}  "
+               f"// {PALETTE['k']}, spriteColor('k'): outline and eyes\n")
+    out.append("#pragma endregion\n\n")
+    #endregion
+
+    #region Species ids and struct
+    out.append("#pragma region Species ids and struct\n")
     out.append("enum : int8_t {\n")
-    for i, name in enumerate(ids):
-        out.append(f"  SP_{name}{' = 0' if i == 0 else ''},\n")
+    for species_index, name in enumerate(species_names):
+        out.append(f"  SP_{name}{' = 0' if species_index == 0 else ''},\n")
     out.append("  NUM_SPECIES\n};\n\n")
     out.append(
         "struct Species {\n"
         "  const char *name;\n"
-        "  ElementType type;\n"
         "  const char *const *sprite;\n"
         "  uint8_t scale;\n"
         "  int8_t evolvesTo;\n"
@@ -936,61 +984,104 @@ def emit_c(path="species.h"):
         "  uint8_t mouthRow, mouthCol;\n"
         "  uint16_t bodyColor;  // to erase eyes/mouth when expressing\n"
         "  uint16_t accent;     // type's UI color\n"
-        "};\n\n")
+        "};\n"
+        "#pragma endregion\n\n")
+    #endregion
+
+    #region Sprite palette
+    out.append("#pragma region Sprite palette\n")
     out.append("// sprite character -> RGB565\n")
-    out.append("static inline uint16_t spriteColor(char ch) {\n  switch (ch) {\n")
-    for ch, hexcol in PALETTE.items():
-        out.append(f"    case '{ch}': return 0x{rgb565(hexcol):04X};  // {hexcol}\n")
-    out.append("    default: return 0;\n  }\n}\n\n")
+    out.append("inline uint16_t spriteColor(char ch) {\n  switch (ch) {\n")
+    for character, hex_color in PALETTE.items():
+        out.append(f"    case '{character}': return 0x{hex_to_rgb565(hex_color):04X};  // {hex_color}\n")
+    out.append("    default: return 0;\n  }\n}\n#pragma endregion\n\n")
+    #endregion
+
+    #region Sprite bitmaps
+    out.append("#pragma region Sprite bitmaps\n")
     for name, rows in SPRITES.items():
-        out.append(f"static const char* const SPR_{name}[{len(rows)}] = {{  // {len(rows)}x{len(rows)}\n")
+        out.append(f"inline constexpr const char *SPR_{name}[{len(rows)}] = {{  // {len(rows)}x{len(rows)}\n")
         for row in rows:
             out.append(f'  "{row}",\n')
         out.append("};\n\n")
-    out.append("static const Species SPECIES[NUM_SPECIES] = {\n")
-    for name in ids:
-        typ, evo, lvl, scale = SPECIES_META[name]
-        a = ANCHORS[name]
-        body = rgb565(PALETTE[a['body']])
-        acc = rgb565(ACCENT[typ])
+    out.append("#pragma endregion\n\n")
+    #endregion
+
+    #region Species table
+    out.append("#pragma region Species table\n")
+    out.append("inline constexpr Species SPECIES[NUM_SPECIES] = {\n")
+    for name in species_names:
+        evolve_level, scale = SPECIES_META[name]
+        evolution_target = species_evolution_target(name)
+        evolves_to_text = f"SP_{evolution_target}" if evolution_target else "-1"
+        anchor = ANCHORS[name]
+        body_color = hex_to_rgb565(PALETTE[anchor['body']])
+        accent_color = hex_to_rgb565(species_accent_hex(name))
         out.append(
-            f'  {{ "{name}", {typ}, SPR_{name}, {scale}, {evo}, {lvl}, '
-            f"{a['eyeRow']}, {a['eyeL']}, {a['eyeR']}, {a['mouthRow']}, {a['mouthCol']}, "
-            f"0x{body:04X}, 0x{acc:04X} }},\n")
-    out.append("};\n\n")
-    out.append("static const int8_t STARTERS[] = { SP_CHARMANDER, SP_BULBASAUR, SP_SQUIRTLE };\n")
-    out.append("#define NUM_STARTERS 3\n")
-    open(path, 'w').write(''.join(out))
-    print(f"guardado {path}")
+            f'  {{ "{name}", SPR_{name}, {scale}, {evolves_to_text}, {evolve_level}, '
+            f"{anchor['eyeRow']}, {anchor['eyeL']}, {anchor['eyeR']}, {anchor['mouthRow']}, "
+            f"{anchor['mouthCol']}, 0x{body_color:04X}, 0x{accent_color:04X} }},\n")
+    out.append("};\n#pragma endregion\n")
+    #endregion
+
+    return ''.join(out)
 
 
-def emit_js(path="tools/emitted_sprites.js"):
-    import json
+def emit_species_header(path=os.path.join(REPO_ROOT, 'species.h')):
+    write_generated_text(path, build_species_header_text())
+    print(f"saved {path}")
+
+#endregion
+
+#region JS data for the web preview
+
+def build_sprite_data_javascript():
+    species_names = list(SPECIES_META)
     meta = {}
-    ids = list(SPECIES_META)
-    for name in ids:
-        typ, evo, lvl, scale = SPECIES_META[name]
-        a = ANCHORS[name]
+    for name in species_names:
+        evolve_level, scale = SPECIES_META[name]
+        evolution_target = species_evolution_target(name)
+        anchor = ANCHORS[name]
         meta[name] = {
-            'accent': ACCENT[typ],
-            'evolvesTo': None if evo == '-1' else ids.index(evo[3:]),
-            'evolveLevel': lvl,
+            'accent': species_accent_hex(name),
+            'evolvesTo': species_names.index(evolution_target) if evolution_target else None,
+            'evolveLevel': evolve_level,
             'scale': scale,
-            'eyeRow': a['eyeRow'], 'eyeL': a['eyeL'], 'eyeR': a['eyeR'],
-            'mouthRow': a['mouthRow'], 'mouthCol': a['mouthCol'],
-            'body': PALETTE[a['body']],
+            'eyeRow': anchor['eyeRow'], 'eyeL': anchor['eyeL'], 'eyeR': anchor['eyeR'],
+            'mouthRow': anchor['mouthRow'], 'mouthCol': anchor['mouthCol'],
+            'body': PALETTE[anchor['body']],
         }
-    data = {'palette': PALETTE, 'sprites': SPRITES, 'meta': meta, 'order': ids}
-    open(path, 'w').write("const SPRITE_DATA=" + json.dumps(data, separators=(',', ':')) + ";\n")
-    print(f"guardado {path}")
+    data = {'palette': PALETTE, 'sprites': SPRITES, 'meta': meta, 'order': species_names}
+    return "const SPRITE_DATA=" + json.dumps(data, separators=(',', ':')) + ";\n"
+
+
+def emit_sprite_data_javascript(path=os.path.join(TOOLS_DIR, 'emitted_sprites.js')):
+    write_generated_text(path, build_sprite_data_javascript())
+    print(f"saved {path}")
+
+#endregion
+
+#region Public API
+
+def main():
+    argument_parser = argparse.ArgumentParser(description='TamaPoke sprite workshop.')
+    argument_parser.add_argument('command', nargs='?', choices=['emit'],
+                                 help='also regenerate species.h and tools/emitted_sprites.js')
+    argument_parser.add_argument('--no-sheet', action='store_true',
+                                 help='do not render tools/sheet.png (no Pillow needed)')
+    arguments = argument_parser.parse_args()
+
+    if not validate_sprites():
+        print("-- validation errors --")
+        sys.exit(1)
+    if not arguments.no_sheet:
+        render_sprite_sheet()
+    if arguments.command == 'emit':
+        emit_species_header()
+        emit_sprite_data_javascript()
 
 
 if __name__ == '__main__':
-    import sys
-    if not validate():
-        print("-- errores de validacion --")
-        sys.exit(1)
-    render()
-    if 'emit' in sys.argv:
-        emit_c()
-        emit_js()
+    main()
+
+#endregion

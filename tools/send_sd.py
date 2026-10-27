@@ -2,85 +2,101 @@
 """Sends the packed sprites to the board's SD over USB.
 
   python3 tools/send_sd.py                  # sends tools/sdcard/mons/*.bin
-  python3 tools/send_sd.py --port /dev/cu.usbmodem101
+  python3 tools/send_sd.py --port COM5      # or /dev/cu.usbmodem101, /dev/ttyUSB0
   python3 tools/send_sd.py --ls             # lists what is on the SD
 """
+#region Imports
 import argparse
 import glob
 import os
 import sys
 import time
-import serial
 
-def find_port():
-    ports = glob.glob('/dev/cu.usbmodem*')
-    if not ports:
-        sys.exit("no encuentro la placa (/dev/cu.usbmodem*)")
-    return ports[0]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tamapoke_common import MONS_DIR, open_board_serial
+#endregion
 
-def wait_line(ser, expect, timeout=10):
-    end = time.time() + timeout
-    while time.time() < end:
-        line = ser.readline().decode(errors='replace').strip()
+#region Configuration
+TRANSFER_CHUNK_BYTES = 2048
+#endregion
+
+#region Internal helpers
+
+def wait_for_board_line(board_serial, expected_line, timeout_seconds=10):
+    """True when the board prints `expected_line`, False on ERR or timeout."""
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        line = board_serial.readline().decode(errors='replace').strip()
         if not line:
             continue
-        print(f"  placa: {line}")
-        if line == expect:
+        print(f"  board: {line}")
+        if line == expected_line:
             return True
         if line == 'ERR':
             return False
     return False
 
+
+def send_file_chunks(board_serial, path):
+    """Streams the file, waiting for the board's '#' ack after every chunk."""
+    with open(path, 'rb') as source_file:
+        while chunk := source_file.read(TRANSFER_CHUNK_BYTES):
+            board_serial.write(chunk)
+            acknowledgement = ''
+            while acknowledgement not in ('#', 'ERR'):
+                acknowledgement = board_serial.readline().decode(errors='replace').strip()
+                if acknowledgement == '':
+                    return False
+            if acknowledgement == 'ERR':
+                return False
+    return True
+
+#endregion
+
+#region Public API
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--port')
-    ap.add_argument('--ls', action='store_true')
-    args = ap.parse_args()
+    #region Arguments and connection
+    argument_parser = argparse.ArgumentParser(description='Sends the packed sprites to the SD card.')
+    argument_parser.add_argument('--port', help='serial port (default: detect the board)')
+    argument_parser.add_argument('--ls', action='store_true', help='list the SD contents')
+    arguments = argument_parser.parse_args()
 
-    port = args.port or find_port()
-    print(f"puerto {port}")
-    ser = serial.Serial(port, 115200, timeout=1)
+    board_serial, port_name = open_board_serial(arguments.port)
+    print(f"port {port_name}")
     time.sleep(1.5)
-    ser.reset_input_buffer()
+    board_serial.reset_input_buffer()
+    #endregion
 
-    if args.ls:
-        ser.write(b'LS\n')
-        wait_line(ser, 'DONE', 5)
+    if arguments.ls:
+        board_serial.write(b'LS\n')
+        wait_for_board_line(board_serial, 'DONE', 5)
         return
 
-    files = sorted(glob.glob(os.path.join(os.path.dirname(__file__), 'sdcard', 'mons', '*.bin')))
-    if not files:
-        sys.exit("no hay .bin; ejecuta antes tools/pack_pmd.py")
+    sprite_paths = sorted(glob.glob(os.path.join(MONS_DIR, '*.bin')))
+    if not sprite_paths:
+        sys.exit("no .bin files; run tools/pack_pmd.py first")
 
-    for path in files:
-        size = os.path.getsize(path)
-        name = f"mons/{os.path.basename(path)}"
-        print(f"-> {name} ({size/1024:.0f} KB)")
-        ser.write(f"PUT {name} {size}\n".encode())
-        if not wait_line(ser, 'OK', 5):
-            print("   la placa no acepto el PUT, sigo con el siguiente")
+    #region Send every file with the PUT protocol
+    for sprite_path in sprite_paths:
+        file_size = os.path.getsize(sprite_path)
+        name_on_card = f"mons/{os.path.basename(sprite_path)}"
+        print(f"-> {name_on_card} ({file_size/1024:.0f} KB)")
+        board_serial.write(f"PUT {name_on_card} {file_size}\n".encode())
+        if not wait_for_board_line(board_serial, 'OK', 5):
+            print("   the board did not accept the PUT, moving on to the next one")
             continue
-        t0 = time.time()
-        ok = True
-        with open(path, 'rb') as f:
-            while chunk := f.read(2048):
-                ser.write(chunk)
-                # wait for the block's '#' ack
-                ack = ''
-                while ack not in ('#', 'ERR'):
-                    ack = ser.readline().decode(errors='replace').strip()
-                    if ack == '':
-                        ok = False
-                        break
-                if not ok or ack == 'ERR':
-                    ok = False
-                    break
-        if ok and wait_line(ser, 'DONE', 30):
-            kbs = size / 1024 / max(0.01, time.time() - t0)
-            print(f"   ok ({kbs:.0f} KB/s)")
+        start_time = time.time()
+        if send_file_chunks(board_serial, sprite_path) and wait_for_board_line(board_serial, 'DONE', 30):
+            kilobytes_per_second = file_size / 1024 / max(0.01, time.time() - start_time)
+            print(f"   ok ({kilobytes_per_second:.0f} KB/s)")
         else:
-            print("   fallo la transferencia")
-    print("listo")
+            print("   the transfer failed")
+    print("done")
+    #endregion
+
 
 if __name__ == '__main__':
     main()
+
+#endregion

@@ -23,22 +23,63 @@ source (no build step needed) and checks:
     across all languages.
 
 LANGS must list every row of the tables: extract_table() only pulls
-the first len(LANGS) blocks, so a language missing from this list is
-silently left unchecked.
+the first len(LANGS) blocks, so it is read from the Lang enum in i18n.h
+(LANG_ES ... up to LANG_COUNT) instead of being kept by hand. MED_COUNT is
+read from medals.h (or pet.h, where it used to live).
 
   python3 tools/test_i18n_formats.py
 """
+#region Imports
 import os
 import re
 import sys
+#endregion
 
-HERE = os.path.dirname(__file__)
-I18N_CPP = os.path.join(HERE, '..', 'i18n.cpp')
+#region Configuration
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(HERE)
+I18N_CPP = os.path.join(REPO_ROOT, 'i18n.cpp')
+I18N_H = os.path.join(REPO_ROOT, 'i18n.h')
+MED_COUNT_HEADERS = (os.path.join(REPO_ROOT, 'medals.h'), os.path.join(REPO_ROOT, 'pet.h'))
 
-LANGS = ['ES', 'EN', 'FR', 'DE', 'IT', 'PT', 'JA', 'KO']
 STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 SPEC_RE = re.compile(
     r'%[-+ #0]*[\d.]*(?:l|h|ll|hh)?[diouxXeEfFgGaAcspn%]')
+#endregion
+
+#region Header parsing
+
+
+def read_language_codes(header_path=I18N_H):
+    """['ES', 'EN', ...] from `enum Lang ... { LANG_ES = 0, ..., LANG_COUNT }`."""
+    with open(header_path, encoding='utf-8') as header_file:
+        source = header_file.read()
+    match = re.search(r'enum\s+Lang\b[^{]*\{(.*?)\}', source, re.S)
+    if not match:
+        raise ValueError(f'enum Lang not found in {header_path}')
+    enumerators = re.findall(r'\bLANG_([A-Z0-9_]+)', re.sub(r'//[^\n]*', '', match.group(1)))
+    if 'COUNT' not in enumerators:
+        raise ValueError('LANG_COUNT not found in enum Lang')
+    return enumerators[:enumerators.index('COUNT')]
+
+
+def read_med_count(header_paths=MED_COUNT_HEADERS):
+    """Value of `#define MED_COUNT N` in the first header that defines it."""
+    for header_path in header_paths:
+        if not os.path.exists(header_path):
+            continue
+        with open(header_path, encoding='utf-8') as header_file:
+            match = re.search(r'^\s*#define\s+MED_COUNT\s+(\d+)', header_file.read(), re.M)
+        if match:
+            return int(match.group(1))
+    raise ValueError(f'MED_COUNT not defined in any of {header_paths}')
+
+
+LANGS = read_language_codes()
+
+#endregion
+
+#region Table checks
 
 
 def extract_balanced_blocks(text, count):
@@ -134,12 +175,17 @@ def count_enumerators(header_path, enum_name, terminator):
     return names.index(terminator)
 
 
-def main():
-    source = open(I18N_CPP, encoding='utf-8').read()
-    i18n_hpp = os.path.join(HERE, '..', 'i18n.h')
+#endregion
 
-    str_count = count_enumerators(i18n_hpp, 'StrId', 'STR_COUNT')
-    med_count = 8  # MED_COUNT, #define'd in include/pet.hpp
+#region Public API
+
+
+def main():
+    with open(I18N_CPP, encoding='utf-8') as source_file:
+        source = source_file.read()
+
+    str_count = count_enumerators(I18N_H, 'StrId', 'STR_COUNT')
+    med_count = read_med_count()
 
     errors = []
     errors += check_table(
@@ -166,3 +212,5 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
+
+#endregion

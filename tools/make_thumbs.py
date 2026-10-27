@@ -1,94 +1,91 @@
 #!/usr/bin/env python3
-"""Generates /mons/thumbs.bin: 40x40 thumbnails of the 151 for the gallery.
+"""Generates /mons/thumbs.bin: 40x40 thumbnails of every dex species for the gallery.
 
 They are derived from the front frame (Idle, frame 0) of the already packed PMD
 sprites (tools/sdcard/mons/pNNN.bin, TPK2 format) -> license-compliant thumbnails
-(CC BY-NC), same style as the main screen. TPTH format (little-endian):
-
-  char[4] "TPTH"
-  uint16  count
-  uint32  offset[count]    (from the start of the file, 1-based: offset[0]=dex 1)
-  blobs:  u8 w, u8 h, u8 palCount, u16 pal[palCount], u8 data[w*h] (0xFF transp.)
+(CC BY-NC), same style as the main screen. The TPTH layout is documented in
+tools/sprite_formats.py.
 
   python3 tools/make_thumbs.py
+  python3 tools/make_thumbs.py --output some/other/thumbs.bin
 """
+#region Imports
+import argparse
 import os
-import struct
+import sys
 
-DIR = os.path.join(os.path.dirname(__file__), 'sdcard', 'mons')
-CELL = 40
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dex_data import DEX
+from sprite_formats import (MAX_PALETTE_COLORS, TRANSPARENT_INDEX, build_tpth_blob,
+                            build_tpth_bytes, read_tpk2_first_frame)
+from tamapoke_common import MONS_DIR
+#endregion
 
+#region Configuration
+THUMBNAIL_CELL_SIZE = 40
+#endregion
 
-def read_pmd_idle_frame0(path):
+#region Internal helpers
+
+def read_pmd_idle_first_frame(path):
     """Frame 0 of the Idle action (id 0 = front view) of a PMD TPK2 sprite."""
-    with open(path, 'rb') as f:
-        buf = f.read()
-    if buf[:4] != b'TPK2':
-        raise ValueError('magic TPK2')
-    nacts = buf[4]
-    (palcount,) = struct.unpack_from('<H', buf, 5)
-    pal = list(struct.unpack_from(f'<{palcount}H', buf, 7))
-    p = 7 + palcount * 2
-    for _ in range(nacts):
-        aid, w, h, nf = buf[p], buf[p + 1], buf[p + 2], buf[p + 3]
-        p += 4 + nf * 2  # header + ms[]
-        if aid == 0:     # PMD_IDLE
-            return w, h, pal, buf[p:p + w * h]  # frame 0
-        p += w * h * nf
-    raise ValueError('sin accion Idle (id 0)')
+    with open(path, 'rb') as sprite_file:
+        return read_tpk2_first_frame(sprite_file)
 
 
-def shrink(w, h, pal, data):
-    # scale to CELL x CELL with nearest neighbor, preserving aspect ratio
-    scale = min(CELL / w, CELL / h, 1.0)
-    nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
-    out = bytearray()
-    used = {}
-    newpal = []
-    for y in range(nh):
-        sy = min(h - 1, int(y / scale)) if scale < 1 else y
-        for x in range(nw):
-            sx = min(w - 1, int(x / scale)) if scale < 1 else x
-            idx = data[sy * w + sx]
-            if idx == 0xFF:
-                out.append(0xFF)
+def shrink_frame_to_cell(width, height, palette, pixel_data):
+    """Nearest-neighbor scale into the cell, keeping the aspect ratio, with a compacted palette."""
+    scale = min(THUMBNAIL_CELL_SIZE / width, THUMBNAIL_CELL_SIZE / height, 1.0)
+    new_width, new_height = max(1, round(width * scale)), max(1, round(height * scale))
+    output_pixels = bytearray()
+    new_index_by_color = {}
+    new_palette = []
+    for target_y in range(new_height):
+        source_y = min(height - 1, int(target_y / scale)) if scale < 1 else target_y
+        for target_x in range(new_width):
+            source_x = min(width - 1, int(target_x / scale)) if scale < 1 else target_x
+            palette_index = pixel_data[source_y * width + source_x]
+            if palette_index == TRANSPARENT_INDEX:
+                output_pixels.append(TRANSPARENT_INDEX)
                 continue
-            c = pal[idx]
-            if c not in used:
-                used[c] = len(newpal)
-                newpal.append(c)
-            out.append(used[c])
-    return nw, nh, newpal, bytes(out)
+            color = palette[palette_index]
+            if color not in new_index_by_color:
+                new_index_by_color[color] = len(new_palette)
+                new_palette.append(color)
+            output_pixels.append(new_index_by_color[color])
+    return new_width, new_height, new_palette, bytes(output_pixels)
 
+#endregion
+
+#region Public API
 
 def main():
+    #region Arguments
+    argument_parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    argument_parser.add_argument('--output', default=os.path.join(MONS_DIR, 'thumbs.bin'),
+                                 help='where to write thumbs.bin')
+    arguments = argument_parser.parse_args()
+    #endregion
+
+    #region Build one blob per species
     blobs = []
-    for dex in range(1, 152):
-        path = os.path.join(DIR, f'p{dex:03d}.bin')
-        w, h, pal, data = read_pmd_idle_frame0(path)
-        nw, nh, npal, ndata = shrink(w, h, pal, data)
-        if len(npal) > 255:
-            raise ValueError(f'{dex}: paleta {len(npal)}')
-        blob = struct.pack('<3B', nw, nh, len(npal))
-        blob += struct.pack(f'<{len(npal)}H', *npal)
-        blob += ndata
-        blobs.append(blob)
+    for species_number in range(1, len(DEX) + 1):
+        sprite_path = os.path.join(MONS_DIR, f'p{species_number:03d}.bin')
+        thumbnail = shrink_frame_to_cell(*read_pmd_idle_first_frame(sprite_path))
+        if len(thumbnail[2]) > MAX_PALETTE_COLORS:
+            raise ValueError(f'{species_number}: palette has {len(thumbnail[2])} colors')
+        blobs.append(build_tpth_blob(*thumbnail))
+    #endregion
 
-    head = 4 + 2 + 4 * 151
-    offsets, pos = [], head
-    for b in blobs:
-        offsets.append(pos)
-        pos += len(b)
-
-    out = os.path.join(DIR, 'thumbs.bin')
-    with open(out, 'wb') as f:
-        f.write(b'TPTH')
-        f.write(struct.pack('<H', 151))
-        f.write(struct.pack('<151I', *offsets))
-        for b in blobs:
-            f.write(b)
-    print(f"guardado {out}: {pos / 1024:.0f} KB, {len(blobs)} miniaturas")
+    #region Write thumbs.bin
+    file_bytes = build_tpth_bytes(blobs)
+    with open(arguments.output, 'wb') as output_file:
+        output_file.write(file_bytes)
+    print(f"saved {arguments.output}: {len(file_bytes) / 1024:.0f} KB, {len(blobs)} thumbnails")
+    #endregion
 
 
 if __name__ == '__main__':
     main()
+
+#endregion

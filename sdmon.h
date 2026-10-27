@@ -1,6 +1,14 @@
 #pragma once
-#include <Arduino.h>
 
+#pragma region Includes
+#include <Arduino.h>
+#pragma endregion
+
+#pragma region Constants
+#define SPRITE_PALETTE_MAX_COLORS 256  // RGB565 palette entries in every sprite format
+#pragma endregion
+
+#pragma region Legacy TPK1 sprite
 // TPK1 animated sprite (legacy format, fallback path). The project uses
 // PMD/TPK2 (PmdMon) for everything; this path stays inactive if there is no NNN.bin on the SD.
 // The indexed data lives in PSRAM; the palette is RGB565.
@@ -9,13 +17,15 @@ struct SdMon {
   uint16_t w = 0, h = 0, frames = 0, frameMs = 100;
   uint8_t scale = 2;       // integer zoom factor when drawing
   uint16_t palCount = 0;
-  uint16_t pal[256];
+  uint16_t pal[SPRITE_PALETTE_MAX_COLORS];
   uint8_t *data = nullptr;  // frames * w * h indices (0xFF = transparent)
 
   bool load(uint8_t dexNum, bool shiny = false);
   void unload();
 };
+#pragma endregion
 
+#pragma region PMD multi-action sprite
 // PMD sprite actions (TPK2 format)
 enum : uint8_t {
   PMD_IDLE = 0, PMD_WALKL, PMD_WALKR, PMD_SLEEP, PMD_EAT, PMD_HURT,
@@ -42,7 +52,7 @@ struct PmdAct {
 struct PmdMon {
   bool loaded = false;
   uint16_t palCount = 0;
-  uint16_t pal[256];
+  uint16_t pal[SPRITE_PALETTE_MAX_COLORS];
   uint8_t *blob = nullptr;
   PmdAct acts[PMD_NACTS];
 
@@ -62,7 +72,9 @@ struct PmdMon {
   // until the next call to frame() on THIS PmdMon.
   const uint8_t *frame(uint8_t actId, uint8_t fi);
 };
+#pragma endregion
 
+#pragma region Gallery thumbnails
 // gallery thumbnails. With PSRAM, the whole thumbs.bin is in memory; without it,
 // only the offset table, and each thumbnail is read from the SD on request.
 struct SdThumbs {
@@ -82,8 +94,11 @@ struct SdThumbs {
   const uint8_t *get(int16_t dex);
 };
 extern SdThumbs thumbs;
+#pragma endregion
 
-bool sdBegin();                 // mounts the SD (SDMMC 1-bit), true if a card is present
-bool sdSerialCommand(const String &line);  // PUT/LS over USB; true if it handles it
+#pragma region SD card
+bool sdBegin();                 // mounts the SD (SDMMC 1-bit or SPI, per board), true if a card is present
+bool sdSerialCommand(const String &line);  // PUT/LS/SDINFO over USB (sd_upload.cpp); true if it handles it
 extern bool sdReady;
 extern bool sdDirty;  // true after receiving files: reload sprite
+#pragma endregion

@@ -1,39 +1,43 @@
 #!/usr/bin/env python3
 """PMD sprite packer (SpriteCollab) for the main screen.
 
-Generates /mons/pNNN.bin (and psNNN.bin shiny) in multi-action TPK2 format:
-
-  char[4] "TPK2"
-  u8  nActs
-  u16 palCount
-  u16 pal[palCount]                  (RGB565)
-  per action:
-    u8 id, u8 w, u8 h, u8 nFrames
-    u16 ms[nFrames]
-    u8 data[w*h*nFrames]             (indices, 0xFF transparent)
+Generates /mons/pNNN.bin (and psNNN.bin shiny) in the multi-action TPK2 format
+(layout in tools/sprite_formats.py).
 
 Actions: 0 Idle, 1 WalkL, 2 WalkR, 3 Sleep, 4 Eat, 5 Hurt, 6 Attack,
 7 Pose, 8 Hop, 9 Nod, 10 DeepBreath, 11 Sit. Missing ones are skipped.
 
-  python3 tools/pack_pmd.py             # all 151, normal + shiny
+  python3 tools/pack_pmd.py             # every dex species, normal + shiny
   python3 tools/pack_pmd.py 7 25        # specific dex numbers
   python3 tools/pack_pmd.py normal 1 4  # normal only
+  python3 tools/pack_pmd.py --jobs 4    # parallel downloads/packing (default 8)
 """
+#region Imports
+import argparse
 import os
-import struct
 import sys
-import urllib.request
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ElementTree
+from concurrent.futures import ThreadPoolExecutor
+
 from PIL import Image
 
-OUT = os.path.join(os.path.dirname(__file__), 'sdcard', 'mons')
-CACHE = os.path.join(os.path.dirname(__file__), 'pmd_cache')
-BASE = 'https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/sprite'
-SLOW = 1.4          # PMD's original pace feels fast on the tamagotchi
-MIN_MS = 70
-ALPHA_T = 128
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dex_data import DEX
+from sprite_formats import MAX_PALETTE_COLORS, TRANSPARENT_INDEX, build_tpk2_bytes
+from tamapoke_common import (MONS_DIR, TOOLS_DIR, download_with_retry, rgb_to_rgb565,
+                             write_bytes_atomically)
+#endregion
 
-# (id, action name, sheet row) - row None = 0 if there is only one
+#region Configuration
+CACHE_DIR = os.path.join(TOOLS_DIR, 'pmd_cache')
+SPRITECOLLAB_BASE_URL = 'https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/sprite'
+SLOWDOWN_FACTOR = 1.4     # PMD's original pace feels fast on the tamagotchi
+MINIMUM_FRAME_MS = 70
+ALPHA_THRESHOLD = 128     # pixels below this alpha are transparent
+MAXIMUM_FRAMES_PER_ACTION = 24
+DEFAULT_JOB_COUNT = 8
+
+# (id, action name, sheet row) - row 0 if the sheet has only one
 # sheet directions: 0 down, 2 RIGHT, 6 LEFT (verified on the board)
 ACTIONS = [
     (0, 'Idle', 0),
@@ -49,117 +53,147 @@ ACTIONS = [
     (10, 'DeepBreath', 0),
     (11, 'Sit', 0),
 ]
+#endregion
 
+#region Internal helpers
 
-def fetch(url, dest):
-    if os.path.exists(dest):
+def fetch_to_cache(url, destination_path):
+    """True if the file is in the cache (already there or just downloaded)."""
+    if os.path.exists(destination_path):
         return True
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        data = urllib.request.urlopen(req, timeout=30).read()
-        open(dest, 'wb').write(data)
-        return True
-    except Exception:
-        return False
+    return download_with_retry(url, destination_path) is not None
 
 
-def rgb565(r, g, b):
-    return (r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)
-
-
-def load_animdata(folder):
-    path = os.path.join(folder, 'AnimData.xml')
-    anims = {}
-    tree = ET.parse(path)
-    for a in tree.getroot().find('Anims'):
-        name = a.find('Name').text
-        if a.find('FrameWidth') is None:
-            # alias (CopyOf): points to another animation
-            copy = a.find('CopyOf')
-            if copy is not None:
-                anims[name] = ('copy', copy.text)
+def load_animation_data(species_folder):
+    """AnimData.xml -> {name: (frame width, frame height, durations, source animation name)}."""
+    animations = {}
+    tree = ElementTree.parse(os.path.join(species_folder, 'AnimData.xml'))
+    for animation_node in tree.getroot().find('Anims'):
+        name = animation_node.find('Name').text
+        if animation_node.find('FrameWidth') is None:
+            #region Alias (CopyOf): points to another animation
+            copy_of_node = animation_node.find('CopyOf')
+            if copy_of_node is not None:
+                animations[name] = ('copy', copy_of_node.text)
             continue
-        anims[name] = (int(a.find('FrameWidth').text), int(a.find('FrameHeight').text),
-                       [int(d.text) for d in a.find('Durations')], name)
-    # resolve aliases (the PNG is the original animation's)
-    for k, v in list(anims.items()):
-        if isinstance(v, tuple) and v[0] == 'copy':
-            anims[k] = anims.get(v[1])
-    return anims
+            #endregion
+        animations[name] = (int(animation_node.find('FrameWidth').text),
+                            int(animation_node.find('FrameHeight').text),
+                            [int(duration.text) for duration in animation_node.find('Durations')],
+                            name)
+    #region Resolve aliases (the PNG is the original animation's)
+    for name, value in list(animations.items()):
+        if isinstance(value, tuple) and value[0] == 'copy':
+            animations[name] = animations.get(value[1])
+    #endregion
+    return animations
 
 
-def pack(dexnum, shiny=False):
-    sub = '/0000/0001' if shiny else ''
-    folder = os.path.join(CACHE, f'{dexnum:04d}{"s" if shiny else ""}')
-    base = f'{BASE}/{dexnum:04d}{sub}'
-    if not fetch(f'{base}/AnimData.xml', os.path.join(folder, 'AnimData.xml')):
-        raise RuntimeError('sin AnimData.xml')
-    anims = load_animdata(folder)
+def pack_species_sprite(species_number, shiny=False):
+    """Downloads (or reuses the cache) and writes one TPK2 file. Returns a log line."""
+    #region Locate the species on SpriteCollab and in the cache
+    shiny_subpath = '/0000/0001' if shiny else ''
+    species_folder = os.path.join(CACHE_DIR, f'{species_number:04d}{"s" if shiny else ""}')
+    species_url = f'{SPRITECOLLAB_BASE_URL}/{species_number:04d}{shiny_subpath}'
+    if not fetch_to_cache(f'{species_url}/AnimData.xml', os.path.join(species_folder, 'AnimData.xml')):
+        raise RuntimeError('no AnimData.xml')
+    animations = load_animation_data(species_folder)
+    #endregion
 
-    colmap, pal = {}, []
-    packed = []
-    for aid, name, row in ACTIONS:
-        if name not in anims or anims[name] is None:
+    #region Quantize every action into one shared palette
+    palette_index_by_color, palette_colors = {}, []
+    packed_actions = []
+    for action_id, action_name, sheet_row in ACTIONS:
+        if animations.get(action_name) is None:
             continue
-        fw, fh, durs, srcname = anims[name]
-        png = os.path.join(folder, f'{srcname}-Anim.png')
-        if not fetch(f'{base}/{srcname}-Anim.png', png):
+        frame_width, frame_height, durations, source_name = animations[action_name]
+        sheet_path = os.path.join(species_folder, f'{source_name}-Anim.png')
+        if not fetch_to_cache(f'{species_url}/{source_name}-Anim.png', sheet_path):
             continue
-        im = Image.open(png).convert('RGBA')
-        rows = im.size[1] // fh
-        r = row if rows > row else 0
-        nf = min(len(durs), im.size[0] // fw, 24)
-        data = bytearray()
-        for i in range(nf):
-            fr = im.crop((i * fw, r * fh, (i + 1) * fw, (r + 1) * fh))
-            for px in fr.getdata():
-                if px[3] < ALPHA_T:
-                    data.append(0xFF)
+        sheet_image = Image.open(sheet_path).convert('RGBA')
+        sheet_row_count = sheet_image.size[1] // frame_height
+        used_row = sheet_row if sheet_row_count > sheet_row else 0
+        frame_count = min(len(durations), sheet_image.size[0] // frame_width, MAXIMUM_FRAMES_PER_ACTION)
+        pixel_data = bytearray()
+        for frame_index in range(frame_count):
+            frame_image = sheet_image.crop((frame_index * frame_width, used_row * frame_height,
+                                            (frame_index + 1) * frame_width, (used_row + 1) * frame_height))
+            for pixel in frame_image.getdata():
+                if pixel[3] < ALPHA_THRESHOLD:
+                    pixel_data.append(TRANSPARENT_INDEX)
                     continue
-                k = px[:3]
-                if k not in colmap:
-                    if len(pal) >= 255:
-                        # nearest (rare in PMD, short palettes)
-                        k2 = min(colmap, key=lambda c: sum((a-b)**2 for a, b in zip(c, k)))
-                        colmap[k] = colmap[k2]
+                color = pixel[:3]
+                if color not in palette_index_by_color:
+                    if len(palette_colors) >= MAX_PALETTE_COLORS:
+                        # nearest existing color (rare in PMD, short palettes)
+                        nearest_color = min(palette_index_by_color,
+                                            key=lambda known: sum((known_channel - channel) ** 2
+                                                                  for known_channel, channel in zip(known, color)))
+                        palette_index_by_color[color] = palette_index_by_color[nearest_color]
                     else:
-                        colmap[k] = len(pal)
-                        pal.append(k)
-                data.append(colmap[k])
-        ms = [max(MIN_MS, round(d * 1000 / 60 * SLOW)) for d in durs[:nf]]
-        packed.append((aid, fw, fh, nf, ms, bytes(data)))
+                        palette_index_by_color[color] = len(palette_colors)
+                        palette_colors.append(color)
+                pixel_data.append(palette_index_by_color[color])
+        frame_ms = [max(MINIMUM_FRAME_MS, round(duration * 1000 / 60 * SLOWDOWN_FACTOR))
+                    for duration in durations[:frame_count]]
+        packed_actions.append((action_id, frame_width, frame_height, frame_count, frame_ms,
+                               bytes(pixel_data)))
+    #endregion
 
-    if not any(p[0] == 0 for p in packed):
-        raise RuntimeError('sin Idle')
+    if not any(packed_action[0] == 0 for packed_action in packed_actions):
+        raise RuntimeError('no Idle')
 
-    os.makedirs(OUT, exist_ok=True)
-    path = os.path.join(OUT, f'p{"s" if shiny else ""}{dexnum:03d}.bin')
-    with open(path, 'wb') as f:
-        f.write(b'TPK2')
-        f.write(struct.pack('<BH', len(packed), len(pal)))
-        for r, g, b in pal:
-            f.write(struct.pack('<H', rgb565(r, g, b)))
-        for aid, fw, fh, nf, ms, data in packed:
-            f.write(struct.pack('<4B', aid, fw, fh, nf))
-            f.write(struct.pack(f'<{nf}H', *ms))
-            f.write(data)
-    kb = os.path.getsize(path) / 1024
-    print(f"  -> p{'s' if shiny else ''}{dexnum:03d}.bin: {len(packed)} acciones, "
-          f"{len(pal)} colores, {kb:.0f} KB")
+    #region Write the TPK2 file atomically
+    output_name = f'p{"s" if shiny else ""}{species_number:03d}.bin'
+    file_bytes = build_tpk2_bytes([rgb_to_rgb565(*color) for color in palette_colors], packed_actions)
+    write_bytes_atomically(os.path.join(MONS_DIR, output_name), file_bytes)
+    return (f"  -> {output_name}: {len(packed_actions)} actions, "
+            f"{len(palette_colors)} colors, {len(file_bytes) / 1024:.0f} KB")
+    #endregion
+
+
+def run_pack_job(species_number, shiny):
+    """Thread pool job: (species, shiny, log lines, succeeded)."""
+    header = f"#{species_number:03d}{' shiny' if shiny else ''}"
+    try:
+        return species_number, shiny, [header, pack_species_sprite(species_number, shiny)], True
+    except Exception as pack_error:  # one species failing must not stop the rest
+        return species_number, shiny, [header, f"  FAILED: {pack_error}"], False
+
+#endregion
+
+#region Public API
+
+def main():
+    #region Arguments
+    argument_parser = argparse.ArgumentParser(description='Packs PMD sprites into TPK2 files.')
+    argument_parser.add_argument('selection', nargs='*',
+                                 help="dex numbers to pack (default: all); 'normal' skips the shiny ones")
+    argument_parser.add_argument('--jobs', type=int, default=DEFAULT_JOB_COUNT,
+                                 help='species packed in parallel')
+    arguments = argument_parser.parse_args()
+    unknown_words = [word for word in arguments.selection if word != 'normal' and not word.isdigit()]
+    if unknown_words:
+        argument_parser.error(f'unexpected arguments: {unknown_words}')
+    normal_only = 'normal' in arguments.selection
+    species_numbers = ([int(word) for word in arguments.selection if word.isdigit()]
+                       or list(range(1, len(DEX) + 1)))
+    #endregion
+
+    #region Pack in parallel, print in order
+    jobs = [(species_number, shiny) for species_number in species_numbers
+            for shiny in ([False] if normal_only else [False, True])]
+    failures = []
+    with ThreadPoolExecutor(max_workers=max(1, arguments.jobs)) as executor:
+        for species_number, shiny, log_lines, succeeded in executor.map(lambda job: run_pack_job(*job), jobs):
+            print('\n'.join(log_lines))
+            if not succeeded:
+                failures.append((species_number, shiny))
+    print(f"FAILURES: {failures}" if failures else "ALL PACKED")
+    #endregion
 
 
 if __name__ == '__main__':
-    args = sys.argv[1:]
-    solo_normal = 'normal' in args
-    nums = [int(a) for a in args if a.isdigit()] or list(range(1, 152))
-    fallos = []
-    for n in nums:
-        for sh in ([False] if solo_normal else [False, True]):
-            try:
-                print(f"#{n:03d}{' shiny' if sh else ''}")
-                pack(n, sh)
-            except Exception as e:
-                print(f"  FALLO: {e}")
-                fallos.append((n, sh))
-    print(f"FALLOS: {fallos}" if fallos else "TODOS EMPAQUETADOS")
+    main()
+
+#endregion

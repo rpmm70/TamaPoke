@@ -1,29 +1,40 @@
 #!/usr/bin/env bash
-# Ejecuta toda la bateria de tests (logica del firmware + herramientas).
+#region Usage
+# Runs the whole test battery (firmware logic + tools).
 #   ./test/run_tests.sh          normal
-#   ./test/run_tests.sh --asan   ademas con AddressSanitizer + UBSan
+#   ./test/run_tests.sh --asan   also with AddressSanitizer + UBSan
+#endregion
+
+#region Setup
 set -uo pipefail
 cd "$(dirname "$0")"
 
-fail=0
+failed=0
+#endregion
 
-echo "== logica del firmware (pet.cpp / i18n.cpp / dex.h) =="
-make --no-print-directory run || fail=1
+#region Firmware logic
+echo "== firmware logic (pet.cpp / pet_storage.cpp / i18n.cpp / battle.cpp / dex.h) =="
+make --no-print-directory run || failed=1
 
 if [[ "${1:-}" == "--asan" ]]; then
   echo
-  echo "== la misma bateria con AddressSanitizer + UBSan =="
-  make --no-print-directory asan || fail=1
+  echo "== the same battery with AddressSanitizer + UBSan =="
+  make --no-print-directory asan || failed=1
 fi
+#endregion
 
+#region Tools and generated files
 echo
-echo "== herramientas y ficheros generados (tools/) =="
-python3 test_tools.py || fail=1
+echo "== tools and generated files (tools/) =="
+python3 test_tools.py || failed=1
+#endregion
 
+#region Summary
 echo
-if [[ $fail -eq 0 ]]; then
-  echo "TODO OK"
+if [[ $failed -eq 0 ]]; then
+  echo "ALL OK"
 else
-  echo "HAY FALLOS"
+  echo "THERE ARE FAILURES"
 fi
-exit $fail
+exit $failed
+#endregion

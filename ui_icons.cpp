@@ -143,22 +143,30 @@ void drawHamburgerIcon(Arduino_GFX *canvas, int16_t left, int16_t top, int16_t w
 #pragma endregion
 
 #pragma region Page arrow
-void drawPageArrow(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int16_t size, int8_t direction, uint16_t color) {
+// Solid triangle of `size` centered on (centerX, centerY). Horizontal: points
+// right (direction >= 0) or left. Vertical: points down (direction >= 0) or up.
+static void drawTriangleArrow(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int16_t size, int8_t direction,
+                              bool vertical, uint16_t color) {
   int16_t halfSize = size / 2;
   if (halfSize < 1) halfSize = 1;
   int16_t pointingSign = direction < 0 ? -1 : 1;
-  int16_t tipX = centerX + pointingSign * halfSize;
-  int16_t baseX = centerX - pointingSign * halfSize;
-  canvas->fillTriangle(tipX, centerY, baseX, centerY - halfSize, baseX, centerY + halfSize, color);
+  if (vertical) {
+    int16_t tipY = centerY + pointingSign * halfSize;
+    int16_t baseY = centerY - pointingSign * halfSize;
+    canvas->fillTriangle(centerX, tipY, centerX - halfSize, baseY, centerX + halfSize, baseY, color);
+  } else {
+    int16_t tipX = centerX + pointingSign * halfSize;
+    int16_t baseX = centerX - pointingSign * halfSize;
+    canvas->fillTriangle(tipX, centerY, baseX, centerY - halfSize, baseX, centerY + halfSize, color);
+  }
+}
+
+void drawPageArrow(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int16_t size, int8_t direction, uint16_t color) {
+  drawTriangleArrow(canvas, centerX, centerY, size, direction, false, color);
 }
 
 void drawVerticalPageArrow(Arduino_GFX *canvas, int16_t centerX, int16_t centerY, int16_t size, int8_t direction, uint16_t color) {
-  int16_t halfSize = size / 2;
-  if (halfSize < 1) halfSize = 1;
-  int16_t pointingSign = direction < 0 ? -1 : 1;
-  int16_t tipY = centerY + pointingSign * halfSize;
-  int16_t baseY = centerY - pointingSign * halfSize;
-  canvas->fillTriangle(centerX, tipY, centerX - halfSize, baseY, centerX + halfSize, baseY, color);
+  drawTriangleArrow(canvas, centerX, centerY, size, direction, true, color);
 }
 #pragma endregion
 

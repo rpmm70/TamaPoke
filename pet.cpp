@@ -1,9 +1,43 @@
+// Pet logic: needs, care, evolution, eggs, ceremonies and wild battle rewards.
+// NVS save/load lives in pet_storage.cpp.
+
+#pragma region Includes
 #include "pet.h"
 #include "dex.h"
 #include "audio.h"
+#include "nvs_settings.h"
+#pragma endregion
 
+#pragma region Constants
+// Eevee (DEX_EEVEE) branches at random into the next three dex numbers
+#define EEVEE_FIRST_BRANCH (DEX_EEVEE + 1)
+#define EEVEE_BRANCH_COUNT 3
+
+// a battle started from the play menu (swords) instead of a wild encounter keeps
+// this percent of the normal catch chance (the encounter is the rarer event)
+#define REQUESTED_BATTLE_CATCH_PCT 70
+
+// offline progression is capped at 2 weeks
+#define OFFLINE_MAX_MINUTES (14UL * 24 * 60)
+#pragma endregion
+
+#pragma region Internal helpers
+// offline progression: time passed even though it was off, but mercifully -
+// the bars drop with a floor at 15 (comes back hungry, not dead), with no
+// care mistakes or runaways while absent
+static uint8_t dropTo(uint8_t value, uint8_t amount, uint8_t floorValue) {
+  if (value <= floorValue) return value;
+  return (value - floorValue > amount) ? value - amount : floorValue;
+}
+
+static uint16_t calcStat(uint8_t base, uint8_t gene, uint16_t lvl, uint8_t tr) {
+  return (uint16_t)base * gene / 100 + lvl + tr;
+}
+#pragma endregion
+
+#pragma region Lifecycle
 void Pet::begin() {
-  prefs.begin("tamapoke", false);
+  prefs.begin(NVS_NAMESPACE, false);
   if (!prefs.getBool("init", false)) {
     prefs.putBool("init", true);
     newEgg();
@@ -38,30 +72,43 @@ void Pet::newEgg() {
   save();
 }
 
-// offline progression: time passed even though it was off, but mercifully -
-// the bars drop with a floor at 15 (comes back hungry, not dead), with no
-// care mistakes or runaways while absent
-static uint8_t dropTo(uint8_t v, uint8_t d, uint8_t fl) {
-  if (v <= fl) return v;
-  return (v - fl > d) ? v - d : fl;
-}
+void Pet::update(uint32_t nowMs) {
+  #pragma region End of ceremony: the creature leaves and a new egg remains
+  if (ceremony != CER_NONE && !timeLeft(ceremonyUntil)) {
+    newEgg();
+    return;
+  }
+  #pragma endregion
 
+  #pragma region One tick per elapsed game minute
+  while (nowMs - lastTick >= PET_TICK_MS) {
+    lastTick += PET_TICK_MS;
+    tick();
+  }
+  #pragma endregion
+}
+#pragma endregion
+
+#pragma region Clock and offline progression
 void Pet::setClock(uint32_t nowEpoch) {
   lastSeenEpoch = nowEpoch;
   if (nowEpoch) save();  // persist now: a power cut does not lose the reference
 }
 
 void Pet::syncClock(uint32_t nowEpoch) {
-  uint32_t seen = prefs.getUInt("seen", 0);
+  #pragma region Minutes elapsed while off
+  uint32_t seenEpoch = prefs.getUInt("seen", 0);
   lastSeenEpoch = nowEpoch;
   if (nowEpoch == 0) return;
-  uint32_t mins = (seen && nowEpoch > seen) ? (nowEpoch - seen) / 60 : 0;
+  uint32_t mins = (seenEpoch && nowEpoch > seenEpoch) ? (nowEpoch - seenEpoch) / 60 : 0;
   if (mins < 2 || ceremony != CER_NONE || starterPick) {
     save();  // first time, no time to apply, or still picking the starter
     return;
   }
-  if (mins > 14UL * 24 * 60) mins = 14UL * 24 * 60;  // cap: 2 weeks
+  if (mins > OFFLINE_MAX_MINUTES) mins = OFFLINE_MAX_MINUTES;
+  #pragma endregion
 
+  #pragma region Replay each minute
   for (uint32_t i = 0; i < mins; i++) {
     ageMinutes++;
     if (isEgg()) {
@@ -69,12 +116,7 @@ void Pet::syncClock(uint32_t nowEpoch) {
       continue;
     }
     if (sleeping) {  // resting: drops slowly and with a floor, same as live
-      energy = clamp100(energy + 6);
-      if (ageMinutes % 2 == 0) {
-        fullness = dropTo(fullness, 1, 30);
-        joy = dropTo(joy, 1, 35);
-      }
-      if (ageMinutes % 3 == 0) hygiene = dropTo(hygiene, 1, 45);
+      applySleepingMinute();
       continue;
     }
     fullness = dropTo(fullness, 2, 15);
@@ -82,28 +124,35 @@ void Pet::syncClock(uint32_t nowEpoch) {
     hygiene = dropTo(hygiene, 1, 15);
     joy = dropTo(joy, 1, 15);
   }
+  #pragma endregion
+
+  #pragma region Mess left while away
   if (!isEgg()) {
     if (!sleeping) {  // no mess while sleeping
-      uint8_t p = poops + mins / 240;
-      poops = p > 3 ? 3 : p;
+      uint8_t poopTotal = poops + mins / 240;
+      poops = poopTotal > 3 ? 3 : poopTotal;
     }
     // evolution is NOT applied offline: it stays ready and the user triggers it
     // by touching the creature when they return (so they see the transformation)
   }
-  Serial.printf("offline: %u min aplicados (nv.%u)\n", mins, level());
+  #pragma endregion
+
+  Serial.printf("offline: %u min applied (lv.%u)\n", (unsigned)mins, (unsigned)level());
   save();
 }
+#pragma endregion
 
-void Pet::update(uint32_t nowMs) {
-  // end of ceremony: the creature leaves and a new egg remains
-  if (ceremony != CER_NONE && !timeLeft(ceremonyUntil)) {
-    newEgg();
-    return;
+#pragma region Tick (one game minute)
+// sleep is rest: energy recovers and needs drop MUCH slower than when awake,
+// with a floor (wakes up wanting some attention, not at zero, with no care
+// mistakes or runaways). Shared by the live tick and the offline replay.
+void Pet::applySleepingMinute() {
+  energy = clamp100(energy + 6);
+  if (ageMinutes % 2 == 0) {                 // ~4x slower than awake
+    fullness = dropTo(fullness, 1, 30);
+    joy = dropTo(joy, 1, 35);
   }
-  while (nowMs - lastTick >= PET_TICK_MS) {
-    lastTick += PET_TICK_MS;
-    tick();
-  }
+  if (ageMinutes % 3 == 0) hygiene = dropTo(hygiene, 1, 45);
 }
 
 void Pet::tick() {
@@ -114,28 +163,29 @@ void Pet::tick() {
                             // the player's choice would be lost
   ageMinutes++;
 
+  #pragma region Egg
   if (isEgg()) {
-    if (ageMinutes >= 3) hatch();  // if you do not touch it, it hatches on its own after 3 min
+    if (ageMinutes >= 3) {  // if you do not touch it, it hatches on its own after 3 min
+      hatch();
+      save();
+    }
     return;
   }
+  #pragma endregion
 
-  // sleep is rest: energy recovers and needs drop MUCH slower than when awake,
-  // with a floor (wakes up wanting some attention, not at zero, with no care
-  // mistakes or runaways). awake: food -2/min, hyg/joy -1/min.
+  #pragma region Sleeping
+  // awake: food -2/min, hyg/joy -1/min. Asleep: see applySleepingMinute().
   // Weight still burns off; the good-care streak (goodTicks) is paused.
   if (sleeping) {
-    energy = clamp100(energy + 6);
+    applySleepingMinute();
     if (weight > 0 && ageMinutes % 3 == 0) weight--;
-    if (ageMinutes % 2 == 0) {                 // ~4x slower than awake
-      fullness = dropTo(fullness, 1, 30);
-      joy = dropTo(joy, 1, 35);
-    }
-    if (ageMinutes % 3 == 0) hygiene = dropTo(hygiene, 1, 45);
-    checkMedals();  // it can still cross a level by age while asleep
+    if (checkMedals()) save();  // it can still cross a level by age while asleep
     if (++ticksSinceSave >= 5) pendingSave = true;
     return;
   }
+  #pragma endregion
 
+  #pragma region Awake needs
   if (ageMinutes % MINUTES_PER_LEVEL == 0) sfxPlay(SFX_LEVEL);  // leveled up (awake)
 
   fullness = clamp100(fullness - 2);
@@ -146,8 +196,9 @@ void Pet::tick() {
   // being overweight makes it lazy: energy drops twice as fast
   if (weight > 50) energy = clamp100(energy - 1);
   if (weight > 0 && ageMinutes % 3 == 0) weight--;
+  #pragma endregion
 
-  // discipline forges defense: 12 h straight of good care = +1 DEF
+  #pragma region Discipline forges defense: 12 h straight of good care = +1 DEF
   if (lowestStat() >= 40) {
     if (++goodTicks >= 720) {
       goodTicks = 0;
@@ -156,14 +207,18 @@ void Pet::tick() {
   } else {
     goodTicks = 0;
   }
+  #pragma endregion
 
-  int dJoy = -1;
-  if (fullness < 30) dJoy -= 2;
-  if (hygiene < 30) dJoy -= 2;
-  joy = clamp100(joy + dJoy);
+  #pragma region Joy
+  int joyChange = -1;
+  if (fullness < 30) joyChange -= 2;
+  if (hygiene < 30) joyChange -= 2;
+  joy = clamp100(joy + joyChange);
+  #pragma endregion
 
-  // Neglect: letting a stat bottom out counts as a care mistake (with a
-  // cooldown so the same neglect is not counted every minute)
+  #pragma region Neglect
+  // letting a stat bottom out counts as a care mistake (with a cooldown so the
+  // same neglect is not counted every minute)
   if (mistakeCooldown > 0) mistakeCooldown--;
   if (lowestStat() <= 10 && mistakeCooldown == 0) {
     careMistakes++;
@@ -172,17 +227,21 @@ void Pet::tick() {
                            // at -3 every 30 min far more was lost than could be
                            // gained in a whole day and the bond got stuck
   }
+  #pragma endregion
 
-  checkMedals();  // evolution is triggered by the user (canEvolveNow + tap), not the tick
+  // evolution is triggered by the user (canEvolveNow + tap), not the tick
+  if (checkMedals()) save();
 
-  // total neglect: with EVERYTHING at zero for an hour it becomes ready to run
-  // away; it does NOT leave on its own, the user triggers it with the button
-  // (sad ending, they witness it)
+  #pragma region Total neglect
+  // with EVERYTHING at zero for an hour it becomes ready to run away; it does
+  // NOT leave on its own, the user triggers it with the button (sad ending,
+  // they witness it)
   if (fullness == 0 && joy == 0 && energy == 0 && hygiene == 0) {
     if (neglectTicks < RUNAWAY_TICKS) neglectTicks++;
   } else {
     neglectTicks = 0;  // a single act of care saves it
   }
+  #pragma endregion
 
   // full cycle (final form + 7 days): the farewell does NOT fire on its own; it
   // becomes ready (canFarewellNow) and the user triggers it with the button, so they see it
@@ -191,102 +250,129 @@ void Pet::tick() {
   // animating); just mark it and let the loop flush it when dimming
   if (++ticksSinceSave >= 5) pendingSave = true;
 }
+#pragma endregion
 
-// flushes the pending periodic save (called by the loop at a moment with no
-// animation so the flash-write stall is not visible)
-void Pet::flushSave() {
-  if (pendingSave) save();
+#pragma region Pokedex and eggs
+// fills branchesOut (EEVEE_BRANCH_COUNT entries) with the unregistered Eevee branches
+uint8_t Pet::collectUnregisteredEeveeBranches(int16_t *branchesOut) const {
+  uint8_t branchTotal = 0;
+  for (int16_t branch = EEVEE_FIRST_BRANCH; branch < EEVEE_FIRST_BRANCH + EEVEE_BRANCH_COUNT; branch++)
+    if (!isRegistered(branch)) branchesOut[branchTotal++] = branch;
+  return branchTotal;
 }
 
 // are there unregistered members left in this base's evolution line?
 bool Pet::lineHasUnregistered(int16_t base) const {
-  int16_t cur = base;
-  for (int guard = 0; cur >= 1 && cur <= 151 && guard < 6; guard++) {
-    if (!isRegistered(cur)) return true;
-    if (cur == DEX_EEVEE) {
-      for (int16_t b = 134; b <= 136; b++)
-        if (!isRegistered(b)) return true;
-      return false;
+  int16_t current = base;
+  for (int guard = 0; current >= 1 && current <= DEX_COUNT && guard < 6; guard++) {
+    if (!isRegistered(current)) return true;
+    if (current == DEX_EEVEE) {
+      int16_t missingBranches[EEVEE_BRANCH_COUNT];
+      return collectUnregisteredEeveeBranches(missingBranches) > 0;
     }
-    cur = DEX_TBL[cur].evolvesTo;
+    current = DEX_TBL[current].evolvesTo;
   }
   return false;
 }
 
 uint8_t Pet::eggRarity() const {
-  return (eggTarget >= 1 && eggTarget <= 151) ? DEX_TBL[eggTarget].rarity : R_COMUN;
+  return (eggTarget >= 1 && eggTarget <= DEX_COUNT) ? DEX_TBL[eggTarget].rarity : R_COMMON;
 }
 
 // picks the egg's species: rarity roll (improved by a completed farewell,
 // penalized by a runaway) and a bias toward incomplete lines
 int16_t Pet::pickEggSpecies() {
-  // first game: classic starter
+  #pragma region First game: classic starter
   if (registeredCount() == 0) {
     return CLASSIC_DEX[random(NUM_CLASSIC_DEX)];
   }
+  #pragma endregion
 
-  uint8_t tier = R_COMUN;
+  #pragma region Rarity roll
+  uint8_t tier = R_COMMON;
   if (lastEnd != CER_RUNAWAY) {
     bool blessed = (lastEnd == CER_FAREWELL);
-    int rare = (blessed ? 45 : 27) + careBonus();
-    int leg = (registeredCount() >= 25) ? (blessed ? 10 : 3) + careBonus() / 3 : 0;
-    int r = random(100);
-    if (r < leg) tier = R_LEGENDARIO;
-    else if (r < leg + rare) tier = R_RARO;
+    int rareChance = (blessed ? 45 : 27) + careBonus();
+    int legendaryChance = (registeredCount() >= 25) ? (blessed ? 10 : 3) + careBonus() / 3 : 0;
+    int roll = random(100);
+    if (roll < legendaryChance) tier = R_LEGENDARY;
+    else if (roll < legendaryChance + rareChance) tier = R_RARE;
   }
+  #pragma endregion
 
+  #pragma region Candidates
   // candidates of the tier with an incomplete line; if none, drop a tier;
   // if the tier's pokedex is complete, any of the tier will do
   for (int pass = 0; pass < 2; pass++) {
-    for (int t = tier; t >= R_COMUN; t--) {
-      int16_t cand[80];
-      int n = 0;
-      for (int16_t d = 1; d <= 151 && n < 80; d++) {
-        if (DEX_TBL[d].rarity != t) continue;
-        if (pass == 0 && !lineHasUnregistered(d)) continue;
-        cand[n++] = d;
+    for (int rarity = tier; rarity >= R_COMMON; rarity--) {
+      int16_t candidates[DEX_COUNT];
+      int candidateTotal = 0;
+      for (int16_t dex = 1; dex <= DEX_COUNT && candidateTotal < DEX_COUNT; dex++) {
+        if (DEX_TBL[dex].rarity != rarity) continue;
+        if (pass == 0 && !lineHasUnregistered(dex)) continue;
+        candidates[candidateTotal++] = dex;
       }
-      if (n > 0) return cand[random(n)];
+      if (candidateTotal > 0) return candidates[random(candidateTotal)];
     }
   }
+  #pragma endregion
   return CLASSIC_DEX[random(NUM_CLASSIC_DEX)];  // unreachable, just in case
 }
 
 void Pet::registerSpecies(int16_t dex) {
-  if (dex < 1 || dex > 151) return;
-  dexReg[(dex - 1) >> 3] |= (1 << ((dex - 1) & 7));
-  if (shiny) dexShinyReg[(dex - 1) >> 3] |= (1 << ((dex - 1) & 7));
+  if (dex < 1 || dex > DEX_COUNT) return;
+  bitmapSet(dexReg, dex);
+  if (shiny) bitmapSet(dexShinyReg, dex);
 }
 
+uint16_t Pet::bitmapCount(const uint8_t *bitmap) {
+  // the last byte has bits past DEX_COUNT: they never count
+  const uint8_t lastByteMask = (DEX_COUNT % 8) ? (uint8_t)((1u << (DEX_COUNT % 8)) - 1) : (uint8_t)0xFF;
+  uint16_t setBits = 0;
+  for (int byteIndex = 0; byteIndex < DEX_BITMAP_BYTES; byteIndex++) {
+    uint8_t byteValue = bitmap[byteIndex];
+    if (byteIndex == DEX_BITMAP_BYTES - 1) byteValue &= lastByteMask;
+    setBits += (uint16_t)__builtin_popcount(byteValue);
+  }
+  return setBits;
+}
+
+uint16_t Pet::registeredCount() const {
+  return bitmapCount(dexReg);
+}
+#pragma endregion
+
+#pragma region Streak, bond and medals
 // streak and bond improve the egg roll (0..~14)
 int Pet::careBonus() const {
-  int s = streak > 30 ? 30 : streak;
-  return s / 3 + bond / 25;
+  int cappedStreak = streak > 30 ? 30 : streak;
+  return cappedStreak / 3 + bond / 25;
 }
 
-// first care of the day: advances the streak and strengthens the bond
-void Pet::registerCare() {
-  if (isEgg() || ceremony != CER_NONE) return;
-  uint32_t d = today();
-  if (d == 0 || d == lastCareDay) return;  // no clock, or already counted today
-  if (lastCareDay == 0 || d == lastCareDay + 1) {
+// first care of the day: advances the streak and strengthens the bond.
+// Returns true if it counted (the caller saves).
+bool Pet::registerCare() {
+  if (isEgg() || ceremony != CER_NONE) return false;
+  uint32_t currentDay = today();
+  if (currentDay == 0 || currentDay == lastCareDay) return false;  // no clock, or already counted today
+  if (lastCareDay == 0 || currentDay == lastCareDay + 1) {
     streak++;
   } else {
     streak = 1;        // there was a gap of days
     lastMilestone = 0;
   }
-  lastCareDay = d;
+  lastCareDay = currentDay;
   bondToday = 0;
   if (streak > bestStreak) bestStreak = streak;
   bond = clamp100(bond + 4);
-  uint16_t ms = (streak >= 100) ? 100 : (streak >= 30) ? 30
-              : (streak >= 7)   ? 7   : (streak >= 3)  ? 3 : 0;
-  if (ms > lastMilestone) {
-    lastMilestone = ms;
+  uint16_t milestone = (streak >= 100) ? 100 : (streak >= 30) ? 30
+                     : (streak >= 7)   ? 7   : (streak >= 3)  ? 3 : 0;
+  if (milestone > lastMilestone) {
+    lastMilestone = milestone;
     milestoneUntil = millis() + 4500;
   }
   checkMedals();
-  save();
+  return true;
 }
 
 void Pet::addBond(uint8_t amt) {
@@ -295,8 +381,9 @@ void Pet::addBond(uint8_t amt) {
   bondToday += amt;
 }
 
-void Pet::checkMedals() {
-  if (isEgg()) return;
+// returns true if a new medal was earned (the caller saves)
+bool Pet::checkMedals() {
+  if (isEgg()) return false;
   uint16_t before = medals;
   if (level() >= 10) medals |= MED_LV10;
   if (level() >= 25) medals |= MED_LV25;
@@ -307,13 +394,12 @@ void Pet::checkMedals() {
   if (DEX_TBL[speciesId].evolvesTo == 0) medals |= MED_FINAL;
   if (weight == 0 && level() >= 5 && careMistakes == 0) medals |= MED_FIT;
   uint16_t gained = medals & ~before;
-  if (gained) {
-    for (uint16_t m = gained; m; m &= (m - 1)) totalMedals++;
-    newMedal = gained;
-    medalUntil = millis() + 4000;
-    if (!sleeping) sfxPlay(SFX_MEDAL);
-    save();
-  }
+  if (!gained) return false;
+  totalMedals += (uint16_t)__builtin_popcount(gained);  // one per bit, not per event
+  newMedal = gained;
+  medalUntil = millis() + 4000;
+  if (!sleeping) sfxPlay(SFX_MEDAL);
+  return true;
 }
 
 void Pet::rename(const char *name) {
@@ -321,11 +407,9 @@ void Pet::rename(const char *name) {
   nick[sizeof(nick) - 1] = 0;
   save();
 }
+#pragma endregion
 
-static uint16_t calcStat(uint8_t base, uint8_t gene, uint16_t lvl, uint8_t tr) {
-  return (uint16_t)base * gene / 100 + lvl + tr;
-}
-
+#pragma region Battle stats
 uint16_t Pet::atkStat() const {
   return isEgg() ? 0 : calcStat(DEX_TBL[speciesId].bAtk, geneAtk, level(), trAtk);
 }
@@ -335,46 +419,38 @@ uint16_t Pet::defStat() const {
 uint16_t Pet::speStat() const {
   return isEgg() ? 0 : calcStat(DEX_TBL[speciesId].bSpe, geneSpe, level(), trSpe);
 }
-
-uint16_t Pet::registeredCount() const {
-  uint16_t n = 0;
-  for (int i = 1; i <= 151; i++)
-    if (isRegistered(i)) n++;
-  return n;
-}
+#pragma endregion
 
 #pragma region Wild battles and catching
 uint16_t Pet::caughtCount() const {
-  uint16_t caughtTotal = 0;
-  for (int16_t dex = 1; dex <= DEX_COUNT; dex++)
-    if (isCaught(dex)) caughtTotal++;
-  return caughtTotal;
+  return bitmapCount(dexCaught);
+}
+
+bool Pet::markCaught(int16_t dex, bool shinyVariant) {
+  if (dex < 1 || dex > DEX_COUNT) return false;
+  bitmapSet(dexCaught, dex);
+  if (shinyVariant) bitmapSet(dexShinyReg, dex);
+  return true;
 }
 
 void Pet::registerCaught(int16_t dex, bool shinyVariant) {
-  if (dex < 1 || dex > DEX_COUNT) return;
-  dexCaught[(dex - 1) >> 3] |= (1 << ((dex - 1) & 7));
-  if (shinyVariant) dexShinyReg[(dex - 1) >> 3] |= (1 << ((dex - 1) & 7));
+  if (!markCaught(dex, shinyVariant)) return;
   save();
 }
-
-// a battle started from the play menu (swords) instead of a wild encounter keeps
-// this percent of the normal catch chance (the encounter is the rarer event)
-#define REQUESTED_BATTLE_CATCH_PCT 70
 
 uint8_t Pet::catchChanceForWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel, bool closeWin,
                                 bool requestedBattle) const {
   if (wildDex < 1 || wildDex > DEX_COUNT) return 0;
   const DexEntry &wild = DEX_TBL[wildDex];
-  if (wild.rarity == R_LEGENDARIO) return 0;
-  int chance = wild.rarity == R_RARO ? 28 : 55;
+  if (wild.rarity == R_LEGENDARY) return 0;
+  int chance = wild.rarity == R_RARE ? 28 : 55;
   int levelGap = (int)wildLevel - (int)(petLevel ? petLevel : 1);
   if (levelGap > 0) chance -= levelGap * 4;
   else if (levelGap < 0) chance += (-levelGap) * 2;
   if (closeWin) chance += 8;
   chance += bond / 20;
   // the fork adds a step-counter bonus here; this port has no pedometer (bonus 0)
-  if (wild.rarity == R_RARO && chance > 60) chance = 60;
+  if (wild.rarity == R_RARE && chance > 60) chance = 60;
   if (chance > 75) chance = 75;
   if (chance < 10) chance = 10;
   if (requestedBattle) chance = chance * REQUESTED_BATTLE_CATCH_PCT / 100;  // 7..52
@@ -396,7 +472,7 @@ bool Pet::tryCatchWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLevel, boo
   uint8_t chance = catchChanceForWild(wildDex, wildLevel, petLevel, closeWin, requestedBattle);
   if (chance == 0) return false;
   if ((luckRoll % 100) < chance) {
-    registerCaught(wildDex, shinyVariant);
+    markCaught(wildDex, shinyVariant);
     joy = clamp100((int)joy + 4);
     addBond(1);
     save();
@@ -410,7 +486,7 @@ bool Pet::tryRespectCatchWild(int16_t wildDex, uint8_t wildLevel, uint8_t petLev
   uint8_t chance = respectCatchChanceForWild(wildDex, wildLevel, petLevel, requestedBattle);
   if (chance == 0) return false;
   if ((luckRoll % 100) < chance) {
-    registerCaught(wildDex, shinyVariant);
+    markCaught(wildDex, shinyVariant);
     save();
     return true;
   }
@@ -424,7 +500,7 @@ BattleReward Pet::applyBattleWin(int16_t wildDex, bool closeWin) {
   const DexEntry &wild = DEX_TBL[wildDex];
 
   #pragma region Training reward
-  reward.amount = (wild.rarity == R_RARO) ? 2 : 1;
+  reward.amount = (wild.rarity == R_RARE) ? 2 : 1;
   if (closeWin) reward.amount++;
   if (wild.bAtk >= wild.bDef && wild.bAtk >= wild.bSpe) {
     reward.stat = BATTLE_REWARD_DEF;  // a hard hitter teaches defense
@@ -464,6 +540,7 @@ void Pet::applyBattleLoss() {
 }
 #pragma endregion
 
+#pragma region Ceremonies
 // final form that has completed its cycle (7 days): ready to say goodbye. The
 // user triggers the farewell with the button (it does not fire on its own, so they see it)
 bool Pet::canFarewellNow() const {
@@ -477,35 +554,32 @@ bool Pet::canRunawayNow() const {
   return !isEgg() && !sleeping && ceremony == CER_NONE && neglectTicks >= RUNAWAY_TICKS;
 }
 
-void Pet::startFarewell() {
+// shared start of every ceremony; showHearts keeps hearts up for the whole ceremony
+void Pet::beginCeremony(uint8_t ceremonyKind, bool showHearts) {
   if (isEgg() || ceremony != CER_NONE) return;
-  lastEnd = CER_FAREWELL;
-  ceremony = CER_FAREWELL;
+  lastEnd = ceremonyKind;
+  ceremony = ceremonyKind;
   ceremonyUntil = millis() + CEREMONY_MS;
-  heartUntil = ceremonyUntil;  // hearts throughout the whole farewell
+  if (showHearts) heartUntil = ceremonyUntil;
   sfxPlay(SFX_BYE);
   save();
+}
+
+void Pet::startFarewell() {
+  beginCeremony(CER_FAREWELL, true);
 }
 
 void Pet::startRunaway() {
-  if (isEgg() || ceremony != CER_NONE) return;
-  lastEnd = CER_RUNAWAY;
-  ceremony = CER_RUNAWAY;
-  ceremonyUntil = millis() + CEREMONY_MS;
-  sfxPlay(SFX_BYE);
-  save();
+  beginCeremony(CER_RUNAWAY, false);
 }
 
 void Pet::release() {
-  if (isEgg() || ceremony != CER_NONE) return;
-  lastEnd = CER_RELEASE;
-  ceremony = CER_RELEASE;
-  ceremonyUntil = millis() + CEREMONY_MS;
-  heartUntil = ceremonyUntil;
-  sfxPlay(SFX_BYE);
-  save();
+  beginCeremony(CER_RELEASE, true);
 }
+#pragma endregion
 
+#pragma region Hatching and evolution
+// does not save: every caller saves right after
 void Pet::hatch() {
   speciesId = eggTarget;
   shiny = eggShiny;
@@ -523,7 +597,6 @@ void Pet::hatch() {
   registerSpecies(speciesId);  // raised = registered in the pokedex
   checkMedals();     // in case it is born already in final form (legendary)
   sfxPlay(SFX_HATCH);
-  save();
 }
 
 // are the conditions to evolve met yet? Each care mistake delays evolution by
@@ -532,31 +605,32 @@ void Pet::hatch() {
 // creature (evolve()), so they see the transformation.
 bool Pet::canEvolveNow() const {
   if (isEgg() || sleeping || ceremony != CER_NONE) return false;
-  const DexEntry &d = DEX_TBL[speciesId];
-  if (d.evolvesTo == 0) return false;
-  return level() >= (uint16_t)d.evolveLevel + careMistakes && lowestStat() >= 40;
+  const DexEntry &entry = DEX_TBL[speciesId];
+  if (entry.evolvesTo == 0) return false;
+  return level() >= (uint16_t)entry.evolveLevel + careMistakes && lowestStat() >= 40;
 }
 
 void Pet::evolve() {
   if (!canEvolveNow()) return;
-  const DexEntry &d = DEX_TBL[speciesId];
+  const DexEntry &entry = DEX_TBL[speciesId];
   prevSpeciesId = speciesId;
-  int16_t next = d.evolvesTo;
+  int16_t nextSpecies = entry.evolvesTo;
   if (speciesId == DEX_EEVEE) {
     // Eevee branch: prefers the evolution missing from the pokedex
-    int16_t opts[3];
-    int n = 0;
-    for (int16_t b = 134; b <= 136; b++)
-      if (!isRegistered(b)) opts[n++] = b;
-    next = n > 0 ? opts[random(n)] : (int16_t)(134 + random(3));
+    int16_t missingBranches[EEVEE_BRANCH_COUNT];
+    uint8_t missingTotal = collectUnregisteredEeveeBranches(missingBranches);
+    nextSpecies = missingTotal > 0 ? missingBranches[random(missingTotal)]
+                                   : (int16_t)(EEVEE_FIRST_BRANCH + random(EEVEE_BRANCH_COUNT));
   }
-  speciesId = next;
+  speciesId = nextSpecies;
   registerSpecies(speciesId);
   sfxPlay(SFX_EVOLVE);
   evolveUntil = millis() + EVOLVE_ANIM_MS;
   save();
 }
+#pragma endregion
 
+#pragma region Feeding
 void Pet::feed() {
   feedBerry(0);
 }
@@ -602,6 +676,15 @@ void Pet::feedCoffee() {
   save();
 }
 #pragma endregion
+#pragma endregion
+
+#pragma region Training and minigames
+uint8_t Pet::addTrainingPoints(uint8_t &trainingStat, uint8_t gain) {
+  uint8_t statBefore = trainingStat;
+  uint16_t raisedStat = (uint16_t)trainingStat + gain;
+  trainingStat = raisedStat > 100 ? 100 : (uint8_t)raisedStat;
+  return trainingStat - statBefore;  // what actually went in after capping at 100
+}
 
 #pragma region Play session effects
 // mood, tiredness, weight and bond after a ball game or a coin chase; saves
@@ -622,8 +705,7 @@ void Pet::playResult(uint8_t score) {
   if (ceremony != CER_NONE || isEgg()) return;
   // the ball game trains attack: +1 per 5 points, at most +2 per game
   uint8_t attackGain = score / 5 > 2 ? 2 : score / 5;
-  uint16_t raisedAttack = (uint16_t)trAtk + attackGain;
-  trAtk = raisedAttack > 100 ? 100 : (uint8_t)raisedAttack;
+  addTrainingPoints(trAtk, attackGain);
   if (score > gameHi) gameHi = score;  // new record
   applyPlaySessionEffects(score);
 }
@@ -633,10 +715,7 @@ void Pet::playResult(uint8_t score) {
 uint8_t Pet::coinChaseResult(uint8_t points) {
   if (ceremony != CER_NONE || isEgg()) return 0;
   uint8_t gain = points >= 10 ? 2 : (points >= 5 ? 1 : 0);
-  uint8_t speedBefore = trSpe;
-  uint16_t raisedSpeed = (uint16_t)trSpe + gain;
-  trSpe = raisedSpeed > 100 ? 100 : (uint8_t)raisedSpeed;
-  gain = trSpe - speedBefore;         // what actually went in after capping at 100
+  gain = addTrainingPoints(trSpe, gain);
   if (points > coinHi) coinHi = points;  // new record
   applyPlaySessionEffects(points);
   return gain;
@@ -648,11 +727,8 @@ uint8_t Pet::trainStrength(uint16_t hits) {
   if (ceremony != CER_NONE || isEgg()) return 0;
   uint8_t gain = hits / 4;          // ~4 hits = 1 training point
   if (gain > 18) gain = 18;         // per-session cap: STR is forged slowly
-  uint8_t antes = trAtk;
-  uint16_t v = (uint16_t)trAtk + gain;
-  trAtk = v > 100 ? 100 : (uint8_t)v;
-  gain = trAtk - antes;             // what actually went in: when capping at 100 the
-                                    // screen announced +18 even if less fit
+  // what actually went in: when capping at 100 the screen announced +18 even if less fit
+  gain = addTrainingPoints(trAtk, gain);
   energy = dropTo(energy, 12, 5);   // tiring
   fullness = dropTo(fullness, 5, 5);
   int burn = (int)weight - hits / 3;  // also burns weight
@@ -665,7 +741,9 @@ uint8_t Pet::trainStrength(uint16_t hits) {
   save();
   return gain;
 }
+#pragma endregion
 
+#pragma region Care
 void Pet::play() {
   if (ceremony != CER_NONE) return;
   if (isEgg() || sleeping) return;
@@ -694,19 +772,20 @@ void Pet::clean() {
   save();
 }
 
+// saves only when it was the first care of the day (a caress is frequent)
 void Pet::caress() {
   if (ceremony != CER_NONE) return;
   if (isEgg() || sleeping) return;
   joy = clamp100(joy + 5);
   heartUntil = millis() + HEART_MS;
   addBond(1);
-  registerCare();
+  if (registerCare()) save();
 }
 
 void Pet::eggTap() {
   if (!isEgg()) return;
   if (++eggTaps >= 3) hatch();
-  else save();
+  save();
 }
 
 PetMood Pet::mood() const {
@@ -715,114 +794,4 @@ PetMood Pet::mood() const {
   if (lowestStat() < 25) return MOOD_SAD;
   return MOOD_HAPPY;
 }
-
-void Pet::save() {
-  ticksSinceSave = 0;
-  pendingSave = false;
-  prefs.putUChar("full", fullness);
-  prefs.putUChar("joy", joy);
-  prefs.putUChar("ene", energy);
-  prefs.putUChar("hyg", hygiene);
-  prefs.putUChar("poop", poops);
-  prefs.putUChar("wgt", weight);
-  prefs.putUChar("gatk", geneAtk);
-  prefs.putUChar("gdef", geneDef);
-  prefs.putUChar("gspe", geneSpe);
-  prefs.putUChar("tatk", trAtk);
-  prefs.putUChar("tdef", trDef);
-  prefs.putUChar("tspe", trSpe);
-  prefs.putBool("bk", berryKnown);
-  prefs.putBool("shy", shiny);
-  prefs.putBool("eshy", eggShiny);
-  prefs.putBool("stpk", starterPick);
-  prefs.putBytes("dexsh", dexShinyReg, sizeof(dexShinyReg));
-  prefs.putUInt("age", ageMinutes);
-  prefs.putShort("dexn", speciesId);
-  prefs.putShort("eggT2", eggTarget);
-  prefs.putUChar("crack", eggTaps);
-  prefs.putUChar("mist", careMistakes);
-  prefs.putBool("sleep", sleeping);
-  prefs.putUChar("lend", lastEnd);
-  if (lastSeenEpoch) prefs.putUInt("seen", lastSeenEpoch);
-  prefs.putBytes("dexreg", dexReg, sizeof(dexReg));
-  prefs.putUShort("strk", streak);
-  prefs.putUShort("bstrk", bestStreak);
-  prefs.putUInt("cday", lastCareDay);
-  prefs.putUChar("bond", bond);
-  prefs.putUShort("medal", medals);
-  prefs.putUShort("tmedal", totalMedals);
-  prefs.putUShort("mstone", lastMilestone);
-  prefs.putUShort("ghi", gameHi);
-  prefs.putUShort("chi", coinHi);
-  prefs.putUShort("shi", strHi);
-  prefs.putString("nick", nick);
-  #pragma region Wild battle state
-  prefs.putBytes("dexcgt", dexCaught, sizeof(dexCaught));
-  prefs.putUShort("bwin", battleWins);
-  prefs.putUShort("bloss", battleLosses);
-  prefs.putUShort("bstk", battleStreak);
-  prefs.putUShort("bbstk", bestBattleStreak);
-  #pragma endregion
-}
-
-void Pet::load() {
-  fullness = prefs.getUChar("full", 80);
-  joy = prefs.getUChar("joy", 80);
-  energy = prefs.getUChar("ene", 80);
-  hygiene = prefs.getUChar("hyg", 100);
-  poops = prefs.getUChar("poop", 0);
-  weight = prefs.getUChar("wgt", 0);
-  geneAtk = prefs.getUChar("gatk", 0);
-  geneDef = prefs.getUChar("gdef", 0);
-  geneSpe = prefs.getUChar("gspe", 0);
-  if (geneAtk == 0) {  // pet predating genes: one-time roll now
-    geneAtk = 90 + random(21);
-    geneDef = 90 + random(21);
-    geneSpe = 90 + random(21);
-  }
-  trAtk = prefs.getUChar("tatk", 0);
-  trDef = prefs.getUChar("tdef", 0);
-  trSpe = prefs.getUChar("tspe", 0);
-  berryKnown = prefs.getBool("bk", false);
-  shiny = prefs.getBool("shy", false);
-  eggShiny = prefs.getBool("eshy", false);
-  starterPick = prefs.getBool("stpk", false);
-  prefs.getBytes("dexsh", dexShinyReg, sizeof(dexShinyReg));
-  ageMinutes = prefs.getUInt("age", 0);
-  if (prefs.isKey("dexn")) {
-    speciesId = prefs.getShort("dexn", -1);
-    eggTarget = prefs.getShort("eggT2", 4);
-  } else {
-    // migration from the version with flash indices (0-8)
-    static const uint8_t OLD2DEX[9] = { 4, 5, 6, 1, 2, 3, 7, 8, 9 };
-    int8_t old = prefs.getChar("spec", -1);
-    speciesId = (old >= 0 && old < 9) ? OLD2DEX[old] : -1;
-    int8_t oldT = prefs.getChar("eggT", 0);
-    eggTarget = (oldT >= 0 && oldT < 9) ? OLD2DEX[oldT] : 4;
-  }
-  eggTaps = prefs.getUChar("crack", 0);
-  careMistakes = prefs.getUChar("mist", 0);
-  sleeping = prefs.getBool("sleep", false);
-  lastEnd = prefs.getUChar("lend", CER_NONE);
-  prefs.getBytes("dexreg", dexReg, sizeof(dexReg));
-  streak = prefs.getUShort("strk", 0);
-  bestStreak = prefs.getUShort("bstrk", 0);
-  lastCareDay = prefs.getUInt("cday", 0);
-  bond = prefs.getUChar("bond", 0);
-  medals = prefs.getUShort("medal", 0);
-  totalMedals = prefs.getUShort("tmedal", 0);
-  lastMilestone = prefs.getUShort("mstone", 0);
-  gameHi = prefs.getUShort("ghi", 0);
-  coinHi = prefs.getUShort("chi", 0);
-  strHi = prefs.getUShort("shi", 0);
-  prefs.getString("nick", nick, sizeof(nick));
-  #pragma region Wild battle state
-  prefs.getBytes("dexcgt", dexCaught, sizeof(dexCaught));
-  battleWins = prefs.getUShort("bwin", 0);
-  battleLosses = prefs.getUShort("bloss", 0);
-  battleStreak = prefs.getUShort("bstk", 0);
-  bestBattleStreak = prefs.getUShort("bbstk", 0);
-  #pragma endregion
-  // seed: the current pet counts as raised (old saves)
-  if (speciesId >= 1) registerSpecies(speciesId);
-}
+#pragma endregion

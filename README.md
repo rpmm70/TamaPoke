@@ -40,7 +40,7 @@ A quick reference to how the game really works (values straight from the code).
 
 ### Time & leveling
 - **1 real minute = 1 in-game minute.** Your Pokémon gains **+1 level every hour**
-  of real time. Leveling is purely time-based — caring well doesn't speed it up,
+  of real time. Leveling is purely time-based - caring well doesn't speed it up,
   but neglect *delays evolution*.
 - It keeps **aging while powered off** (the RTC runs), catching up to **2 weeks** max.
 
@@ -67,12 +67,12 @@ While **awake**, per minute:
 - 🥊 **Training bag:** trains **STRENGTH** (~4 hits = 1 pt, cap +18/session), tires it.
 - 🫧 **Bath:** clears poops, HYG → 100.
 - 👆 **Pet it:** +5 JOY + bond.
-- 🌙 **Sleep:** rest — ENE **+6/min**, needs drain ~**4× slower** with floors
+- 🌙 **Sleep:** rest - ENE **+6/min**, needs drain ~**4× slower** with floors
   (FOOD 30 / JOY 35 / HYG 45). No poops, no slip-ups, can't run away while asleep.
 
 ### Eggs & who you get (spawn odds)
-- **First ever pet:** you pick a starter — **Bulbasaur / Charmander / Squirtle**.
-- Hatch the egg: tap it **3×** (or wait — it hatches on its own).
+- **First ever pet:** you pick a starter - **Bulbasaur / Charmander / Squirtle**.
+- Hatch the egg: tap it **3×** (or wait - it hatches on its own).
 - Every later egg rolls a **rarity tier** (over the ~79 base forms that come from eggs):
 
 | Tier | Base chance | After a proper goodbye | # species |
@@ -88,23 +88,23 @@ While **awake**, per minute:
   all 151 are completable).
 - **Shiny:** base **1 / 48** (→ **1 / 24** right after a goodbye), improved by
   streak/bond down to a best of **1 / 8**. Tracked separately in the dex.
-- Every hatch rolls unique **genes** (90–110 % per stat) — no two are identical.
+- Every hatch rolls unique **genes** (90–110 % per stat) - no two are identical.
 
 ### Evolution
 - Triggers when **level ≥ its evolution level** (16 for most base forms; ~30 for
   stone-style, ~40 for trade-style) **and every stat ≥ 40** at that moment.
-- **Never automatic** — a button appears and **you tap to witness it** (with a
+- **Never automatic** - a button appears and **you tap to witness it** (with a
   flicker between the old and new form). Each **slip-up delays it by 1 level**.
 - You can **decline** ("keep form"); it re-offers at the next level.
 - *Eevee* branches toward whichever evolution you're still missing.
 
-### The three endings (you choose & witness each — none auto-fire)
-- 💛 **Farewell** — when it's a **final form** that has lived **3 days**. A button
+### The three endings (you choose & witness each - none auto-fire)
+- 💛 **Farewell** - when it's a **final form** that has lived **3 days**. A button
   appears; triggering it **blesses your next egg**. You can **postpone** ("stay
   together", re-offered in a day). The good ending.
-- 💔 **Run-away** — if you let **all four stats sit at 0 for a full hour**. A single
+- 💔 **Run-away** - if you let **all four stats sit at 0 for a full hour**. A single
   act of care cancels it. It **curses the next egg** (forces Common). The sad ending.
-- 👋 **Release** — long-press the creature to let it go on your terms (neutral).
+- 👋 **Release** - long-press the creature to let it go on your terms (neutral).
 
 After any ending, a **new egg** appears.
 
@@ -124,16 +124,19 @@ SPEED ← minigame, DEFENSE ← 12 h of unbroken good care). *(Battles: on the r
 ## Hardware
 
 - Board: [ESP32-S3-Touch-AMOLED-1.75](https://www.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.75)
-  — get the **Standard** (no case) or **-G** (GPS, also fits) version; **not the "-B"**
+  - get the **Standard** (no case) or **-G** (GPS, also fits) version; **not the "-B"**
   (ships with a protective case that won't fit). The separate "1.75**C**" is a different board.
-  - **Where to buy**: [Waveshare store](https://www.waveshare.com/esp32-s3-touch-amoled-1.75.htm) (often on backorder), or the **-G** on Amazon — TamaPoke leaves the GPS unused, the board is otherwise identical: 🇺🇸 [.com](https://www.amazon.com/dp/B0F7XWWMJW?tag=capsuleradar-20) · 🇪🇸 [.es](https://www.amazon.es/dp/B0F7XWWMJW?tag=capsuleradar-21) · 🇩🇪 [.de](https://www.amazon.de/dp/B0F7XWWMJW?tag=capsulerada03-21) · 🇬🇧 [.co.uk](https://www.amazon.co.uk/dp/B0F7XWWMJW?tag=capsulerada0d-21) · 🇮🇹 [.it](https://www.amazon.it/dp/B0F7XWWMJW?tag=capsulerada08-21) · 🇫🇷 [.fr](https://www.amazon.fr/dp/B0F7XWWMJW?tag=capsulerada0e-21) · 🇯🇵 [.co.jp](https://www.amazon.co.jp/dp/B0F7XWWMJW?tag=capsuleradar-22) · 🇨🇦 [.ca](https://www.amazon.ca/dp/B0F7XWWMJW?tag=capsulerada09-20). Optional battery — 1100 mAh protected LiPo, MX1.25 plug: 🇪🇸 [.es](https://www.amazon.es/dp/B0F1FGZQS5?tag=capsuleradar-21) · 🇺🇸 [.com](https://www.amazon.com/dp/B0F1FGZQS5?tag=capsuleradar-20) · 🇮🇹 [.it](https://www.amazon.it/dp/B0F1FGZQS5?tag=capsulerada08-21) · 🇫🇷 [.fr](https://www.amazon.fr/dp/B0F1FGZQS5?tag=capsulerada0e-21) (DE/UK: that exact pack is not listed — search for a *protected* 3.7 V LiPo, ~1100 mAh, size **102540**, 1.25 mm micro-JST plug) — check plug polarity against the board first. <sub>Amazon links are affiliate links; as an Amazon Associate I earn from qualifying purchases.</sub>
-  - **MicroSD card** (holds the sprite set — any small, class-10 card works): 🇪🇸 [.es](https://www.amazon.es/s?k=microsd+32gb&tag=capsuleradar-21) · 🇺🇸 [.com](https://www.amazon.com/s?k=microsd+32gb&tag=capsuleradar-20) · 🇩🇪 [.de](https://www.amazon.de/s?k=microsd+32gb&tag=capsulerada03-21) · 🇬🇧 [.co.uk](https://www.amazon.co.uk/s?k=microsd+32gb&tag=capsulerada0d-21) · 🇮🇹 [.it](https://www.amazon.it/s?k=microsd+32gb&tag=capsulerada08-21) · 🇫🇷 [.fr](https://www.amazon.fr/s?k=microsd+32gb&tag=capsulerada0e-21) · 🇯🇵 [.co.jp](https://www.amazon.co.jp/s?k=microsd+32gb&tag=capsuleradar-22) · 🇨🇦 [.ca](https://www.amazon.ca/s?k=microsd+32gb&tag=capsulerada09-20)
+  - **Where to buy**: [Waveshare store](https://www.waveshare.com/esp32-s3-touch-amoled-1.75.htm) (often on backorder), or the **-G** on Amazon - TamaPoke leaves the GPS unused, the board is otherwise identical: 🇺🇸 [.com](https://www.amazon.com/dp/B0F7XWWMJW?tag=capsuleradar-20) · 🇪🇸 [.es](https://www.amazon.es/dp/B0F7XWWMJW?tag=capsuleradar-21) · 🇩🇪 [.de](https://www.amazon.de/dp/B0F7XWWMJW?tag=capsulerada03-21) · 🇬🇧 [.co.uk](https://www.amazon.co.uk/dp/B0F7XWWMJW?tag=capsulerada0d-21) · 🇮🇹 [.it](https://www.amazon.it/dp/B0F7XWWMJW?tag=capsulerada08-21) · 🇫🇷 [.fr](https://www.amazon.fr/dp/B0F7XWWMJW?tag=capsulerada0e-21) · 🇯🇵 [.co.jp](https://www.amazon.co.jp/dp/B0F7XWWMJW?tag=capsuleradar-22) · 🇨🇦 [.ca](https://www.amazon.ca/dp/B0F7XWWMJW?tag=capsulerada09-20). Optional battery - 1100 mAh protected LiPo, MX1.25 plug: 🇪🇸 [.es](https://www.amazon.es/dp/B0F1FGZQS5?tag=capsuleradar-21) · 🇺🇸 [.com](https://www.amazon.com/dp/B0F1FGZQS5?tag=capsuleradar-20) · 🇮🇹 [.it](https://www.amazon.it/dp/B0F1FGZQS5?tag=capsulerada08-21) · 🇫🇷 [.fr](https://www.amazon.fr/dp/B0F1FGZQS5?tag=capsulerada0e-21) (DE/UK: that exact pack is not listed - search for a *protected* 3.7 V LiPo, ~1100 mAh, size **102540**, 1.25 mm micro-JST plug) - check plug polarity against the board first. <sub>Amazon links are affiliate links; as an Amazon Associate I earn from qualifying purchases.</sub>
+  - **MicroSD card** (holds the sprite set - any small, class-10 card works): 🇪🇸 [.es](https://www.amazon.es/s?k=microsd+32gb&tag=capsuleradar-21) · 🇺🇸 [.com](https://www.amazon.com/s?k=microsd+32gb&tag=capsuleradar-20) · 🇩🇪 [.de](https://www.amazon.de/s?k=microsd+32gb&tag=capsulerada03-21) · 🇬🇧 [.co.uk](https://www.amazon.co.uk/s?k=microsd+32gb&tag=capsulerada0d-21) · 🇮🇹 [.it](https://www.amazon.it/s?k=microsd+32gb&tag=capsulerada08-21) · 🇫🇷 [.fr](https://www.amazon.fr/s?k=microsd+32gb&tag=capsulerada0e-21) · 🇯🇵 [.co.jp](https://www.amazon.co.jp/s?k=microsd+32gb&tag=capsuleradar-22) · 🇨🇦 [.ca](https://www.amazon.ca/s?k=microsd+32gb&tag=capsulerada09-20)
 - Round 466×466 AMOLED, **CO5300** driver (QSPI, 80 MHz)
 - Capacitive touch **CST9217** (I2C, address 0x5A)
 - **AXP2101** (power management + battery + PWR button), **PCF85063** (RTC),
   microSD slot, **ES8311** audio codec (→ amplifier → external speaker on the
   MX1.25 connector)
-- Pins taken from the [official Waveshare repo](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75) (see `pin_config.h`)
+- Pins taken from the [official Waveshare repo](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75) (see `boards/board_waveshare_round.h`)
+- Second supported board: **ESP32-2432S028R "Cheap Yellow Display"** (ELEGOO 2.8",
+  ILI9341 320×240, XPT2046 resistive touch, no PSRAM, no RTC/battery). Pins in
+  `boards/board_cyd_rect.h`, port notes in [`CYD_PORT_NOTES.md`](CYD_PORT_NOTES.md).
 
 ## Libraries (Arduino IDE / arduino-cli)
 
@@ -147,6 +150,39 @@ SPEED ← minigame, DEFENSE ← 12 h of unbroken good care). *(Battles: on the r
 
 ## IDE setup / build
 
+The board is chosen at compile time with exactly one define (see
+`boards/board_select.h`; building with none, or both, stops with `#error`):
+
+| Define | Board | PlatformIO env |
+|---|---|---|
+| `BOARD_WAVESHARE_ROUND` | Waveshare ESP32-S3-Touch-AMOLED-1.75 (round 466×466) | `waveshare-round` |
+| `BOARD_CYD_RECT` | ESP32-2432S028R / ELEGOO 2.8" (320×240) | `cyd-rect` (`cyd-rect-touchdebug` also prints raw touch readings) |
+
+Each board's pins, capability flags (`BOARD_HAS_PMU`, `BOARD_HAS_WIFI`, ...),
+display settings and touch calibration live in `boards/board_waveshare_round.h`
+and `boards/board_cyd_rect.h`; the screen layout tables in `boards/layout*.h`.
+
+### PlatformIO (VS Code or CLI)
+
+`platformio.ini` pins the pioarduino platform (ESP32 Arduino core 3.3.12) and
+the library versions; CI builds both envs with it.
+
+```bash
+pio run -e waveshare-round                 # build
+pio run -e waveshare-round -t upload       # build and flash
+pio device monitor -e waveshare-round      # serial, 115200, with exception decoder
+pio run -e cyd-rect -t upload              # same for the CYD
+```
+
+In VS Code (pioarduino extension), the tasks in `.vscode/tasks.json` ask for
+the env: build, upload, upload + monitor, clean, and run the tests.
+
+### Arduino IDE / arduino-cli
+
+Uncomment one `#define` at the top of `boards/board_select.h`
+(`BOARD_WAVESHARE_ROUND` or `BOARD_CYD_RECT`), or pass it as a build property.
+Waveshare settings:
+
 - Board: **ESP32S3 Dev Module** · Flash **16MB** · PSRAM **OPI PSRAM**
   (required: the 466×466×16-bit framebuffer ≈ 434 KB lives in PSRAM) ·
   Partition Scheme with FAT (e.g. `16M Flash (3MB APP/9MB FATFS)`) ·
@@ -154,9 +190,11 @@ SPEED ← minigame, DEFENSE ← 12 h of unbroken good care). *(Battles: on the r
 
 ```bash
 FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB"
-arduino-cli compile --fqbn "$FQBN" .
+arduino-cli compile --fqbn "$FQBN" --build-property "build.extra_flags=-DBOARD_WAVESHARE_ROUND" .
 arduino-cli upload -p /dev/cu.usbmodemXXXX --fqbn "$FQBN" .
 ```
+
+CYD: board **ESP32 Dev Module**, Partition Scheme **Huge APP (3MB No OTA)**.
 
 ### Easiest install: the web installer
 
@@ -168,7 +206,7 @@ the SD over Web Serial, no Arduino needed. Serve it over HTTPS or `localhost`
 
 All sprites come from **[PMD SpriteCollab](https://github.com/PMDCollab/SpriteCollab)**
 (CC BY-NC). You can regenerate the whole set and load it onto your board with the
-pipeline below — the firmware accepts files over USB (PUT protocol with per-block
+pipeline below - the firmware accepts files over USB (PUT protocol with per-block
 ACK), so you don't have to remove the card (it formats the SD to FAT if needed).
 
 ```bash
@@ -219,7 +257,7 @@ If one bottoms out it counts as a *slip-up*.
 
 ## Decisions: you choose, and you watch
 
-The three life-cycle endings and evolution **don't happen on their own** — when
+The three life-cycle endings and evolution **don't happen on their own** - when
 the conditions are met a button appears and you tap it (so you're present to
 witness it), each opening a two-option dialog:
 
@@ -229,12 +267,12 @@ witness it), each opening a two-option dialog:
   rising hearts → new egg) or *Stay together* (keep your companion; re-offered in
   a day). Tension: a maxed-out friend vs. completing the Pokédex.
 - **Runaway** (dark button, total neglect for 1 h): a somber "feels abandoned"
-  ending in the rain — caring for the creature cancels it.
+  ending in the rain - caring for the creature cancels it.
 
 ## Sprites: PMD SpriteCollab everywhere
 
-- **PMD SpriteCollab** (everything — main screen, stat card, minigame **and the
-  Pokédex grid + detail view**): behaviour sprites — `tools/pack_pmd.py` packs
+- **PMD SpriteCollab** (everything - main screen, stat card, minigame **and the
+  Pokédex grid + detail view**): behaviour sprites - `tools/pack_pmd.py` packs
   actions (Idle, Walk L/R, Sleep, Eat, Hurt, Attack, Pose, Nod, DeepBreath) into
   the multi-action **TPK2** format (`/mons/pNNN.bin`). The engine in `TamaPoke.ino`
   makes the creature wander, gesture, curl up to sleep, chew and wince. Anchored by
@@ -298,8 +336,8 @@ The egg rolls rarity over the ~79 base forms (47 common / 27 rare / 5 legendary)
 a farewell and punished by a runaway. Legendaries only with 25+ registered.
 **Shiny** 1/48 (better with streak/bond/farewell).
 
-**Languages:** the UI ships in 8 languages — English (default), Spanish, French,
-German, Italian, Portuguese, Japanese and Korean — switchable from the settings
+**Languages:** the UI ships in 8 languages - English (default), Spanish, French,
+German, Italian, Portuguese, Japanese and Korean - switchable from the settings
 screen (swipe down).
 **Pokémon names are localized too**: French, German, Japanese and Korean show
 the official names (Bulbizarre, Bisasam, フシギダネ, 이상해씨...). Spanish, Italian
@@ -315,21 +353,32 @@ beach, forest, volcano, mountain, snow). Sleeping forces night.
 
 ## Layout
 
-- `TamaPoke.ino` — init, game loop, render of every screen, gestures, serial console, audio
-- `pet.h` / `pet.cpp` — pet state and logic (stats, evolution, life cycle, streak/bond/medals, NVS)
-- `sdmon.h` / `sdmon.cpp` — TPK1 (animated) and TPK2 (PMD) sprites + thumbnails, and file reception over USB (PUT/LS)
-- `rtcbat.h` / `rtcbat.cpp` — PCF85063 RTC + AXP2101 PMU (battery, brightness, PWR button)
-- `audio.h` / `audio.cpp` — ES8311 + I2S + Game-Boy-style tone synth (non-blocking task)
-- `i18n.h` / `i18n.cpp` — the 8-language string tables
-- `dex.h` — GENERATED (`gen_dex.py`): the 151 table
-- `species.h` — GENERATED (`sprites.py`): fallback sprites, UI icons, colours
-- `pin_config.h` — the board's official pins
-- `tools/` — pipeline: `dex_data.py` (data), `dex_stats.py`, `dex_names.py` +
+- `TamaPoke.ino` - only `setup()` and `loop()`
+- `app_state.h/.cpp` - shared game state (open screens, timers, minigame/battle state); `colors.h` - UI colours
+- `board_display.h/.cpp` - display construction and init per board, brightness, screen clears
+- `ui_text`, `ui_widgets` - text helpers and shared widgets (bars, boxes, buttons, page navigation, type chips)
+- `main_screen` (render dispatcher), `scene` (sky and biomes), `hud` (header, bars, buttons), `touch_input` (gestures), `power_ui` (dimming, power key, idle saves), `serial_console`
+- screens: `settings_screens`, `keyboard`, `info_card`, `gallery`, `battle_ui`, `minigame_common` / `minigame_ball` / `minigame_coin` / `minigame_bag`
+- drawing: `pet_render`, `sprite_draw`, `ceremony_fx`, `bath`
+- `pet.h` / `pet.cpp` / `pet_storage.cpp` - pet state and logic (stats, evolution, life cycle, streak/bond/medals); `pet_storage.cpp` saves it to NVS as one versioned record
+- `battle.h` / `battle.cpp` - turn battle engine (type chart, damage, wild picks); battles last until one side runs out of HP
+- `sdmon.h` / `sdmon.cpp` - TPK1 (animated) and TPK2 (PMD) sprites + thumbnails; `sd_upload.cpp` - file reception over USB (PUT/LS)
+- `rtcbat.h` / `rtcbat.cpp` - PCF85063 RTC + AXP2101 PMU (battery, brightness, PWR button)
+- `audio_core.cpp` - Game-Boy-style tone synth and SFX queue (non-blocking task); `audio.cpp` (ES8311 + I2S) and `audio_cyd.cpp` (LEDC) are the per-board backends
+- `i18n.h` / `i18n.cpp` - the 8-language string tables
+- `dex.h` - GENERATED (`gen_dex.py`): the 151 table
+- `species.h` - GENERATED (`sprites.py`): fallback sprites, UI icons, colours
+- `boards/board_select.h` - picks the board header from the `BOARD_*` define
+- `boards/board_waveshare_round.h` / `boards/board_cyd_rect.h` - pins, capability flags, display settings, touch calibration
+- `boards/layout.h` (+ `layout_common.h`, `layout_round_466.h`, `layout_rect_320x240.h`) - per-screen layout tables
+- `touch_hal_waveshare.cpp` / `touch_hal_cyd.cpp` - CST9217 / XPT2046 touch
+- `rtcbat_cyd.cpp` - soft clock (NVS), battery stubs and BOOT power key for boards without RTC/PMU
+- `tools/` - pipeline: `dex_data.py` (data), `dex_stats.py`, `dex_names.py` +
   `gen_names.py` (localized names), `gen_dex.py`,
   `sprites.py` (workshop), `pack_pmd.py` / `make_thumbs.py`
   (packers), `pack_bundle.py` (web bundle), `send_sd.py` (SD upload), `touch_log.py`
-- `tools/sdcard/mons/` — the generated .bin files (animated, shiny, PMD, thumbnails)
-- `web/` — the browser installer (ESP Web Tools + Web Serial sprite loader)
+- `tools/sdcard/mons/` - the generated .bin files (animated, shiny, PMD, thumbnails)
+- `web/` - the browser installer (ESP Web Tools + Web Serial sprite loader)
 
 ## Serial console (115200, debug)
 
@@ -344,7 +393,7 @@ To test fast: lower `PET_TICK_MS`, `MINUTES_PER_LEVEL` and `FAREWELL_AGE_MIN` in
 
 ## Roadmap
 
-- **Wild encounters / battle** — designed (see project memory): resolution by
+- **Wild encounters / battle** - designed (see project memory): resolution by
   ATK/DEF/SPD with PMD Attack/Hurt animations, trainer rank as endgame. Style
   still to pick (auto / timing / turn-based).
 - **Soak test** 24–48 h (instrumentation ready: `HEALTH` command/heartbeat).
@@ -353,8 +402,8 @@ To test fast: lower `PET_TICK_MS`, `MINUTES_PER_LEVEL` and `FAREWELL_AGE_MIN` in
 
 ## Community forks
 
-- **[TamaPoke — Expanded](https://github.com/ShadowEnemyx/TamaPoke/tree/tamapoke-expanded-update)** by **ShadowEnemy** — a substantial community fork (different author/branch): a full **type-matchup battle system**, all **151 + shinies** with a **Pokédex / collection box** and daily goals, **6 UI languages**, **ES8311 sound**, starter choice and a one-click web installer. Worth a look. 🎮
-- **[TamaPoke](https://github.com/DylanPDao/TamaPoke)** by **DylanPDao** — another substantial fork: **gym battles** and **LAN battles** between two devices, **movesets**, a **party + box** system, an **EV/IV** stat system, and coverage extended **up to Gen 3 (386)**. Keeps the PMD sprite pipeline. 🏆
+- **[TamaPoke - Expanded](https://github.com/ShadowEnemyx/TamaPoke/tree/tamapoke-expanded-update)** by **ShadowEnemy** - a substantial community fork (different author/branch): a full **type-matchup battle system**, all **151 + shinies** with a **Pokédex / collection box** and daily goals, **6 UI languages**, **ES8311 sound**, starter choice and a one-click web installer. Worth a look. 🎮
+- **[TamaPoke](https://github.com/DylanPDao/TamaPoke)** by **DylanPDao** - another substantial fork: **gym battles** and **LAN battles** between two devices, **movesets**, a **party + box** system, an **EV/IV** stat system, and coverage extended **up to Gen 3 (386)**. Keeps the PMD sprite pipeline. 🏆
 
 ## Credits
 
@@ -362,7 +411,7 @@ All sprites: [PMD SpriteCollab](https://github.com/PMDCollab/SpriteCollab)
 (community, CC BY-NC). Base stats: [PokéAPI](https://pokeapi.co). Pokémon is a ™ of
 Nintendo / Game Freak / The Pokémon Company. Non-commercial, personal-use project.
 Full list in [`CREDITS.md`](CREDITS.md). Version history in
-[`CHANGELOG.md`](CHANGELOG.md) — most of the fixes there came from people
+[`CHANGELOG.md`](CHANGELOG.md) - most of the fixes there came from people
 who built one and reported what they found.
 
 ## License

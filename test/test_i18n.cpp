@@ -1,4 +1,6 @@
 // Consistency of the translations (i18n.cpp).
+
+#pragma region Includes
 #include "framework.h"
 #include "shim/Arduino.h"
 #include "shim/Preferences.h"
@@ -7,35 +9,42 @@
 #include <ctype.h>
 #include <string.h>
 #include <vector>
+#pragma endregion
 
+#pragma region Format signature helpers
 static const char *LANG_NAME[LANG_COUNT] = { "ES", "EN", "FR", "DE", "IT", "PT", "JA", "KO" };
 
+// returned by joinSpecs() for a string without any printf specifier
+#define NO_FORMAT_SIGNATURE "(no format)"
+
 // extracts the printf specifier signature of a string: "%lud" -> "lu"
-static std::vector<std::string> specs(const char *s) {
-  std::vector<std::string> out;
-  const char *p = s;
-  while (*p) {
-    if (*p != '%') { p++; continue; }
-    p++;
-    if (*p == '%') { p++; continue; }   // %% is a literal
-    std::string sig;
-    while (*p && strchr("-+ #0", *p)) p++;             // flags
-    while (*p && isdigit((unsigned char)*p)) p++;      // width
-    if (*p == '.') { p++; while (*p && isdigit((unsigned char)*p)) p++; }
-    while (*p && strchr("lhzjt", *p)) { sig += *p; p++; }  // modifier
-    if (!*p) { out.push_back(sig + "<incompleto>"); break; }
-    sig += *p++;
-    out.push_back(sig);
+static std::vector<std::string> specs(const char *text) {
+  std::vector<std::string> signatures;
+  const char *cursor = text;
+  while (*cursor) {
+    if (*cursor != '%') { cursor++; continue; }
+    cursor++;
+    if (*cursor == '%') { cursor++; continue; }   // %% is a literal
+    std::string signature;
+    while (*cursor && strchr("-+ #0", *cursor)) cursor++;             // flags
+    while (*cursor && isdigit((unsigned char)*cursor)) cursor++;      // width
+    if (*cursor == '.') { cursor++; while (*cursor && isdigit((unsigned char)*cursor)) cursor++; }
+    while (*cursor && strchr("lhzjt", *cursor)) { signature += *cursor; cursor++; }  // modifier
+    if (!*cursor) { signatures.push_back(signature + "<incomplete>"); break; }
+    signature += *cursor++;
+    signatures.push_back(signature);
   }
-  return out;
+  return signatures;
 }
 
-static std::string joinSpecs(const std::vector<std::string> &v) {
-  std::string s;
-  for (size_t i = 0; i < v.size(); i++) { if (i) s += ","; s += "%" + v[i]; }
-  return s.empty() ? "(sin formato)" : s;
+static std::string joinSpecs(const std::vector<std::string> &signatures) {
+  std::string joined;
+  for (size_t i = 0; i < signatures.size(); i++) { if (i) joined += ","; joined += "%" + signatures[i]; }
+  return joined.empty() ? NO_FORMAT_SIGNATURE : joined;
 }
+#pragma endregion
 
+#pragma region Expected signatures from the sketch's calls
 // expected signature of each format string, taken from the sketch's calls
 struct ExpectedFmt { StrId id; const char *sig; };
 static const ExpectedFmt EXPECTED[] = {
@@ -53,7 +62,7 @@ static const ExpectedFmt EXPECTED[] = {
   { S_MISTAKES_FMT,    "%u" },
   { S_FAREWELL_BTN,    "%s" },
   { S_RUNAWAY_BTN,     "%s" },
-  //#region Wild battle formats
+  // Wild battle formats (a comment, not a region: GCC rejects #pragma inside an initializer)
   { S_ROUNDS_FMT,      "%u" },
   { S_DAMAGE_FMT,      "%u,%u" },
   { S_ROUND_SHORT_FMT, "%u" },
@@ -62,25 +71,26 @@ static const ExpectedFmt EXPECTED[] = {
   { S_ATK_GAIN_FMT,    "%u" },
   { S_DEF_GAIN_FMT,    "%u" },
   { S_SPD_GAIN_FMT,    "%u" },
-  //#endregion
 };
 static const int NUM_EXPECTED = (int)(sizeof(EXPECTED) / sizeof(EXPECTED[0]));
 
 static const char *expectedSig(int id) {
   for (int i = 0; i < NUM_EXPECTED; i++)
     if ((int)EXPECTED[i].id == id) return EXPECTED[i].sig;
-  return "(sin formato)";
+  return NO_FORMAT_SIGNATURE;
 }
+#pragma endregion
 
-TEST(i18n, ningun_idioma_tiene_huecos) {
+#pragma region String tables
+TEST(i18n, no_language_has_gaps) {
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     gLang = (Lang)lang;
     for (int id = 0; id < STR_COUNT; id++) {
-      const char *s = T((StrId)id);
+      const char *text = T((StrId)id);
       char where[64];
       snprintf(where, sizeof(where), "[%s][id %d]", LANG_NAME[lang], id);
-      CHECK_MSG(s != NULL, where);
-      if (s) CHECK_MSG(s[0] != 0, std::string("cadena vacia ") + where);
+      CHECK_MSG(text != NULL, where);
+      if (text) CHECK_MSG(text[0] != 0, std::string("empty string ") + where);
     }
   }
   gLang = LANG_DEFAULT;
@@ -90,29 +100,31 @@ TEST(i18n, ningun_idioma_tiene_huecos) {
 // so it DOES support accents, but each one must take ONE byte: the UI
 // centers with strlen(t)*6, and a two-byte UTF-8 character would misalign the
 // label. This test does not forbid high bytes, it forbids UTF-8.
-TEST(i18n, los_acentos_van_en_un_solo_byte_no_en_utf8) {
+TEST(i18n, accents_take_one_byte_not_utf8) {
   // multibyte UTF-8 lead bytes: 0xC2-0xDF, 0xE0-0xEF, 0xF0-0xF4
-  auto arranqueUtf8 = [](unsigned char c) {
-    return (c >= 0xC2 && c <= 0xDF) || (c >= 0xE0 && c <= 0xEF) || (c >= 0xF0 && c <= 0xF4);
+  auto isUtf8LeadByte = [](unsigned char byteValue) {
+    return (byteValue >= 0xC2 && byteValue <= 0xDF) || (byteValue >= 0xE0 && byteValue <= 0xEF) ||
+           (byteValue >= 0xF0 && byteValue <= 0xF4);
   };
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     if (LANG_IS_CJK(lang)) continue;  // CJK is UTF-8 on purpose, with a U8g2 font
     gLang = (Lang)lang;
     for (int id = 0; id < STR_COUNT; id++) {
-      const char *s = T((StrId)id);
-      if (!s) continue;
-      for (const char *c = s; *c; c++) {
-        unsigned char u = (unsigned char)*c;
-        if (u < 128) continue;                 // ASCII: always fine
-        if (!arranqueUtf8(u)) continue;        // lone high byte: it is CP437, fine
+      const char *text = T((StrId)id);
+      if (!text) continue;
+      for (const char *character = text; *character; character++) {
+        unsigned char leadByte = (unsigned char)*character;
+        if (leadByte < 128) continue;              // ASCII: always fine
+        if (!isUtf8LeadByte(leadByte)) continue;   // lone high byte: it is CP437, fine
         // a UTF-8 lead byte is only suspicious if followed by a continuation
         // byte (0x80-0xBF): then it is two glyphs where there should be one
-        unsigned char sig = (unsigned char)*(c + 1);
-        char msg[200];
-        snprintf(msg, sizeof(msg),
-                 "parece UTF-8 (0x%02X 0x%02X) en [%s][id %d]: los acentos van en octal, "
-                 "un byte por caracter, o se descuadra el centrado", u, sig, LANG_NAME[lang], id);
-        CHECK_MSG(!(sig >= 0x80 && sig <= 0xBF), msg);
+        unsigned char nextByte = (unsigned char)*(character + 1);
+        char message[200];
+        snprintf(message, sizeof(message),
+                 "looks like UTF-8 (0x%02X 0x%02X) in [%s][id %d]: accents go in octal, "
+                 "one byte per character, or the centering breaks", leadByte, nextByte,
+                 LANG_NAME[lang], id);
+        CHECK_MSG(!(nextByte >= 0x80 && nextByte <= 0xBF), message);
       }
     }
   }
@@ -120,7 +132,7 @@ TEST(i18n, los_acentos_van_en_un_solo_byte_no_en_utf8) {
 }
 
 // one %u too many or too few in a translation is a garbage read from the stack
-TEST(i18n, los_formatos_coinciden_en_todos_los_idiomas) {
+TEST(i18n, formats_match_across_all_languages) {
   for (int id = 0; id < STR_COUNT; id++) {
     gLang = LANG_EN;
     std::vector<std::string> ref = specs(T((StrId)id));
@@ -128,7 +140,7 @@ TEST(i18n, los_formatos_coinciden_en_todos_los_idiomas) {
       gLang = (Lang)lang;
       std::vector<std::string> got = specs(T((StrId)id));
       char msg[256];
-      snprintf(msg, sizeof(msg), "[%s][id %d] \"%s\": %s en vez de %s (EN)", LANG_NAME[lang], id,
+      snprintf(msg, sizeof(msg), "[%s][id %d] \"%s\": %s instead of %s (EN)", LANG_NAME[lang], id,
                T((StrId)id), joinSpecs(got).c_str(), joinSpecs(ref).c_str());
       CHECK_MSG(got == ref, msg);
     }
@@ -137,22 +149,24 @@ TEST(i18n, los_formatos_coinciden_en_todos_los_idiomas) {
 }
 
 // ...and they also have to match what the sketch passes at each call
-TEST(i18n, los_formatos_cuadran_con_las_llamadas_del_sketch) {
+TEST(i18n, formats_match_the_sketch_calls) {
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     gLang = (Lang)lang;
     for (int id = 0; id < STR_COUNT; id++) {
       std::string got = joinSpecs(specs(T((StrId)id)));
       const char *want = expectedSig(id);
       char msg[256];
-      snprintf(msg, sizeof(msg), "[%s][id %d] \"%s\": %s, se esperaba %s", LANG_NAME[lang], id,
+      snprintf(msg, sizeof(msg), "[%s][id %d] \"%s\": %s, expected %s", LANG_NAME[lang], id,
                T((StrId)id), got.c_str(), want);
       CHECK_MSG(got == want, msg);
     }
   }
   gLang = LANG_DEFAULT;
 }
+#pragma endregion
 
-TEST(i18n, las_medallas_estan_en_todos_los_idiomas) {
+#pragma region Medals and menu fit
+TEST(i18n, medals_exist_in_every_language) {
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     gLang = (Lang)lang;
     // the length caps are in BYTES, which only equal characters with the
@@ -160,16 +174,17 @@ TEST(i18n, las_medallas_estan_en_todos_los_idiomas) {
     // width, which cannot be measured here: that is checked on the board.
     const bool cjk = LANG_IS_CJK(lang);
     for (int m = 0; m < MED_COUNT; m++) {
-      const char *n = medalName(m), *l = medalLabel(m), *d = medalDesc(m);
+      const char *name = medalName(m), *label = medalLabel(m), *description = medalDesc(m);
       char where[64];
-      snprintf(where, sizeof(where), "[%s][medalla %d]", LANG_NAME[lang], m);
-      CHECK_MSG(n && n[0], std::string("medalName vacio ") + where);
-      CHECK_MSG(l && l[0], std::string("medalLabel vacio ") + where);
-      CHECK_MSG(d && d[0], std::string("medalDesc vacio ") + where);
+      snprintf(where, sizeof(where), "[%s][medal %d]", LANG_NAME[lang], m);
+      CHECK_MSG(name && name[0], std::string("empty medalName ") + where);
+      CHECK_MSG(label && label[0], std::string("empty medalLabel ") + where);
+      CHECK_MSG(description && description[0], std::string("empty medalDesc ") + where);
       // the short label goes in one cell of the medal grid
-      if (!cjk && l) CHECK_MSG(strlen(l) <= 6, std::string("etiqueta demasiado larga ") + where + ": " + l);
-      if (!cjk && n) CHECK_MSG(strlen(n) <= 12, std::string("nombre demasiado largo ") + where + ": " + n);
-      if (!cjk && d) CHECK_MSG(strlen(d) <= 16, std::string("descripcion demasiado larga ") + where + ": " + d);
+      if (!cjk && label) CHECK_MSG(strlen(label) <= 6, std::string("label too long ") + where + ": " + label);
+      if (!cjk && name) CHECK_MSG(strlen(name) <= 12, std::string("name too long ") + where + ": " + name);
+      if (!cjk && description)
+        CHECK_MSG(strlen(description) <= 16, std::string("description too long ") + where + ": " + description);
     }
   }
   gLang = LANG_DEFAULT;
@@ -179,7 +194,7 @@ TEST(i18n, las_medallas_estan_en_todos_los_idiomas) {
 // 320 px wide screen, so a row holds 26 characters at most. The On/Off values
 // sit at the right edge of a row next to its label and must stay very short.
 // CJK is skipped for the same reason as the medal caps: bytes are not width.
-TEST(i18n, el_menu_de_ajustes_cabe_en_pantalla) {
+TEST(i18n, settings_menu_fits_on_screen) {
   const StrId menuRowIds[] = { S_MENU_TITLE, S_MENU_AV, S_MENU_TIME, S_MENU_LANG,
                                S_SOUND, S_BRIGHTNESS };
   const StrId toggleValueIds[] = { S_ON, S_OFF };
@@ -190,17 +205,18 @@ TEST(i18n, el_menu_de_ajustes_cabe_en_pantalla) {
       const char *rowText = T(rowId);
       char where[64];
       snprintf(where, sizeof(where), "[%s][id %d]", LANG_NAME[lang], (int)rowId);
-      CHECK_MSG(strlen(rowText) <= 26, std::string("fila de menu demasiado larga ") + where + ": " + rowText);
+      CHECK_MSG(strlen(rowText) <= 26, std::string("menu row too long ") + where + ": " + rowText);
     }
     for (StrId valueId : toggleValueIds) {
       const char *valueText = T(valueId);
       char where[64];
       snprintf(where, sizeof(where), "[%s][id %d]", LANG_NAME[lang], (int)valueId);
-      CHECK_MSG(strlen(valueText) <= 4, std::string("valor On/Off demasiado largo ") + where + ": " + valueText);
+      CHECK_MSG(strlen(valueText) <= 4, std::string("On/Off value too long ") + where + ": " + valueText);
     }
   }
   gLang = LANG_DEFAULT;
 }
+#pragma endregion
 
 #pragma region Wild battle strings and type labels
 // The wild battle block is appended in a fixed order (see i18n.h). Every entry
@@ -209,23 +225,23 @@ TEST(i18n, el_menu_de_ajustes_cabe_en_pantalla) {
 TEST(i18n, wild_battle_strings_are_filled_with_the_expected_formats) {
   struct BattleStringCheck { StrId id; const char *expectedSignature; };
   const BattleStringCheck battleStringChecks[] = {
-    { S_WILD_BATTLE, "(sin formato)" }, { S_WILD_Q, "(sin formato)" },
-    { S_FIGHT, "(sin formato)" }, { S_LATER, "(sin formato)" },
-    { S_RUN_BATTLE, "(sin formato)" }, { S_ATTACK, "(sin formato)" },
-    { S_DODGE, "(sin formato)" }, { S_REST, "(sin formato)" },
-    { S_QUICK_ATTACK, "(sin formato)" }, { S_HEAVY_ATTACK, "(sin formato)" },
-    { S_WIN, "(sin formato)" }, { S_LOSS, "(sin formato)" },
+    { S_WILD_BATTLE, NO_FORMAT_SIGNATURE }, { S_WILD_Q, NO_FORMAT_SIGNATURE },
+    { S_FIGHT, NO_FORMAT_SIGNATURE }, { S_LATER, NO_FORMAT_SIGNATURE },
+    { S_RUN_BATTLE, NO_FORMAT_SIGNATURE }, { S_ATTACK, NO_FORMAT_SIGNATURE },
+    { S_DODGE, NO_FORMAT_SIGNATURE }, { S_REST, NO_FORMAT_SIGNATURE },
+    { S_QUICK_ATTACK, NO_FORMAT_SIGNATURE }, { S_HEAVY_ATTACK, NO_FORMAT_SIGNATURE },
+    { S_WIN, NO_FORMAT_SIGNATURE }, { S_LOSS, NO_FORMAT_SIGNATURE },
     { S_ROUNDS_FMT, "%u" }, { S_DAMAGE_FMT, "%u,%u" }, { S_ROUND_SHORT_FMT, "%u" },
-    { S_HIT_FMT, "%u" }, { S_EFFECTIVE, "(sin formato)" },
-    { S_NOT_EFFECTIVE, "(sin formato)" }, { S_MISSED, "(sin formato)" },
-    { S_DODGED, "(sin formato)" }, { S_ENEMY_DODGED, "(sin formato)" },
-    { S_COUNTER_READY, "(sin formato)" }, { S_NO_REST, "(sin formato)" },
-    { S_RESTED_FMT, "%u" }, { S_GUARD, "(sin formato)" },
-    { S_CATCH_WILD, "(sin formato)" }, { S_LEAVE_WILD, "(sin formato)" },
-    { S_CAUGHT_OK, "(sin formato)" }, { S_ESCAPED, "(sin formato)" },
-    { S_CLOSE_CHANCE, "(sin formato)" },
+    { S_HIT_FMT, "%u" }, { S_EFFECTIVE, NO_FORMAT_SIGNATURE },
+    { S_NOT_EFFECTIVE, NO_FORMAT_SIGNATURE }, { S_MISSED, NO_FORMAT_SIGNATURE },
+    { S_DODGED, NO_FORMAT_SIGNATURE }, { S_ENEMY_DODGED, NO_FORMAT_SIGNATURE },
+    { S_COUNTER_READY, NO_FORMAT_SIGNATURE }, { S_NO_REST, NO_FORMAT_SIGNATURE },
+    { S_RESTED_FMT, "%u" }, { S_GUARD, NO_FORMAT_SIGNATURE },
+    { S_CATCH_WILD, NO_FORMAT_SIGNATURE }, { S_LEAVE_WILD, NO_FORMAT_SIGNATURE },
+    { S_CAUGHT_OK, NO_FORMAT_SIGNATURE }, { S_ESCAPED, NO_FORMAT_SIGNATURE },
+    { S_CLOSE_CHANCE, NO_FORMAT_SIGNATURE },
     { S_ATK_GAIN_FMT, "%u" }, { S_DEF_GAIN_FMT, "%u" }, { S_SPD_GAIN_FMT, "%u" },
-    { S_OK, "(sin formato)" }, { S_CAUGHT_MARK, "(sin formato)" },
+    { S_OK, NO_FORMAT_SIGNATURE }, { S_CAUGHT_MARK, NO_FORMAT_SIGNATURE },
   };
   const int battleStringCount = (int)(sizeof(battleStringChecks) / sizeof(battleStringChecks[0]));
   #pragma region The block is complete and in order
@@ -298,21 +314,22 @@ TEST(i18n, type_names_are_filled_in_every_language) {
 }
 #pragma endregion
 
-TEST(i18n, las_medallas_no_llevan_acentos) {
+#pragma region Medal accents and language persistence
+TEST(i18n, medals_have_no_accents) {
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     if (LANG_IS_CJK(lang)) continue;  // CJK is UTF-8 with a U8g2 font
     gLang = (Lang)lang;
     for (int m = 0; m < MED_COUNT; m++) {
-      const char *tab[3] = { medalName(m), medalLabel(m), medalDesc(m) };
+      const char *medalTexts[3] = { medalName(m), medalLabel(m), medalDesc(m) };
       for (int t = 0; t < 3; t++)
-        for (const char *c = tab[t]; c && *c; c++)
-          CHECK_MSG((unsigned char)*c < 128, std::string("no ASCII: ") + tab[t]);
+        for (const char *character = medalTexts[t]; character && *character; character++)
+          CHECK_MSG((unsigned char)*character < 128, std::string("not ASCII: ") + medalTexts[t]);
     }
   }
   gLang = LANG_DEFAULT;
 }
 
-TEST(i18n, el_idioma_se_guarda_y_se_recupera) {
+TEST(i18n, language_is_saved_and_restored) {
   mockNvsReset();
   setLang(LANG_DE);
   CHECK_EQ((int)gLang, (int)LANG_DE);
@@ -322,7 +339,7 @@ TEST(i18n, el_idioma_se_guarda_y_se_recupera) {
   gLang = LANG_DEFAULT;
 }
 
-TEST(i18n, sin_ajuste_guardado_arranca_en_el_idioma_por_defecto) {
+TEST(i18n, without_a_saved_setting_starts_in_the_default_language) {
   mockNvsReset();
   gLang = LANG_IT;
   loadLang();
@@ -330,19 +347,19 @@ TEST(i18n, sin_ajuste_guardado_arranca_en_el_idioma_por_defecto) {
   gLang = LANG_DEFAULT;
 }
 
-TEST(i18n, un_idioma_invalido_en_la_nvs_no_rompe_nada) {
+TEST(i18n, invalid_language_in_nvs_breaks_nothing) {
   mockNvsReset();
-  Preferences p;
-  p.begin("tamapoke", false);
-  p.putUChar("lang", 200);  // corrupt value
-  p.end();
+  Preferences preferences;
+  preferences.begin("tamapoke", false);
+  preferences.putUChar("lang", 200);  // corrupt value
+  preferences.end();
   gLang = LANG_ES;
   loadLang();
   CHECK_EQ((int)gLang, (int)LANG_DEFAULT);
   gLang = LANG_DEFAULT;
 }
 
-TEST(i18n, setLang_rechaza_valores_fuera_de_rango) {
+TEST(i18n, setLang_rejects_out_of_range_values) {
   mockNvsReset();
   setLang(LANG_FR);
   setLang((Lang)LANG_COUNT);
@@ -351,3 +368,4 @@ TEST(i18n, setLang_rechaza_valores_fuera_de_rango) {
   CHECK_EQ((int)gLang, (int)LANG_FR);
   gLang = LANG_DEFAULT;
 }
+#pragma endregion

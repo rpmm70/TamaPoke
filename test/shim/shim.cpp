@@ -1,17 +1,22 @@
+// Host implementations of the Arduino, audio and Preferences shims.
+
+#pragma region Includes
 #include "Arduino.h"
 #include "Preferences.h"
 #include "../../audio.h"
 #include <map>
 #include <vector>
 #include <stdarg.h>
+#pragma endregion
 
-// ---------------- fake clock ----------------
+#pragma region Fake clock
 static uint32_t gMillis = 0;
 uint32_t millis() { return gMillis; }
 void mockSetMillis(uint32_t ms) { gMillis = ms; }
 void mockAdvanceMillis(uint32_t ms) { gMillis += ms; }
+#pragma endregion
 
-// ---------------- deterministic random ----------------
+#pragma region Deterministic random
 // Own LCG: reproducible across platforms (does not depend on rand()).
 static uint32_t gSeed = 12345;
 static bool gForced = false;
@@ -36,8 +41,9 @@ long random(long howsmall, long howbig) {
   if (howsmall >= howbig) return howsmall;
   return howsmall + random(howbig - howsmall);
 }
+#pragma endregion
 
-// ---------------- Serial ----------------
+#pragma region Serial
 MockSerial Serial;
 static bool gQuiet = true;
 void mockSerialSilence(bool quiet) { gQuiet = quiet; }
@@ -53,15 +59,18 @@ int MockSerial::printf(const char *fmt, ...) {
 void MockSerial::print(const char *s) { if (!gQuiet) fputs(s, stdout); }
 void MockSerial::println(const char *s) { if (!gQuiet) printf("%s\n", s); }
 void MockSerial::begin(unsigned long) {}
+#pragma endregion
 
-// ---------------- audio (stubs) ----------------
+#pragma region Audio stubs
 static bool gAudioOn = true;
 void audioBegin() {}
 void sfxPlay(uint8_t) {}
 void audioSetEnabled(bool on) { gAudioOn = on; }
 bool audioEnabled() { return gAudioOn; }
+void audioSetSleeping(bool) {}
+#pragma endregion
 
-// ---------------- in-memory Preferences ----------------
+#pragma region In-memory Preferences store
 typedef std::map<std::string, std::vector<uint8_t> > KV;
 static std::map<std::string, KV> gStore;
 
@@ -70,7 +79,9 @@ size_t mockNvsKeyCount(const char *ns) {
   std::map<std::string, KV>::iterator it = gStore.find(ns);
   return it == gStore.end() ? 0 : it->second.size();
 }
+#pragma endregion
 
+#pragma region Preferences namespace and key management
 bool Preferences::begin(const char *name, bool readOnly) {
   ns_ = name;
   ro_ = readOnly;
@@ -92,7 +103,9 @@ bool Preferences::remove(const char *key) {
   if (!open_ || ro_) return false;
   return gStore[ns_].erase(key) > 0;
 }
+#pragma endregion
 
+#pragma region Preferences raw and scalar helpers
 static size_t rawPut(std::map<std::string, KV> &store, const std::string &ns, bool open,
                      bool ro, const char *k, const void *v, size_t len) {
   if (!open || ro) return 0;
@@ -118,7 +131,9 @@ static T getScalar(std::map<std::string, KV> &store, const std::string &ns, bool
   memcpy(&out, &it->second[0], sizeof(T));
   return out;
 }
+#pragma endregion
 
+#pragma region Preferences writers
 size_t Preferences::putBool(const char *k, bool v)       { return putScalar(gStore, ns_, open_, ro_, k, (uint8_t)(v ? 1 : 0)); }
 size_t Preferences::putUChar(const char *k, uint8_t v)   { return putScalar(gStore, ns_, open_, ro_, k, v); }
 size_t Preferences::putChar(const char *k, int8_t v)     { return putScalar(gStore, ns_, open_, ro_, k, v); }
@@ -132,7 +147,9 @@ size_t Preferences::putBytes(const char *k, const void *v, size_t len) {
 size_t Preferences::putString(const char *k, const char *v) {
   return rawPut(gStore, ns_, open_, ro_, k, v, strlen(v) + 1);
 }
+#pragma endregion
 
+#pragma region Preferences readers
 bool Preferences::getBool(const char *k, bool def)         { return getScalar<uint8_t>(gStore, ns_, open_, k, def ? 1 : 0) != 0; }
 uint8_t Preferences::getUChar(const char *k, uint8_t def)  { return getScalar(gStore, ns_, open_, k, def); }
 int8_t Preferences::getChar(const char *k, int8_t def)     { return getScalar(gStore, ns_, open_, k, def); }
@@ -141,14 +158,22 @@ uint16_t Preferences::getUShort(const char *k, uint16_t def){ return getScalar(g
 int32_t Preferences::getInt(const char *k, int32_t def)    { return getScalar(gStore, ns_, open_, k, def); }
 uint32_t Preferences::getUInt(const char *k, uint32_t def) { return getScalar(gStore, ns_, open_, k, def); }
 
+size_t Preferences::getBytesLength(const char *key) {
+  if (!open_) return 0;
+  KV &kv = gStore[ns_];
+  KV::iterator it = kv.find(key);
+  return it == kv.end() ? 0 : it->second.size();
+}
+
 size_t Preferences::getBytes(const char *k, void *buf, size_t maxLen) {
   if (!open_) return 0;
   KV &kv = gStore[ns_];
   KV::iterator it = kv.find(k);
   if (it == kv.end()) return 0;   // like the real NVS: leaves the buffer untouched
-  size_t n = it->second.size() < maxLen ? it->second.size() : maxLen;
-  memcpy(buf, &it->second[0], n);
-  return n;
+  size_t storedLength = it->second.size();
+  if (storedLength > maxLen) return 0;  // like the real NVS: a too-small buffer reads nothing
+  if (storedLength) memcpy(buf, &it->second[0], storedLength);
+  return storedLength;
 }
 
 size_t Preferences::getString(const char *k, char *buf, size_t maxLen) {
@@ -157,7 +182,8 @@ size_t Preferences::getString(const char *k, char *buf, size_t maxLen) {
   KV::iterator it = kv.find(k);
   if (it == kv.end()) { buf[0] = 0; return 0; }
   size_t n = it->second.size() < maxLen ? it->second.size() : maxLen - 1;
-  memcpy(buf, &it->second[0], n);
+  if (n) memcpy(buf, &it->second[0], n);
   buf[n < maxLen ? n : maxLen - 1] = 0;
   return strlen(buf);
 }
+#pragma endregion

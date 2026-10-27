@@ -25,7 +25,8 @@ e.g. `python3 tools/pack_pmd.py 7 25`.)
 
 ## Binary formats
 
-Defined in the header of each packer and parsed in `sdmon.cpp`:
+TPK2, TPTH and TPAK are defined in `tools/sprite_formats.py` (shared by the
+packers) and parsed in `sdmon.cpp`:
 
 - **TPK1** (`SdMon`): `"TPK1"`, `u16 w,h,frames,frameMs`, `u16 palCount`,
   `u16 pal[]` (RGB565), `u8 data[frames*w*h]` (palette index, `0xFF`

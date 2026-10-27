@@ -1,117 +1,55 @@
-#include "audio.h"
-#include "boards/board_select.h"
-
-#if BOARD_CYD_RECT
-
-#include <Arduino.h>
-#include <Preferences.h>
-
-// The CYD has no ES8311 codec and no I2S: just a speaker pin (SPEAKER_PIN).
-// Instead of PCM, square tones via PWM (LEDC), with the SAME notes as the I2S
-// backend (table copied from audio.cpp: if it is changed there, change it here).
-// Same structure as the original: sfxPlay() only queues an id and a FreeRTOS
-// task plays the notes, so the game loop never blocks.
+// Audio backend: square tones via PWM (LEDC) on a bare speaker pin
+// (SPEAKER_PIN), for boards without a codec (the CYD). The note tables, queue
+// and task are in audio_core.cpp, shared with the I2S backend.
 //
 // Requires ESP32 Arduino core 3.x (per-pin ledcAttach/ledcWriteTone API),
-// the same requirement ESP_I2S.h already imposes on the original backend.
-//
-// TODO(addon): if an I2S DAC/amplifier is added on the free pins, this is the
-// only file to replace; audio.h does not change.
+// the same requirement ESP_I2S.h already imposes on the I2S backend.
 
-namespace {
-
-struct Note { uint16_t f, ms; };  // f==0 -> silence of ms milliseconds
-const Note N_TAP[]    = {{880, 35}};
-const Note N_EAT[]    = {{660, 45}, {0, 12}, {660, 45}};
-const Note N_PLAY[]   = {{784, 45}, {988, 60}};
-const Note N_HEART[]  = {{1047, 55}, {1319, 90}};
-const Note N_HATCH[]  = {{523, 80}, {659, 80}, {784, 110}, {1047, 170}};
-const Note N_EVOLVE[] = {{523, 80}, {659, 80}, {784, 80}, {1047, 90}, {1319, 230}};
-const Note N_MEDAL[]  = {{784, 70}, {0, 25}, {784, 70}, {0, 25}, {1047, 200}};
-const Note N_DENY[]   = {{300, 110}, {200, 170}};
-const Note N_BYE[]    = {{784, 150}, {659, 150}, {523, 280}};
-const Note N_LEVEL[]  = {{784, 70}, {1047, 130}};
-#pragma region Wild battle and ball game notes
-// Kept under 400 ms each so a battle turn or a bounce never queues up a backlog.
-// Same notes as audio.cpp: if they change there, change them here.
-const Note N_WILD_APPEAR[] = {{392, 50}, {523, 50}, {0, 15}, {784, 60}, {1047, 110}};
-const Note N_BATTLE_HIT[]  = {{1175, 35}, {1568, 45}};
-const Note N_BATTLE_HURT[] = {{300, 60}, {190, 80}};
-const Note N_BATTLE_WIN[]  = {{659, 60}, {784, 60}, {988, 80}, {1319, 170}};
-const Note N_BATTLE_LOSS[] = {{392, 110}, {330, 110}, {196, 170}};
-const Note N_CATCH_OK[]    = {{784, 55}, {988, 65}, {1319, 180}};
-const Note N_CATCH_FAIL[]  = {{523, 80}, {392, 80}, {0, 15}, {247, 180}};
-const Note N_BALL_BOUNCE[] = {{820, 20}, {620, 25}};
-const Note N_BALL_MISS[]   = {{360, 60}, {210, 100}};
+#pragma region Includes
+#include "audio_backend.h"
 #pragma endregion
 
-struct SfxDef { const Note *n; uint8_t len; };
-const SfxDef SFX[SFX_COUNT] = {
-  {N_TAP, 1}, {N_EAT, 3}, {N_PLAY, 2}, {N_HEART, 2}, {N_HATCH, 4},
-  {N_EVOLVE, 5}, {N_MEDAL, 5}, {N_DENY, 2}, {N_BYE, 3}, {N_LEVEL, 2},
-  {N_WILD_APPEAR, 5}, {N_BATTLE_HIT, 2}, {N_BATTLE_HURT, 2}, {N_BATTLE_WIN, 4},
-  {N_BATTLE_LOSS, 3}, {N_CATCH_OK, 3}, {N_CATCH_FAIL, 4}, {N_BALL_BOUNCE, 2},
-  {N_BALL_MISS, 2},
-};
+#if BOARD_AUDIO_LEDC
 
-bool gReady = false;
-bool gOn = true;
-bool gSleeping = false;
-QueueHandle_t gQ = nullptr;
+#pragma region Backend includes
+#include <Arduino.h>
+#pragma endregion
 
-void audioTask(void *) {
-  uint8_t id;
-  for (;;) {
-    if (xQueueReceive(gQ, &id, portMAX_DELAY) && gOn && !gSleeping && id < SFX_COUNT) {
-      const SfxDef &d = SFX[id];
-      for (uint8_t i = 0; i < d.len; i++) {
-        if (d.n[i].f) ledcWriteTone(SPEAKER_PIN, d.n[i].f);
-        else ledcWriteTone(SPEAKER_PIN, 0);
-        vTaskDelay(pdMS_TO_TICKS(d.n[i].ms));
-      }
-      ledcWriteTone(SPEAKER_PIN, 0);  // silence when the effect ends
-    }
-  }
-}
+#pragma region Configuration
+#define LEDC_BASE_FREQUENCY_HZ 2000
+#define LEDC_RESOLUTION_BITS 10
+#pragma endregion
 
-}  // namespace
+#pragma region State
+static bool speakerAttached = false;
+#pragma endregion
 
-void audioBegin() {
-  if (!ledcAttach(SPEAKER_PIN, 2000, 10)) {
-    Serial.println("LEDC audio fallo (audio off)");
-    return;
+#pragma region Backend hooks
+bool audioBackendBegin() {
+  if (!ledcAttach(SPEAKER_PIN, LEDC_BASE_FREQUENCY_HZ, LEDC_RESOLUTION_BITS)) {
+    Serial.println("LEDC audio failed (audio off)");
+    return false;
   }
   ledcWriteTone(SPEAKER_PIN, 0);
-
-  Preferences p;
-  p.begin("tamapoke", true);
-  gOn = p.getBool("snd", true);
-  p.end();
-
-  gQ = xQueueCreate(8, sizeof(uint8_t));
-  gReady = true;
-  xTaskCreatePinnedToCore(audioTask, "audio", 3072, nullptr, 1, nullptr, 0);
-  sfxPlay(SFX_HATCH);  // startup jingle (confirms audio works)
+  speakerAttached = true;
+  return true;
 }
 
-void sfxPlay(uint8_t id) {
-  if (gReady && gOn && !gSleeping && gQ) xQueueSend(gQ, &id, 0);  // dropped if the queue is full
+// frequency 0 writes a 0 Hz tone, which is silence
+void audioBackendPlayNote(uint16_t frequencyHz, uint16_t durationMs) {
+  ledcWriteTone(SPEAKER_PIN, frequencyHz);
+  vTaskDelay(pdMS_TO_TICKS(durationMs));
 }
 
-void audioSetEnabled(bool on) {
-  gOn = on;
-  if (!on && gReady) ledcWriteTone(SPEAKER_PIN, 0);
-  Preferences p;
-  p.begin("tamapoke", false);
-  p.putBool("snd", on);
-  p.end();
-}
-bool audioEnabled() { return gOn; }
-
-void audioSetSleeping(bool sleeping) {
-  if (gSleeping == sleeping) return;
-  gSleeping = sleeping;
-  if (sleeping && gReady) ledcWriteTone(SPEAKER_PIN, 0);
+// silence when the effect ends
+void audioBackendSilence() {
+  ledcWriteTone(SPEAKER_PIN, 0);
 }
 
-#endif  // BOARD_CYD_RECT
+// muted or asleep: stop any tone in progress
+void audioBackendPowerChanged(bool active) {
+  if (!active && speakerAttached) ledcWriteTone(SPEAKER_PIN, 0);
+}
+#pragma endregion
+
+#endif  // BOARD_AUDIO_LEDC

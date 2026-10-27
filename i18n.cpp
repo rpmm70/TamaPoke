@@ -1,12 +1,34 @@
+#pragma region Includes
 #include "i18n.h"
-#include "pet.h"        // MED_COUNT
+#include "medals.h"        // MED_COUNT
+#include "dex.h"           // TYPE_COUNT
+#include "nvs_settings.h"  // NVS_NAMESPACE
 #include <Preferences.h>
+#pragma endregion
 
+#pragma region Active language
 Lang gLang = LANG_DEFAULT;
+#pragma endregion
 
-// String table [language][id]. No accents or n-tildes: the firmware's bitmap
-// font does not have them (that is why the Spanish already read "Esta", "bano", etc.).
-static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
+#pragma region Compile-time table checks
+// A [LANG_COUNT][N] table with a row that is too short still compiles: the
+// missing slots become null pointers. This catches it at build time.
+template <size_t ROW_COUNT, size_t COLUMN_COUNT>
+constexpr bool everyTableEntryPresent(const char *const (&table)[ROW_COUNT][COLUMN_COUNT]) {
+  for (size_t row = 0; row < ROW_COUNT; row++)
+    for (size_t column = 0; column < COLUMN_COUNT; column++)
+      if (table[row][column] == nullptr) return false;
+  return true;
+}
+
+static_assert(TYPE_NAME_COUNT == TYPE_COUNT, "TYPE_NAME_COUNT (i18n.h) must equal TYPE_COUNT (dex.h)");
+#pragma endregion
+
+#pragma region UI strings
+// String table [language][id]. Latin languages use the CP437 bitmap font:
+// accents, umlauts and n-tildes go as single octal bytes (\240 a-acute, \244
+// n-tilde...), never UTF-8 (see i18n.h). JA/KO are UTF-8 for the U8g2 font.
+static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
   // ---------------- ES ----------------
   {
     "Est\240 evolucionando!", "Nam nam!", "Le gusta!", "Tiene hambre!", "Necesita un ba\244o!",
@@ -39,7 +61,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Sonido", "Brillo", "On", "Off",
     //#region ES wild battle strings
     "COMBATE SALVAJE", "Combate salvaje?", "LUCHAR", "Luego", "HUIR",
-    "Atacar", "Evadir", "Curar", "R\240pido", "Fuerte",
+    "Atacar", "Evadir", "Curar", "R\240pido", "Fuerte", "Normal",
     "VICTORIA!", "DERROTA", "%u rondas", "Hecho %u / Recibido %u", "R%u",
     "Atac\242 por %u", "Efectivo", "D\202bil", "Fall\242!", "Esquivado", "Rival Esquiv\242",
     "Contra Listo", "Sin Descanso", "Cura +%u PS", "Guardia",
@@ -83,7 +105,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Sound", "Brightness", "On", "Off",
     //#region EN wild battle strings
     "WILD BATTLE", "Wild battle?", "FIGHT", "Later", "RUN",
-    "Attack", "Dodge", "Rest", "Quick", "Heavy",
+    "Attack", "Dodge", "Rest", "Quick", "Heavy", "Normal",
     "WIN!", "LOSS", "%u rounds", "Dealt %u / Taken %u", "R%u",
     "Attacked for %u", "Effective", "Weak", "Missed!", "Dodged", "Enemy Dodged",
     "Counter Ready", "No Rest Left", "Rest +%u HP", "Guard",
@@ -127,7 +149,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Son", "Luminosit\202", "On", "Off",
     //#region FR wild battle strings
     "COMBAT SAUVAGE", "Combat sauvage?", "COMBAT", "Apr\212s", "FUIR",
-    "Attaque", "Esquive", "Repos", "Rapide", "Fort",
+    "Attaque", "Esquive", "Repos", "Rapide", "Fort", "Normal",
     "VICTOIRE!", "D\220FAITE", "%u tours", "Inflig\202s %u / Re\207us %u", "M%u",
     "Attaque %u", "Efficace", "Faible", "Rat\202!", "Esquiv\202", "Ennemi Esquive",
     "Contre Pr\210t", "Plus De Repos", "Soin +%u PV", "Garde",
@@ -176,7 +198,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Ton", "Helligkeit", "An", "Aus",
     //#region DE wild battle strings
     "WILDER KAMPF", "Wilder Kampf?", "KAMPF", "Sp\204ter", "FLIEHEN",
-    "Angriff", "Ducken", "Ruhen", "Schnell", "Stark",
+    "Angriff", "Ducken", "Ruhen", "Schnell", "Stark", "Normal",
     "SIEG!", "NIEDERLAGE", "%u Runden", "Verteilt %u / Erlitten %u", "R%u",
     "Angriff: %u", "Effektiv", "Schwach", "Verfehlt!", "Ausgewichen", "Gegner Wich Aus",
     "Konter Bereit", "Keine Ruhe", "Heilung +%u KP", "Schutz",
@@ -220,7 +242,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Suono", "Luminosit\205", "On", "Off",
     //#region IT wild battle strings
     "LOTTA SELVATICA", "Lotta selvatica?", "LOTTA", "Dopo", "FUGGI",
-    "Attacca", "Schiva", "Riposa", "Rapido", "Forte",
+    "Attacca", "Schiva", "Riposa", "Rapido", "Forte", "Normale",
     "VITTORIA!", "SCONFITTA", "%u turni", "Inflitti %u / Subiti %u", "T%u",
     "Attacco: %u", "Efficace", "Debole", "Mancato!", "Schivato", "Nemico Schiva",
     "Contrattacco", "Niente Riposo", "Cura +%u PS", "Guardia",
@@ -264,7 +286,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "Som", "Brilho", "On", "Off",
     //#region PT wild battle strings
     "BATALHA SELVAGEM", "Batalha selvagem?", "LUTAR", "Depois", "FUGIR",
-    "Atacar", "Desviar", "Curar", "R\240pido", "Forte",
+    "Atacar", "Desviar", "Curar", "R\240pido", "Forte", "Normal",
     "VITORIA!", "DERROTA", "%u rondas", "Causado %u / Sofrido %u", "R%u",
     "Atacou por %u", "Efetivo", "Fraco", "Falhou!", "Desviou", "Rival Desviou",
     "Contra Pronto", "Sem Descanso", "Cura +%u PS", "Guarda",
@@ -333,7 +355,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "おと", "あかるさ", "オン", "オフ",
     //#region JA wild battle strings
     "やせいのバトル", "やせいのバトル？", "たたかう", "あとで", "にげる",
-    "こうげき", "よける", "やすむ", "クイック", "パワー",
+    "こうげき", "よける", "やすむ", "クイック", "パワー", "ノーマル",
     "かった！", "まけた...", "%uターン", "あたえた %u / うけた %u", "T%u",
     "こうげき %u", "こうかばつぐん！", "いまひとつ...", "はずれた！", "よけた", "あいてがよけた！",
     "カウンターOK", "もうやすめない", "かいふく +%u HP", "ガード",
@@ -382,7 +404,7 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     "소리", "밝기", "켬", "끔",
     //#region KO wild battle strings
     "야생 배틀", "야생 배틀?", "싸운다", "나중에", "도망",
-    "공격", "회피", "휴식", "빠르게", "강하게",
+    "공격", "회피", "휴식", "빠르게", "강하게", "보통",
     "승리!", "패배...", "%u라운드", "내 공격 %u / 상대 공격 %u", "R%u",
     "공격 %u", "효과 굉장!", "효과 별로...", "빗나갔다!", "피했다", "상대가 피했다!",
     "반격 준비", "휴식 불가", "회복 +%u HP", "가드",
@@ -395,9 +417,12 @@ static const char *const STRINGS[LANG_COUNT][STR_COUNT] = {
     //#endregion
   },
 };
+static_assert(everyTableEntryPresent(STRINGS), "a STRINGS row is missing entries");
+#pragma endregion
 
+#pragma region Medal names
 // Medal names in their three lengths [language][medal].
-static const char *const MED_NAME[LANG_COUNT][MED_COUNT] = {
+static constexpr const char *MED_NAME[LANG_COUNT][MED_COUNT] = {
   { "Nv.10", "Nv.25", "Nv.50", "COMIDA", "RACHA 7", "VINCULO", "FORMA TOPE", "EN FORMA" },
   { "Lv.10", "Lv.25", "Lv.50", "FOOD", "7 STREAK", "BOND", "TOP FORM", "IN SHAPE" },
   { "Niv.10", "Niv.25", "Niv.50", "PLAT", "SERIE 7", "LIEN", "FORME MAX", "EN FORME" },
@@ -407,7 +432,7 @@ static const char *const MED_NAME[LANG_COUNT][MED_COUNT] = {
   { "Lv.10", "Lv.25", "Lv.50", "ごはん", "7にち", "なかよし", "さいしゅう", "げんき" },
   { "Lv.10", "Lv.25", "Lv.50", "음식", "연속 7일", "유대", "최고 컨디션", "건강함" },
 };
-static const char *const MED_LBL[LANG_COUNT][MED_COUNT] = {
+static constexpr const char *MED_LBL[LANG_COUNT][MED_COUNT] = {
   { "Nv10", "Nv25", "Nv50", "COMIDA", "7DIAS", "VINC", "TOPE", "SANO" },
   { "Lv10", "Lv25", "Lv50", "FOOD", "7DAYS", "BOND", "TOP", "FIT" },
   { "Niv10", "Niv25", "Niv50", "PLAT", "7JRS", "LIEN", "MAX", "FORME" },
@@ -417,7 +442,7 @@ static const char *const MED_LBL[LANG_COUNT][MED_COUNT] = {
   { "Lv10", "Lv25", "Lv50", "ごはん", "7にち", "なかよし", "しんか", "げんき" },
   { "Lv10", "Lv25", "Lv50", "음식", "7일", "유대", "최고", "건강" },
 };
-static const char *const MED_DSC[LANG_COUNT][MED_COUNT] = {
+static constexpr const char *MED_DSC[LANG_COUNT][MED_COUNT] = {
   { "NIVEL 10", "NIVEL 25", "NIVEL 50", "COMIDA FAV",
     "RACHA 7 DIAS", "VINCULO MAX", "FORMA FINAL", "EN FORMA" },
   { "LEVEL 10", "LEVEL 25", "LEVEL 50", "FOOD FOUND",
@@ -435,12 +460,16 @@ static const char *const MED_DSC[LANG_COUNT][MED_COUNT] = {
   { "레벨 10", "레벨 25", "레벨 50", "음식 발견",
     "연속 7일", "유대감 최대", "최종 진화", "건강함" },
 };
+static_assert(everyTableEntryPresent(MED_NAME), "a MED_NAME row is missing entries");
+static_assert(everyTableEntryPresent(MED_LBL), "a MED_LBL row is missing entries");
+static_assert(everyTableEntryPresent(MED_DSC), "a MED_DSC row is missing entries");
+#pragma endregion
 
 #pragma region Battle type labels
 // Short uppercase battle type labels [language][type], index = TYPE_* in dex.h
 // (TYPE_NONE first, always ""). Latin labels stay at 8 characters or fewer and
 // use CP437 single-byte capitals (\220 E-acute, \216 A-umlaut, \200 C-cedilla).
-static const char *const TYPE_NAMES[LANG_COUNT][TYPE_NAME_COUNT] = {
+static constexpr const char *TYPE_NAMES[LANG_COUNT][TYPE_NAME_COUNT] = {
   { "", "NORMAL", "FUEGO", "AGUA", "ELECTR", "PLANTA", "HIELO", "LUCHA", "VENENO", "TIERRA",
     "VOLADOR", "PSIQUICO", "BICHO", "ROCA", "FANTASMA", "DRAGON", "SINIEST", "ACERO", "HADA" },
   { "", "NORMAL", "FIRE", "WATER", "ELECTRIC", "GRASS", "ICE", "FIGHTING", "POISON", "GROUND",
@@ -458,12 +487,15 @@ static const char *const TYPE_NAMES[LANG_COUNT][TYPE_NAME_COUNT] = {
   { "", "노말", "불꽃", "물", "전기", "풀", "얼음", "격투", "독", "땅",
     "비행", "에스퍼", "벌레", "바위", "고스트", "드래곤", "악", "강철", "페어리" },
 };
+static_assert(everyTableEntryPresent(TYPE_NAMES), "a TYPE_NAMES row is missing entries");
 #pragma endregion
 
+#pragma region Text lookup
 const char *T(StrId id) { return STRINGS[gLang][id]; }
 const char *medalName(int i)  { return MED_NAME[gLang][i]; }
 const char *medalLabel(int i) { return MED_LBL[gLang][i]; }
 const char *medalDesc(int i)  { return MED_DSC[gLang][i]; }
+#pragma endregion
 
 #pragma region Battle type label lookup
 const char *typeName(uint8_t type) {
@@ -472,19 +504,21 @@ const char *typeName(uint8_t type) {
 }
 #pragma endregion
 
+#pragma region Persisted language
 void loadLang() {
-  Preferences p;
-  p.begin("tamapoke", true);  // read-only
-  uint8_t v = p.getUChar("lang", LANG_DEFAULT);
-  p.end();
-  gLang = (v < LANG_COUNT) ? (Lang)v : LANG_DEFAULT;
+  Preferences preferences;
+  preferences.begin(NVS_NAMESPACE, true);  // read-only
+  uint8_t storedLang = preferences.getUChar("lang", LANG_DEFAULT);
+  preferences.end();
+  gLang = (storedLang < LANG_COUNT) ? (Lang)storedLang : LANG_DEFAULT;
 }
 
 void setLang(Lang l) {
   if (l >= LANG_COUNT) return;
   gLang = l;
-  Preferences p;
-  p.begin("tamapoke", false);
-  p.putUChar("lang", (uint8_t)l);
-  p.end();
+  Preferences preferences;
+  preferences.begin(NVS_NAMESPACE, false);
+  preferences.putUChar("lang", (uint8_t)l);
+  preferences.end();
 }
+#pragma endregion

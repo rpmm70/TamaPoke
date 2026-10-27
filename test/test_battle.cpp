@@ -127,7 +127,7 @@ TEST(battle, wild_species_uses_hatchable_non_legendary_pool) {
     for (uint8_t phase = 0; phase < 4; phase++) {
       int16_t dex = pickWildSpecies((uint8_t)roll, phase);
       CHECK_RANGE(dex, 1, DEX_COUNT);
-      CHECK(DEX_TBL[dex].rarity == R_COMUN || DEX_TBL[dex].rarity == R_RARO);
+      CHECK(DEX_TBL[dex].rarity == R_COMMON || DEX_TBL[dex].rarity == R_RARE);
     }
   }
 }
@@ -137,7 +137,7 @@ TEST(battle, night_wild_species_prefer_ghost_poison_bug) {
     int16_t dex = pickWildSpecies((uint8_t)roll, 3);
     CHECK_RANGE(dex, 1, DEX_COUNT);
     const DexEntry &entry = DEX_TBL[dex];
-    CHECK(entry.rarity == R_COMUN || entry.rarity == R_RARO);
+    CHECK(entry.rarity == R_COMMON || entry.rarity == R_RARE);
     CHECK_MSG(dexEntryHasType(entry, TYPE_GHOST) || dexEntryHasType(entry, TYPE_POISON) ||
               dexEntryHasType(entry, TYPE_BUG), DEX_TBL[dex].name);
   }
@@ -197,7 +197,7 @@ TEST(battle, runtime_starts_with_scaled_hp) {
   BattleRuntime battle = beginBattleRuntime({ 0, 60, 40, 50, 10 },
                                             { 0, 58, 42, 48, 10 });
 
-  CHECK_EQ(battle.round, (uint8_t)0);
+  CHECK_EQ(battle.round, (uint16_t)0);
   CHECK_EQ(battle.playerMaxHp, (uint16_t)(30 + 10 * 5 + 40));
   CHECK_EQ(battle.enemyMaxHp, (uint16_t)(30 + 10 * 5 + 42));
   CHECK_EQ(battle.playerHp, battle.playerMaxHp);
@@ -223,7 +223,7 @@ TEST(battle, attack_steps_one_round_and_avoids_normal_one_hit) {
 
   BattleTurnResult turn = stepBattle(battle, BATTLE_ATTACK, 50);
 
-  CHECK_EQ(battle.round, (uint8_t)1);
+  CHECK_EQ(battle.round, (uint16_t)1);
   CHECK(turn.playerDamage > 0);
   CHECK(battle.enemyHp > 0);
   CHECK(!turn.battleEnded);
@@ -383,7 +383,7 @@ TEST(battle, counter_damage_still_uses_turn_cap) {
   CHECK(battle.enemyHp > 0);
 }
 
-TEST(battle, turn_battle_ends_at_round_limit_by_remaining_hp) {
+TEST(battle, turn_battle_has_no_round_limit) {
   BattleRuntime battle = beginBattleRuntime({ 0, 1, 250, 50, 1 },
                                             { 0, 1, 250, 40, 1 });
 
@@ -392,9 +392,21 @@ TEST(battle, turn_battle_ends_at_round_limit_by_remaining_hp) {
     turn = stepBattle(battle, BATTLE_DODGE, 20);
   }
 
-  CHECK(turn.battleEnded);
-  CHECK(turn.playerWon);
-  CHECK_EQ(battle.round, (uint8_t)20);
+  CHECK_MSG(!turn.battleEnded, "20 rounds with both sides standing no longer ends the battle");
+  CHECK(battle.playerHp > 0);
+  CHECK(battle.enemyHp > 0);
+  CHECK_EQ(battle.round, (uint16_t)20);
+}
+
+TEST(battle, round_counter_does_not_wrap_past_255) {
+  BattleRuntime battle = beginBattleRuntime({ 0, 1, 250, 50, 1 },
+                                            { 0, 1, 250, 40, 1 });
+  battle.round = 300;
+
+  BattleTurnResult turn = stepBattle(battle, BATTLE_DODGE, 20);
+
+  CHECK(!turn.battleEnded);
+  CHECK_EQ(battle.round, (uint16_t)301);
 }
 
 TEST(battle, step_after_end_does_nothing) {
@@ -407,7 +419,7 @@ TEST(battle, step_after_end_does_nothing) {
 
   CHECK(turn.battleEnded);
   CHECK(turn.playerWon);
-  CHECK_EQ(battle.round, (uint8_t)0);
+  CHECK_EQ(battle.round, (uint16_t)0);
   CHECK_EQ(battle.playerHp, hpBefore);
 }
 #pragma endregion

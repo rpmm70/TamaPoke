@@ -1,36 +1,44 @@
 // Tests of the pet logic (pet.cpp) on top of the host shims.
+
+#pragma region Includes
 #include "framework.h"
 #include "shim/Arduino.h"
 #include "../pet.h"
 #include "../dex.h"
 #include "../battle.h"  // battleLevelFor
 #include <string.h>
+#pragma endregion
 
-// ---------------------------------------------------------------- helpers
-static void advance(Pet &p, uint32_t minutes) {
+#pragma region Helpers
+static void advance(Pet &pet, uint32_t minutes) {
   for (uint32_t i = 0; i < minutes; i++) {
     mockAdvanceMillis(PET_TICK_MS);
-    p.update(millis());
+    pet.update(millis());
   }
 }
 
 // freshly hatched pet of the requested species, with a clean NVS
-static void makePet(Pet &p, int16_t dex) {
+static void makePet(Pet &pet, int16_t dex) {
   mockNvsReset();
   mockSetMillis(0);
-  p.begin();
-  if (p.awaitingStarter()) p.chooseStarter(dex);
-  p.eggTap();
-  p.eggTap();
-  p.eggTap();  // 3 taps = immediate hatching
+  pet.begin();
+  if (pet.awaitingStarter()) pet.chooseStarter(dex);
+  pet.eggTap();
+  pet.eggTap();
+  pet.eggTap();  // 3 taps = immediate hatching
 }
 
-static void setStats(Pet &p, uint8_t f, uint8_t j, uint8_t e, uint8_t h) {
-  p.fullness = f; p.joy = j; p.energy = e; p.hygiene = h;
+static void setStats(Pet &pet, uint8_t fullness, uint8_t joy, uint8_t energy, uint8_t hygiene) {
+  pet.fullness = fullness; pet.joy = joy; pet.energy = energy; pet.hygiene = hygiene;
 }
 
-// ---------------------------------------------------------------- egg
-TEST(egg, primera_partida_pide_inicial) {
+static void markRegistered(Pet &pet, int16_t dex) {
+  pet.dexReg[(dex - 1) >> 3] |= (uint8_t)(1 << ((dex - 1) & 7));
+}
+#pragma endregion
+
+#pragma region Egg
+TEST(egg, first_game_asks_for_a_starter) {
   mockNvsReset();
   Pet p;
   p.begin();
@@ -43,13 +51,13 @@ TEST(egg, primera_partida_pide_inicial) {
 
 // v1.3 regression: the egg hatched on its own after 3 min while the player
 // was still picking a starter, and the choice was lost
-TEST(egg, no_eclosiona_mientras_se_elige_inicial) {
+TEST(egg, does_not_hatch_while_picking_a_starter) {
   mockNvsReset();
   Pet p;
   p.begin();
   CHECK(p.awaitingStarter());
   advance(p, 600);  // 10 hours of play
-  CHECK_MSG(p.isEgg(), "el huevo NO debe eclosionar durante la eleccion");
+  CHECK_MSG(p.isEgg(), "the egg must NOT hatch during the choice");
   CHECK_EQ(p.ageMinutes, (uint32_t)0);
   p.chooseStarter(7);
   CHECK(!p.awaitingStarter());
@@ -58,7 +66,7 @@ TEST(egg, no_eclosiona_mientras_se_elige_inicial) {
   CHECK_EQ(p.speciesId, (int16_t)7);
 }
 
-TEST(egg, eclosiona_sola_a_los_3_minutos) {
+TEST(egg, hatches_on_its_own_after_3_minutes) {
   mockNvsReset();
   Pet p;
   p.begin();
@@ -70,7 +78,7 @@ TEST(egg, eclosiona_sola_a_los_3_minutos) {
   CHECK_EQ(p.speciesId, (int16_t)1);
 }
 
-TEST(egg, tres_toques_eclosionan) {
+TEST(egg, three_taps_hatch_it) {
   mockNvsReset();
   Pet p;
   p.begin();
@@ -86,7 +94,7 @@ TEST(egg, tres_toques_eclosionan) {
   CHECK_EQ(p.speciesId, (int16_t)4);
 }
 
-TEST(egg, eclosionar_sortea_genes_y_resetea_al_individuo) {
+TEST(egg, hatching_rolls_genes_and_resets_the_individual) {
   Pet p;
   makePet(p, 4);
   CHECK_RANGE(p.geneAtk, 90, 110);
@@ -98,11 +106,11 @@ TEST(egg, eclosionar_sortea_genes_y_resetea_al_individuo) {
   CHECK_EQ(p.bond, (uint8_t)0);
   CHECK_EQ(p.berryKnown, false);
   CHECK_STREQ(p.nick, "");
-  CHECK_MSG(p.isRegistered(4), "criar = registrar en la pokedex");
+  CHECK_MSG(p.isRegistered(4), "raising it = registering it in the pokedex");
   CHECK_EQ(p.registeredCount(), (uint16_t)1);
 }
 
-TEST(egg, tocar_huevo_no_hace_nada_si_ya_eclosiono) {
+TEST(egg, tapping_the_egg_does_nothing_after_hatching) {
   Pet p;
   makePet(p, 4);
   uint8_t cracks = p.eggCracks();
@@ -111,15 +119,16 @@ TEST(egg, tocar_huevo_no_hace_nada_si_ya_eclosiono) {
   CHECK_EQ(p.speciesId, (int16_t)4);
 }
 
-TEST(egg, rareza_del_huevo_es_valida) {
+TEST(egg, egg_rarity_is_valid) {
   mockNvsReset();
   Pet p;
   p.begin();
-  CHECK_RANGE(p.eggRarity(), (uint8_t)R_COMUN, (uint8_t)R_LEGENDARIO);
+  CHECK_RANGE(p.eggRarity(), (uint8_t)R_COMMON, (uint8_t)R_LEGENDARY);
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- food
-TEST(feed, baya_normal_sube_25_y_topa_en_100) {
+#pragma region Food
+TEST(feed, normal_berry_adds_25_and_caps_at_100) {
   Pet p;
   makePet(p, 4);
   p.fullness = 50;
@@ -130,7 +139,7 @@ TEST(feed, baya_normal_sube_25_y_topa_en_100) {
   CHECK_EQ(p.fullness, (uint8_t)100);  // 100 instead of 105
 }
 
-TEST(feed, baya_favorita_sube_mas_y_da_corazon) {
+TEST(feed, favorite_berry_adds_more_and_shows_a_heart) {
   Pet p;
   makePet(p, 4);  // 4 % 3 == 1 -> likes the blue one
   CHECK(p.lovesBerry(1));
@@ -146,7 +155,7 @@ TEST(feed, baya_favorita_sube_mas_y_da_corazon) {
   CHECK(p.eating());
 }
 
-TEST(feed, chuche_engorda) {
+TEST(feed, candy_adds_weight) {
   Pet p;
   makePet(p, 4);
   p.fullness = 50;
@@ -200,7 +209,7 @@ TEST(feed, coffee_not_while_sleeping) {
 }
 #pragma endregion
 
-TEST(feed, dormido_o_huevo_no_come) {
+TEST(feed, sleeping_pet_or_egg_does_not_eat) {
   Pet p;
   makePet(p, 4);
   p.fullness = 40;
@@ -210,17 +219,18 @@ TEST(feed, dormido_o_huevo_no_come) {
   p.feedCandy();
   CHECK_EQ(p.fullness, (uint8_t)40);
 
-  Pet e;
+  Pet egg;
   mockNvsReset();
-  e.begin();
-  e.chooseStarter(4);
-  e.fullness = 40;
-  e.feedBerry(0);
-  CHECK_EQ(e.fullness, (uint8_t)40);
+  egg.begin();
+  egg.chooseStarter(4);
+  egg.fullness = 40;
+  egg.feedBerry(0);
+  CHECK_EQ(egg.fullness, (uint8_t)40);
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- tick
-TEST(tick, despierto_baja_comida_2_y_energia_1_por_minuto) {
+#pragma region Tick
+TEST(tick, awake_food_drops_2_and_energy_1_per_minute) {
   Pet p;
   makePet(p, 4);
   setStats(p, 100, 100, 100, 100);
@@ -236,7 +246,7 @@ TEST(tick, despierto_baja_comida_2_y_energia_1_por_minuto) {
   CHECK_EQ(p.poops, (uint8_t)0);
 }
 
-TEST(tick, las_barras_nunca_bajan_de_cero) {
+TEST(tick, bars_never_drop_below_zero) {
   Pet p;
   makePet(p, 4);
   setStats(p, 5, 3, 2, 1);
@@ -247,22 +257,22 @@ TEST(tick, las_barras_nunca_bajan_de_cero) {
   CHECK_EQ(p.hygiene, (uint8_t)0);
 }
 
-TEST(tick, dormir_recupera_energia_con_suelos) {
+TEST(tick, sleeping_restores_energy_with_floors) {
   Pet p;
   makePet(p, 4);
   setStats(p, 100, 100, 10, 100);
   p.toggleLight();
   advance(p, 20);
-  CHECK_MSG(p.energy == 100, "durmiendo la energia sube 6/min hasta 100");
-  CHECK_MSG(p.fullness > 80, "durmiendo el hambre baja ~4x mas lento");
+  CHECK_MSG(p.energy == 100, "while sleeping energy rises 6/min up to 100");
+  CHECK_MSG(p.fullness > 80, "while sleeping hunger drops ~4x slower");
   advance(p, 2000);  // sleep a very long time: the floors protect it
-  CHECK_MSG(p.fullness >= 30, "suelo de comida durmiendo = 30");
-  CHECK_MSG(p.joy >= 35, "suelo de felicidad durmiendo = 35");
-  CHECK_MSG(p.hygiene >= 45, "suelo de higiene durmiendo = 45");
+  CHECK_MSG(p.fullness >= 30, "food floor while sleeping = 30");
+  CHECK_MSG(p.joy >= 35, "joy floor while sleeping = 35");
+  CHECK_MSG(p.hygiene >= 45, "hygiene floor while sleeping = 45");
   CHECK_EQ(p.careMistakes, (uint8_t)0);
 }
 
-TEST(tick, sobrepeso_se_quema_solo) {
+TEST(tick, overweight_burns_off_by_itself) {
   Pet p;
   makePet(p, 4);
   p.weight = 30;
@@ -270,21 +280,21 @@ TEST(tick, sobrepeso_se_quema_solo) {
   CHECK_EQ(p.weight, (uint8_t)20);  // -1 every 3 minutes
 }
 
-TEST(tick, descuido_cuenta_una_vez_por_hora) {
+TEST(tick, neglect_counts_once_per_hour) {
   Pet p;
   makePet(p, 4);
   setStats(p, 0, 0, 0, 0);
   advance(p, 1);
   CHECK_EQ(p.careMistakes, (uint8_t)1);
   advance(p, 50);
-  CHECK_MSG(p.careMistakes == 1, "el enfriamiento evita contar el mismo descuido cada minuto");
+  CHECK_MSG(p.careMistakes == 1, "the cooldown avoids counting the same neglect every minute");
   advance(p, 11);
   CHECK_EQ(p.careMistakes, (uint8_t)2);
 }
 
 // v1.4 regression: neglect took 3 bond every 30 min and it was impossible to
 // recover; now it takes 1 and never leaves it at 0
-TEST(tick, descuido_enfria_el_vinculo_sin_arrasarlo) {
+TEST(tick, neglect_cools_the_bond_without_wiping_it) {
   Pet p;
   makePet(p, 4);
   p.bond = 50;
@@ -293,22 +303,23 @@ TEST(tick, descuido_enfria_el_vinculo_sin_arrasarlo) {
   CHECK_EQ(p.bond, (uint8_t)49);
   p.bond = 1;
   advance(p, 61);
-  CHECK_MSG(p.bond == 1, "el vinculo no cae por debajo de 1");
+  CHECK_MSG(p.bond == 1, "the bond does not drop below 1");
 }
 
-TEST(tick, buen_cuidado_12h_forja_defensa) {
+TEST(tick, twelve_hours_of_good_care_build_defense) {
   Pet p;
   makePet(p, 4);
   CHECK_EQ(p.trDef, (uint8_t)0);
-  for (int h = 0; h < 720; h++) {  // keep everything >= 40 for 12 h
+  for (int minute = 0; minute < 720; minute++) {  // keep everything >= 40 for 12 h
     setStats(p, 100, 100, 100, 100);
     advance(p, 1);
   }
   CHECK_EQ(p.trDef, (uint8_t)1);
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- levels
-TEST(level, un_nivel_por_hora_de_juego) {
+#pragma region Levels
+TEST(level, one_level_per_hour_of_play) {
   Pet p;
   makePet(p, 4);
   CHECK_EQ(p.level(), (uint8_t)1);
@@ -321,18 +332,19 @@ TEST(level, un_nivel_por_hora_de_juego) {
 }
 
 // Fixed in v1.8: level() was uint8_t and wrapped to 0 after ~10.6 days
-TEST(level, no_desborda_con_mascotas_longevas) {
+TEST(level, does_not_overflow_with_long_lived_pets) {
   Pet p;
   makePet(p, 4);
   p.ageMinutes = 254 * 60;
   uint8_t before = p.level();
   CHECK_EQ(before, (uint8_t)255);
   p.ageMinutes = 255 * 60;  // level 256 -> should keep rising (or saturate)
-  CHECK_MSG(p.level() >= before, "el nivel nunca deberia bajar al envejecer");
+  CHECK_MSG(p.level() >= before, "the level should never drop with age");
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- evolution
-TEST(evolve, requiere_nivel_y_buen_cuidado) {
+#pragma region Evolution
+TEST(evolve, needs_level_and_good_care) {
   Pet p;
   makePet(p, 4);  // CHARMANDER evolves at level 16
   p.ageMinutes = 14 * 60;  // level 15
@@ -345,7 +357,7 @@ TEST(evolve, requiere_nivel_y_buen_cuidado) {
   CHECK(p.canEvolveNow());
 }
 
-TEST(evolve, cada_descuido_retrasa_un_nivel) {
+TEST(evolve, each_care_mistake_delays_one_level) {
   Pet p;
   makePet(p, 4);
   p.ageMinutes = 15 * 60;  // level 16
@@ -356,15 +368,15 @@ TEST(evolve, cada_descuido_retrasa_un_nivel) {
 }
 
 // Fixed in v1.8: the uint8_t cast of (evolveLevel + careMistakes) overflowed
-TEST(evolve, muchos_descuidos_no_adelantan_la_evolucion) {
+TEST(evolve, many_care_mistakes_do_not_speed_up_evolution) {
   Pet p;
   makePet(p, 4);       // CHARMANDER: evolves at level 16
   p.careMistakes = 250;  // 250 care mistakes: should be very far from evolving
   p.ageMinutes = 9 * 60;  // level 10
-  CHECK_MSG(!p.canEvolveNow(), "con 250 descuidos no puede evolucionar a nivel 10");
+  CHECK_MSG(!p.canEvolveNow(), "with 250 care mistakes it cannot evolve at level 10");
 }
 
-TEST(evolve, no_evoluciona_dormido_ni_de_huevo_ni_en_ceremonia) {
+TEST(evolve, no_evolution_while_asleep_as_egg_or_in_ceremony) {
   Pet p;
   makePet(p, 4);
   p.ageMinutes = 20 * 60;
@@ -375,13 +387,13 @@ TEST(evolve, no_evoluciona_dormido_ni_de_huevo_ni_en_ceremonia) {
   p.startFarewell();
   CHECK(!p.canEvolveNow());
 
-  Pet e;
+  Pet egg;
   mockNvsReset();
-  e.begin();
-  CHECK(!e.canEvolveNow());
+  egg.begin();
+  CHECK(!egg.canEvolveNow());
 }
 
-TEST(evolve, transforma_registra_y_anima) {
+TEST(evolve, transforms_registers_and_animates) {
   Pet p;
   makePet(p, 4);
   p.ageMinutes = 20 * 60;
@@ -395,7 +407,7 @@ TEST(evolve, transforma_registra_y_anima) {
   CHECK(!p.evolving());
 }
 
-TEST(evolve, forma_final_no_evoluciona) {
+TEST(evolve, final_form_does_not_evolve) {
   Pet p;
   makePet(p, 6);  // CHARIZARD
   p.ageMinutes = 200 * 60;
@@ -404,7 +416,7 @@ TEST(evolve, forma_final_no_evoluciona) {
   CHECK_EQ(p.speciesId, (int16_t)6);
 }
 
-TEST(evolve, eevee_se_ramifica_en_134_136) {
+TEST(evolve, eevee_branches_into_its_three_evolutions) {
   for (int seed = 1; seed <= 12; seed++) {
     randomSeed(seed);
     Pet p;
@@ -412,25 +424,26 @@ TEST(evolve, eevee_se_ramifica_en_134_136) {
     p.ageMinutes = 40 * 60;
     CHECK(p.canEvolveNow());
     p.evolve();
-    CHECK_RANGE(p.speciesId, (int16_t)134, (int16_t)136);
+    CHECK_RANGE(p.speciesId, (int16_t)DEX_EEVEE_FIRST_BRANCH, (int16_t)DEX_EEVEE_LAST_BRANCH);
     CHECK(p.isRegistered(p.speciesId));
   }
 }
 
-TEST(evolve, boton_de_evolucion_se_pospone_al_declinar) {
+TEST(evolve, evolve_button_is_postponed_when_declined) {
   Pet p;
   makePet(p, 4);
   p.ageMinutes = 15 * 60;  // level 16
   CHECK(p.wantEvolveButton());
   p.declineEvolve();
-  CHECK_MSG(!p.wantEvolveButton(), "'mantener forma' quita el boton");
-  CHECK_MSG(p.canEvolveNow(), "pero la evolucion sigue disponible");
+  CHECK_MSG(!p.wantEvolveButton(), "'keep form' removes the button");
+  CHECK_MSG(p.canEvolveNow(), "but the evolution is still available");
   p.ageMinutes = 16 * 60;  // levels up: re-offered
   CHECK(p.wantEvolveButton());
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- stats
-TEST(stats, formula_base_por_genes_mas_nivel_y_entreno) {
+#pragma region Stats and training
+TEST(stats, formula_is_genes_times_base_plus_level_and_training) {
   Pet p;
   makePet(p, 4);  // CHARMANDER: atk 52, def 43, spe 65
   p.geneAtk = p.geneDef = p.geneSpe = 100;
@@ -446,7 +459,7 @@ TEST(stats, formula_base_por_genes_mas_nivel_y_entreno) {
   CHECK_EQ(p.atkStat(), (uint16_t)(52 * 110 / 100 + 10 + 20));
 }
 
-TEST(stats, el_huevo_no_tiene_stats) {
+TEST(stats, egg_has_no_stats) {
   mockNvsReset();
   Pet p;
   p.begin();
@@ -455,18 +468,18 @@ TEST(stats, el_huevo_no_tiene_stats) {
   CHECK_EQ(p.speStat(), (uint16_t)0);
 }
 
-TEST(train, saco_da_un_punto_cada_4_golpes_con_tope) {
+TEST(train, bag_gives_one_point_every_4_hits_with_a_cap) {
   Pet p;
   makePet(p, 4);
   CHECK_EQ(p.trainStrength(0), (uint8_t)0);
   CHECK_EQ(p.trainStrength(40), (uint8_t)10);
   CHECK_EQ(p.trAtk, (uint8_t)10);
-  CHECK_MSG(p.trainStrength(1000) == 18, "tope de 18 por sesion");
+  CHECK_MSG(p.trainStrength(1000) == 18, "cap of 18 per session");
   CHECK_EQ(p.strHi, (uint16_t)1000);
 }
 
 // Fixed while porting the test suite: trainStrength() returned the theoretical gain
-TEST(train, el_saco_anuncia_lo_que_de_verdad_sube) {
+TEST(train, bag_reports_the_real_gain) {
   Pet p;
   makePet(p, 4);
   p.trAtk = 95;
@@ -475,14 +488,14 @@ TEST(train, el_saco_anuncia_lo_que_de_verdad_sube) {
   CHECK_EQ(gain, (uint8_t)(p.trAtk - before));
 }
 
-TEST(train, entrenamiento_topa_en_100) {
+TEST(train, training_caps_at_100) {
   Pet p;
   makePet(p, 4);
   for (int i = 0; i < 20; i++) p.trainStrength(80);
   CHECK_EQ(p.trAtk, (uint8_t)100);
 }
 
-TEST(train, el_saco_cansa_y_quema_peso) {
+TEST(train, bag_tires_and_burns_weight) {
   Pet p;
   makePet(p, 4);
   p.weight = 40;
@@ -510,7 +523,7 @@ TEST(play, ball_game_trains_attack_and_keeps_record) {
   CHECK_EQ(p.weight, (uint8_t)10);  // 50 - 20*2
   CHECK_EQ(p.gameHi, (uint16_t)20);
   p.playResult(5);
-  CHECK_MSG(p.gameHi == 20, "un resultado peor no baja el record");
+  CHECK_MSG(p.gameHi == 20, "a worse result does not lower the record");
   CHECK_EQ(p.trAtk, (uint8_t)3);   // 5 points: +1
   p.playResult(4);
   CHECK_EQ(p.trAtk, (uint8_t)3);   // under 5 points: no gain
@@ -518,6 +531,7 @@ TEST(play, ball_game_trains_attack_and_keeps_record) {
   p.playResult(40);
   CHECK_EQ(p.trAtk, (uint8_t)100); // never above 100
 }
+#pragma endregion
 
 #pragma region Coin chase
 TEST(coin, gain_steps_at_5_and_10_points) {
@@ -604,7 +618,8 @@ TEST(coin, record_survives_a_reboot) {
 }
 #pragma endregion
 
-TEST(play, jugar_sube_felicidad_y_cansa) {
+#pragma region Play and care
+TEST(play, playing_raises_joy_and_tires) {
   Pet p;
   makePet(p, 4);
   setStats(p, 50, 50, 50, 50);
@@ -615,7 +630,7 @@ TEST(play, jugar_sube_felicidad_y_cansa) {
   CHECK(p.showHeart());
 }
 
-TEST(care, limpiar_quita_cacas_y_deja_higiene_a_tope) {
+TEST(care, cleaning_removes_poops_and_fills_hygiene) {
   Pet p;
   makePet(p, 4);
   p.poops = 3;
@@ -625,7 +640,7 @@ TEST(care, limpiar_quita_cacas_y_deja_higiene_a_tope) {
   CHECK_EQ(p.hygiene, (uint8_t)100);
 }
 
-TEST(care, mimar_sube_felicidad_y_vinculo) {
+TEST(care, caressing_raises_joy_and_bond) {
   Pet p;
   makePet(p, 4);
   p.joy = 50;
@@ -635,15 +650,15 @@ TEST(care, mimar_sube_felicidad_y_vinculo) {
   CHECK(p.showHeart());
 }
 
-TEST(care, el_vinculo_tiene_tope_diario) {
+TEST(care, bond_has_a_daily_cap) {
   Pet p;
   makePet(p, 4);
   for (int i = 0; i < 50; i++) p.play();  // +2 bond each time
-  CHECK_MSG(p.bond <= 20, "tope de 20 puntos de vinculo al dia");
+  CHECK_MSG(p.bond <= 20, "cap of 20 bond points per day");
   CHECK_EQ(p.bond, (uint8_t)20);
 }
 
-TEST(mood, refleja_el_estado) {
+TEST(mood, reflects_the_state) {
   Pet p;
   makePet(p, 4);
   setStats(p, 80, 80, 80, 80);
@@ -657,61 +672,61 @@ TEST(mood, refleja_el_estado) {
   p.toggleLight();
   CHECK_EQ((int)p.mood(), (int)MOOD_SLEEPING);
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- pokedex
-TEST(dexreg, bitmap_cubre_1_a_151) {
+#pragma region Pokedex registry
+TEST(dexreg, bitmap_covers_the_whole_dex) {
   Pet p;
   makePet(p, 4);
   memset(p.dexReg, 0, sizeof(p.dexReg));
   CHECK_EQ(p.registeredCount(), (uint16_t)0);
-  for (int16_t d = 1; d <= 151; d++) {
-    p.dexReg[(d - 1) >> 3] |= (uint8_t)(1 << ((d - 1) & 7));
+  for (int16_t d = 1; d <= DEX_COUNT; d++) {
+    markRegistered(p, d);
     CHECK(p.isRegistered(d));
   }
-  CHECK_EQ(p.registeredCount(), (uint16_t)151);
+  CHECK_EQ(p.registeredCount(), (uint16_t)DEX_COUNT);
 }
 
-TEST(dexreg, fuera_de_rango_no_esta_registrado) {
+TEST(dexreg, out_of_range_is_not_registered) {
   Pet p;
   makePet(p, 4);
   memset(p.dexReg, 0xFF, sizeof(p.dexReg));
   CHECK(!p.isRegistered(0));
   CHECK(!p.isRegistered(-1));
-  CHECK(!p.isRegistered(152));
+  CHECK(!p.isRegistered(DEX_COUNT + 1));
   CHECK(!p.isRegistered(32767));
-  CHECK_EQ(p.registeredCount(), (uint16_t)151);
+  CHECK_EQ(p.registeredCount(), (uint16_t)DEX_COUNT);
 }
 
-TEST(dexreg, linea_incompleta_se_detecta) {
+TEST(dexreg, incomplete_line_is_detected) {
   Pet p;
   makePet(p, 1);  // BULBASAUR -> IVYSAUR -> VENUSAUR
   CHECK(p.lineHasUnregistered(1));
-  p.dexReg[(2 - 1) >> 3] |= (uint8_t)(1 << ((2 - 1) & 7));
-  p.dexReg[(3 - 1) >> 3] |= (uint8_t)(1 << ((3 - 1) & 7));
-  CHECK_MSG(!p.lineHasUnregistered(1), "linea 1-2-3 completa");
+  markRegistered(p, 2);
+  markRegistered(p, 3);
+  CHECK_MSG(!p.lineHasUnregistered(1), "line 1-2-3 complete");
 }
 
-TEST(dexreg, la_rama_de_eevee_cuenta_las_tres) {
+TEST(dexreg, eevee_branch_counts_all_three) {
   Pet p;
   makePet(p, DEX_EEVEE);
   CHECK(p.lineHasUnregistered(DEX_EEVEE));
-  for (int16_t d = 134; d <= 136; d++)
-    p.dexReg[(d - 1) >> 3] |= (uint8_t)(1 << ((d - 1) & 7));
+  for (int16_t d = DEX_EEVEE_FIRST_BRANCH; d <= DEX_EEVEE_LAST_BRANCH; d++) markRegistered(p, d);
   CHECK(!p.lineHasUnregistered(DEX_EEVEE));
 }
 
-TEST(egg, el_sorteo_siempre_da_una_especie_valida) {
+TEST(egg, roll_always_gives_a_valid_species) {
   Pet p;
   makePet(p, 4);
   for (int i = 0; i < 400; i++) {
     randomSeed(i * 7919 + 1);
     int16_t d = p.pickEggSpecies();
-    CHECK_RANGE(d, (int16_t)1, (int16_t)151);
-    CHECK_MSG(DEX_TBL[d].rarity != R_EVO, "de un huevo nunca sale una forma evolucionada");
+    CHECK_RANGE(d, (int16_t)1, (int16_t)DEX_COUNT);
+    CHECK_MSG(DEX_TBL[d].rarity != R_EVO, "an egg never gives an evolved form");
   }
 }
 
-TEST(egg, el_primer_huevo_es_un_inicial_clasico) {
+TEST(egg, first_egg_is_a_classic_starter) {
   for (int seed = 1; seed <= 20; seed++) {
     randomSeed(seed);
     mockNvsReset();
@@ -721,23 +736,24 @@ TEST(egg, el_primer_huevo_es_un_inicial_clasico) {
     bool classic = false;
     for (int i = 0; i < NUM_CLASSIC_DEX; i++)
       if (CLASSIC_DEX[i] == d) classic = true;
-    CHECK_MSG(classic, "sin pokedex, solo salen iniciales clasicos");
+    CHECK_MSG(classic, "without a pokedex, only classic starters come out");
   }
 }
 
-TEST(egg, una_escapada_castiga_la_rareza) {
+TEST(egg, a_runaway_penalizes_rarity) {
   Pet p;
   makePet(p, 4);
   p.lastEnd = CER_RUNAWAY;
   for (int seed = 1; seed <= 60; seed++) {
     randomSeed(seed);
     int16_t d = p.pickEggSpecies();
-    CHECK_MSG(DEX_TBL[d].rarity == R_COMUN, "tras una escapada solo salen comunes");
+    CHECK_MSG(DEX_TBL[d].rarity == R_COMMON, "after a runaway only common species come out");
   }
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- streak
-TEST(streak, el_primer_cuidado_del_dia_suma) {
+#pragma region Streak
+TEST(streak, first_care_of_the_day_counts) {
   Pet p;
   makePet(p, 4);
   p.setClock(100u * 86400);
@@ -745,13 +761,13 @@ TEST(streak, el_primer_cuidado_del_dia_suma) {
   CHECK_EQ(p.streak, (uint16_t)1);
   CHECK_EQ(p.bestStreak, (uint16_t)1);
   p.caress();
-  CHECK_MSG(p.streak == 1, "el segundo cuidado del mismo dia no suma");
+  CHECK_MSG(p.streak == 1, "the second care of the same day does not count");
   p.setClock(101u * 86400);
   p.caress();
   CHECK_EQ(p.streak, (uint16_t)2);
 }
 
-TEST(streak, un_dia_perdido_reinicia) {
+TEST(streak, a_missed_day_resets_it) {
   Pet p;
   makePet(p, 4);
   p.setClock(100u * 86400);
@@ -761,29 +777,29 @@ TEST(streak, un_dia_perdido_reinicia) {
   p.setClock(105u * 86400);  // gap of days
   p.caress();
   CHECK_EQ(p.streak, (uint16_t)1);
-  CHECK_MSG(p.bestStreak == 2, "el record de racha se conserva");
+  CHECK_MSG(p.bestStreak == 2, "the best streak is kept");
 }
 
-TEST(streak, sin_reloj_no_hay_racha) {
+TEST(streak, no_clock_means_no_streak) {
   Pet p;
   makePet(p, 4);
   p.caress();
   CHECK_EQ(p.streak, (uint16_t)0);
 }
 
-TEST(streak, celebra_los_hitos) {
+TEST(streak, celebrates_milestones) {
   Pet p;
   makePet(p, 4);
-  for (uint32_t d = 100; d < 103; d++) {
-    p.setClock(d * 86400);
+  for (uint32_t day = 100; day < 103; day++) {
+    p.setClock(day * 86400);
     p.caress();
   }
   CHECK_EQ(p.streak, (uint16_t)3);
-  CHECK_MSG(p.showMilestone(), "hito de 3 dias celebrado");
+  CHECK_MSG(p.showMilestone(), "3 day milestone celebrated");
   CHECK_EQ(p.lastMilestone, (uint16_t)3);
 }
 
-TEST(bonus, racha_y_vinculo_mejoran_el_huevo) {
+TEST(bonus, streak_and_bond_improve_the_egg) {
   Pet p;
   makePet(p, 4);
   CHECK_EQ(p.careBonus(), 0);
@@ -793,9 +809,10 @@ TEST(bonus, racha_y_vinculo_mejoran_el_huevo) {
   p.streak = 300;  // the streak is capped at 30
   CHECK_EQ(p.careBonus(), 14);
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- medals
-TEST(medals, nivel_10_da_medalla) {
+#pragma region Medals
+TEST(medals, level_10_gives_a_medal) {
   Pet p;
   makePet(p, 4);
   CHECK(!p.hasMedal(MED_LV10));
@@ -806,7 +823,7 @@ TEST(medals, nivel_10_da_medalla) {
 }
 
 // not overweight, level 5 and zero care mistakes
-TEST(medals, en_forma_llega_al_nivel_5) {
+TEST(medals, fit_reaches_level_5) {
   Pet p;
   makePet(p, 4);
   p.weight = 0;
@@ -823,7 +840,7 @@ TEST(medals, en_forma_llega_al_nivel_5) {
   CHECK(!q.hasMedal(MED_FIT));
 }
 
-TEST(medals, cada_medalla_nueva_suma_al_total) {
+TEST(medals, each_new_medal_adds_to_the_total) {
   Pet p;
   makePet(p, 4);
   p.weight = 0;
@@ -831,17 +848,17 @@ TEST(medals, cada_medalla_nueva_suma_al_total) {
   advance(p, 1);  // crosses level 10: MED_LV10 + MED_FIT at once
   CHECK(p.hasMedal(MED_LV10));
   CHECK(p.hasMedal(MED_FIT));
-  CHECK_MSG(p.totalMedals == 2, "el total cuenta cada bit ganado, no cada evento");
+  CHECK_MSG(p.totalMedals == 2, "the total counts each bit earned, not each event");
 }
 
-TEST(medals, forma_final_al_nacer) {
+TEST(medals, final_form_at_birth) {
   Pet p;
   makePet(p, 143);  // SNORLAX is already a final form
   CHECK(p.hasMedal(MED_FINAL));
   CHECK_EQ(p.totalMedals, (uint16_t)1);
 }
 
-TEST(medals, la_baya_favorita_da_medalla) {
+TEST(medals, favorite_berry_gives_a_medal) {
   Pet p;
   makePet(p, 4);
   p.feedBerry(1);  // its favorite
@@ -850,19 +867,20 @@ TEST(medals, la_baya_favorita_da_medalla) {
   CHECK(p.hasMedal(MED_BERRY));
 }
 
-TEST(medals, el_total_acumula_entre_crianzas) {
+TEST(medals, total_accumulates_across_raisings) {
   Pet p;
   makePet(p, 143);
   CHECK_EQ(p.totalMedals, (uint16_t)1);
   p.newEgg();
   p.chooseStarter(144);  // ARTICUNO, another final form
   p.eggTap(); p.eggTap(); p.eggTap();
-  CHECK_MSG(p.medals == MED_FINAL, "las medallas del individuo se reinician");
-  CHECK_MSG(p.totalMedals == 2, "el total del jugador se conserva");
+  CHECK_MSG(p.medals == MED_FINAL, "the individual's medals are reset");
+  CHECK_MSG(p.totalMedals == 2, "the player's total is kept");
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- ceremonies
-TEST(ceremony, despedida_solo_en_forma_final_y_a_los_3_dias) {
+#pragma region Ceremonies
+TEST(ceremony, farewell_only_in_final_form_after_3_days) {
   Pet p;
   makePet(p, 6);  // CHARIZARD, final form
   p.ageMinutes = FAREWELL_AGE_MIN - 1;
@@ -876,7 +894,7 @@ TEST(ceremony, despedida_solo_en_forma_final_y_a_los_3_dias) {
   CHECK(!q.canFarewellNow());
 }
 
-TEST(ceremony, la_despedida_deja_un_huevo_nuevo) {
+TEST(ceremony, farewell_leaves_a_new_egg) {
   Pet p;
   makePet(p, 6);
   p.ageMinutes = FAREWELL_AGE_MIN;
@@ -891,7 +909,7 @@ TEST(ceremony, la_despedida_deja_un_huevo_nuevo) {
   CHECK_EQ(p.ageMinutes, (uint32_t)0);
 }
 
-TEST(ceremony, escaparse_pide_una_hora_de_abandono_total) {
+TEST(ceremony, runaway_needs_an_hour_of_total_neglect) {
   Pet p;
   makePet(p, 4);
   setStats(p, 0, 0, 0, 0);
@@ -902,17 +920,17 @@ TEST(ceremony, escaparse_pide_una_hora_de_abandono_total) {
   CHECK(p.canRunawayNow());
 }
 
-TEST(ceremony, un_solo_cuidado_salva_del_abandono) {
+TEST(ceremony, a_single_care_prevents_the_runaway) {
   Pet p;
   makePet(p, 4);
   p.dbgRunawayReady();
   CHECK(p.canRunawayNow());
   p.feedBerry(0);
   advance(p, 1);
-  CHECK_MSG(!p.canRunawayNow(), "comer resetea el contador de abandono");
+  CHECK_MSG(!p.canRunawayNow(), "eating resets the neglect counter");
 }
 
-TEST(ceremony, durante_la_ceremonia_no_se_puede_interactuar) {
+TEST(ceremony, no_interaction_during_the_ceremony) {
   Pet p;
   makePet(p, 4);
   setStats(p, 50, 50, 50, 50);
@@ -930,7 +948,7 @@ TEST(ceremony, durante_la_ceremonia_no_se_puede_interactuar) {
   CHECK(!p.sleeping);
 }
 
-TEST(ceremony, soltar_marca_el_final_como_liberacion) {
+TEST(ceremony, release_marks_the_end_as_release) {
   Pet p;
   makePet(p, 4);
   p.release();
@@ -941,7 +959,7 @@ TEST(ceremony, soltar_marca_el_final_como_liberacion) {
   CHECK(p.isEgg());
 }
 
-TEST(ceremony, un_huevo_no_se_despide_ni_se_suelta) {
+TEST(ceremony, an_egg_cannot_say_farewell_or_be_released) {
   mockNvsReset();
   Pet p;
   p.begin();
@@ -950,24 +968,25 @@ TEST(ceremony, un_huevo_no_se_despide_ni_se_suelta) {
   p.startRunaway();
   CHECK_EQ(p.ceremony, (uint8_t)CER_NONE);
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- offline
-TEST(offline, aplica_el_tiempo_apagado_con_suelo_de_15) {
+#pragma region Offline progression
+TEST(offline, applies_powered_off_time_with_a_floor_of_15) {
   Pet p;
   makePet(p, 4);
   setStats(p, 80, 80, 80, 100);
   p.setClock(1000u * 86400);
   p.syncClock(1000u * 86400 + 600 * 60);  // 600 minutes powered off
   CHECK_EQ(p.ageMinutes, (uint32_t)600);
-  CHECK_MSG(p.fullness == 15, "suelo de comida offline = 15");
-  CHECK_MSG(p.energy == 15, "suelo de energia offline = 15");
-  CHECK_MSG(p.joy == 15, "suelo de felicidad offline = 15");
-  CHECK_MSG(p.hygiene == 15, "suelo de higiene offline = 15");
-  CHECK_MSG(p.careMistakes == 0, "en ausencia no se acumulan descuidos");
+  CHECK_MSG(p.fullness == 15, "offline food floor = 15");
+  CHECK_MSG(p.energy == 15, "offline energy floor = 15");
+  CHECK_MSG(p.joy == 15, "offline joy floor = 15");
+  CHECK_MSG(p.hygiene == 15, "offline hygiene floor = 15");
+  CHECK_MSG(p.careMistakes == 0, "no care mistakes accumulate while away");
   CHECK_EQ(p.poops, (uint8_t)2);  // one poop every 4 h
 }
 
-TEST(offline, tope_de_dos_semanas) {
+TEST(offline, capped_at_two_weeks) {
   Pet p;
   makePet(p, 4);
   p.setClock(1000u * 86400);
@@ -975,7 +994,7 @@ TEST(offline, tope_de_dos_semanas) {
   CHECK_EQ(p.ageMinutes, (uint32_t)(14u * 24 * 60));
 }
 
-TEST(offline, menos_de_dos_minutos_no_hace_nada) {
+TEST(offline, under_two_minutes_does_nothing) {
   Pet p;
   makePet(p, 4);
   setStats(p, 80, 80, 80, 100);
@@ -985,7 +1004,7 @@ TEST(offline, menos_de_dos_minutos_no_hace_nada) {
   CHECK_EQ(p.fullness, (uint8_t)80);
 }
 
-TEST(offline, el_huevo_eclosiona_en_tu_ausencia) {
+TEST(offline, egg_hatches_while_you_are_away) {
   Pet p;
   makePet(p, 4);
   p.newEgg();  // pokedex already exists: no starter prompt
@@ -993,10 +1012,10 @@ TEST(offline, el_huevo_eclosiona_en_tu_ausencia) {
   p.setClock(1000u * 86400);
   p.syncClock(1000u * 86400 + 600);  // 10 minutes
   CHECK(!p.isEgg());
-  CHECK_RANGE(p.speciesId, (int16_t)1, (int16_t)151);
+  CHECK_RANGE(p.speciesId, (int16_t)1, (int16_t)DEX_COUNT);
 }
 
-TEST(offline, durmiendo_se_descansa_tambien_apagado) {
+TEST(offline, sleeping_pet_also_rests_while_powered_off) {
   Pet p;
   makePet(p, 4);
   setStats(p, 90, 90, 20, 90);
@@ -1004,11 +1023,11 @@ TEST(offline, durmiendo_se_descansa_tambien_apagado) {
   p.setClock(1000u * 86400);
   p.syncClock(1000u * 86400 + 120 * 60);
   CHECK_EQ(p.energy, (uint8_t)100);
-  CHECK_MSG(p.fullness >= 30, "suelos de sueno tambien offline");
-  CHECK_MSG(p.poops == 0, "durmiendo no ensucia");
+  CHECK_MSG(p.fullness >= 30, "sleep floors also apply offline");
+  CHECK_MSG(p.poops == 0, "a sleeping pet does not make a mess");
 }
 
-TEST(offline, sin_reloj_no_se_aplica_nada) {
+TEST(offline, without_a_clock_nothing_is_applied) {
   Pet p;
   makePet(p, 4);
   setStats(p, 80, 80, 80, 100);
@@ -1016,9 +1035,10 @@ TEST(offline, sin_reloj_no_se_aplica_nada) {
   CHECK_EQ(p.ageMinutes, (uint32_t)0);
   CHECK_EQ(p.fullness, (uint8_t)80);
 }
+#pragma endregion
 
-// ---------------------------------------------------------------- saving
-TEST(save, el_estado_sobrevive_a_un_reinicio) {
+#pragma region Saving
+TEST(save, state_survives_a_reboot) {
   Pet a;
   makePet(a, 25);  // PIKACHU
   a.ageMinutes = 1234;
@@ -1045,15 +1065,15 @@ TEST(save, el_estado_sobrevive_a_un_reinicio) {
   CHECK(!b.awaitingStarter());
 }
 
-TEST(save, el_apodo_se_recorta_a_11_caracteres) {
+TEST(save, nickname_is_trimmed_to_11_characters) {
   Pet p;
   makePet(p, 4);
-  p.rename("NOMBRE-LARGUISIMO-QUE-NO-CABE");
+  p.rename("VERY-LONG-NAME-THAT-WONT-FIT");
   CHECK_EQ((int)strlen(p.nick), 11);
-  CHECK_STREQ(p.nick, "NOMBRE-LARG");
+  CHECK_STREQ(p.nick, "VERY-LONG-N");
 }
 
-TEST(save, borrado_de_fabrica_deja_todo_como_nuevo) {
+TEST(save, factory_reset_leaves_everything_as_new) {
   Pet a;
   makePet(a, 4);
   a.factoryReset();
@@ -1064,15 +1084,16 @@ TEST(save, borrado_de_fabrica_deja_todo_como_nuevo) {
   CHECK_EQ(b.registeredCount(), (uint16_t)0);
 }
 
-TEST(save, el_autoguardado_se_marca_y_se_vuelca) {
+TEST(save, autosave_is_flagged_and_flushed) {
   Pet p;
   makePet(p, 4);
   CHECK(!p.savePending());
   advance(p, 5);
-  CHECK_MSG(p.savePending(), "cada 5 ticks queda un guardado pendiente");
+  CHECK_MSG(p.savePending(), "every 5 ticks a save is left pending");
   p.flushSave();
   CHECK(!p.savePending());
 }
+#pragma endregion
 
 #pragma region Wild battles and catching
 static int16_t findFirstDexWithRarity(uint8_t rarity) {
@@ -1171,7 +1192,7 @@ TEST(battle_pet, win_trains_the_stat_opposite_to_the_wild_strength) {
   CHECK_EQ((int)speedReward.stat, (int)BATTLE_REWARD_SPE);
   CHECK_EQ(p.trSpe, (uint8_t)1);
   // rare wild gives 2
-  BattleReward rareReward = p.applyBattleWin(findFirstDexWithRarity(R_RARO), false);
+  BattleReward rareReward = p.applyBattleWin(findFirstDexWithRarity(R_RARE), false);
   CHECK_EQ(rareReward.amount, (uint8_t)2);
 }
 
@@ -1191,7 +1212,7 @@ TEST(catch_chance, legendary_is_never_catchable) {
   Pet p;
   makePet(p, 4);
   p.bond = 100;
-  int16_t legendaryDex = findFirstDexWithRarity(R_LEGENDARIO);
+  int16_t legendaryDex = findFirstDexWithRarity(R_LEGENDARY);
   CHECK(legendaryDex >= 1);
   CHECK_EQ(p.catchChanceForWild(legendaryDex, 1, 100, true), (uint8_t)0);
   CHECK_EQ(p.respectCatchChanceForWild(legendaryDex, 1, 100), (uint8_t)0);
@@ -1209,7 +1230,7 @@ TEST(catch_chance, bounds_for_all_species_levels_and_bond) {
   const uint8_t bonds[] = { 0, 50, 100 };
   for (int16_t dex = 1; dex <= DEX_COUNT; dex++) {
     uint8_t rarity = DEX_TBL[dex].rarity;
-    if (rarity == R_LEGENDARIO) continue;
+    if (rarity == R_LEGENDARY) continue;
     for (uint8_t bondValue : bonds) {
       p.bond = bondValue;
       for (uint8_t wildLevel : levels) {
@@ -1217,7 +1238,7 @@ TEST(catch_chance, bounds_for_all_species_levels_and_bond) {
           for (int closeWin = 0; closeWin < 2; closeWin++) {
             uint8_t chance = p.catchChanceForWild(dex, wildLevel, petLevel, closeWin != 0);
             CHECK_RANGE(chance, 10, 75);
-            if (rarity == R_RARO) CHECK(chance <= 60);
+            if (rarity == R_RARE) CHECK(chance <= 60);
           }
           CHECK_RANGE(p.respectCatchChanceForWild(dex, wildLevel, petLevel), 5, 25);
         }
@@ -1230,7 +1251,7 @@ TEST(catch_chance, catch_roll_compares_with_chance) {
   Pet p;
   makePet(p, 4);
   p.bond = 0;
-  int16_t commonDex = findFirstDexWithRarity(R_COMUN);
+  int16_t commonDex = findFirstDexWithRarity(R_COMMON);
   uint8_t chance = p.catchChanceForWild(commonDex, 10, 10, false);
   CHECK_EQ(chance, (uint8_t)55);  // common, same level, no bonus
   CHECK(!p.tryCatchWild(commonDex, 10, 10, false, chance));  // roll == chance fails
@@ -1244,7 +1265,7 @@ TEST(catch_chance, respect_catch_is_harder) {
   Pet p;
   makePet(p, 4);
   p.bond = 0;
-  int16_t commonDex = findFirstDexWithRarity(R_COMUN);
+  int16_t commonDex = findFirstDexWithRarity(R_COMMON);
   uint8_t respectChance = p.respectCatchChanceForWild(commonDex, 10, 10);
   CHECK_EQ(respectChance, (uint8_t)25);  // (55 + 8) * 40% = 25
   CHECK(!p.tryRespectCatchWild(commonDex, 10, 10, respectChance));
@@ -1256,13 +1277,13 @@ TEST(catch_chance, requested_battle_keeps_70_percent) {
   Pet p;
   makePet(p, 4);
   p.bond = 0;
-  int16_t commonDex = findFirstDexWithRarity(R_COMUN);
+  int16_t commonDex = findFirstDexWithRarity(R_COMMON);
   CHECK_EQ(p.catchChanceForWild(commonDex, 10, 10, false, true), (uint8_t)38);  // 55 * 70%
   CHECK_EQ(p.respectCatchChanceForWild(commonDex, 10, 10, true), (uint8_t)17);  // (63 * 70% = 44) * 40%
   uint8_t requestedChance = p.catchChanceForWild(commonDex, 10, 10, false, true);
   CHECK(!p.tryCatchWild(commonDex, 10, 10, false, requestedChance, false, true));  // roll == chance fails
   CHECK(p.tryCatchWild(commonDex, 10, 10, false, requestedChance - 1, false, true));
-  int16_t legendaryDex = findFirstDexWithRarity(R_LEGENDARIO);
+  int16_t legendaryDex = findFirstDexWithRarity(R_LEGENDARY);
   CHECK_EQ(p.catchChanceForWild(legendaryDex, 1, 100, true, true), (uint8_t)0);
 }
 

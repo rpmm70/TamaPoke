@@ -1,9 +1,21 @@
 {
   "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "pioEnv",
+      "type": "pickString",
+      "description": "PlatformIO environment (board)",
+      "options": ["cyd-rect", "waveshare-round", "cyd-rect-touchdebug"],
+      "default": "cyd-rect"
+    }
+  ],
   "tasks": [
-    { "label": "Build CYD (2.8\")", "type": "shell", "command": "pio run -e cyd-rect", "group": { "kind": "build", "isDefault": true }, "problemMatcher": ["$gcc"] },
-    { "label": "Upload CYD (2.8\")", "type": "shell", "command": "pio run -e cyd-rect -t upload", "problemMatcher": ["$gcc"] },
-    { "label": "Serial monitor", "type": "shell", "command": "pio device monitor", "isBackground": true, "problemMatcher": [] },
-    { "label": "Build Waveshare round", "type": "shell", "command": "pio run -e waveshare-round", "problemMatcher": ["$gcc"] }
+    { "label": "PIO: Build", "type": "shell", "command": "pio run -e ${input:pioEnv}", "group": { "kind": "build", "isDefault": true }, "problemMatcher": ["$gcc"] },
+    { "label": "PIO: Upload", "type": "shell", "command": "pio run -e ${input:pioEnv} -t upload", "problemMatcher": ["$gcc"] },
+    { "label": "PIO: Upload and monitor", "type": "shell", "command": "pio run -e ${input:pioEnv} -t upload -t monitor", "isBackground": true, "problemMatcher": ["$gcc"] },
+    { "label": "PIO: Clean", "type": "shell", "command": "pio run -e ${input:pioEnv} -t clean", "problemMatcher": [] },
+    { "label": "PIO: Serial monitor", "type": "shell", "command": "pio device monitor -e ${input:pioEnv}", "isBackground": true, "problemMatcher": [] },
+    { "label": "Tests: game logic (host)", "type": "shell", "command": "bash test/run_tests.sh", "group": "test", "problemMatcher": ["$gcc"] },
+    { "label": "Tests: tools (Python)", "type": "shell", "command": "python -m unittest test/test_tools.py", "group": "test", "problemMatcher": [] }
   ]
 }

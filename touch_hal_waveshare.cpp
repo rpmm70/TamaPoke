@@ -1,25 +1,34 @@
+#pragma region Includes
 #include "touch_hal.h"
 #include "boards/board_select.h"
+#pragma endregion
 
-#if BOARD_WAVESHARE_ROUND
+#if BOARD_TOUCH_CST9217
 
+#pragma region Includes (CST9217 driver)
 #include <Wire.h>
 #include "TouchDrvCSTXXX.hpp"
+#pragma endregion
 
-#define TOUCH_ADDR 0x5A  // CST9217
+#pragma region CST9217 configuration and state
+#define TOUCH_ADDR 0x5A               // CST9217 I2C address
+#define TOUCH_BEGIN_ATTEMPTS 3        // begin() sometimes fails on the first attempt
+#define TOUCH_BEGIN_RETRY_DELAY_MS 150
 
 static TouchDrvCST92xx touch;
-static volatile bool gTouchIrq = false;
-static void IRAM_ATTR touchIsr() { gTouchIrq = true; }
+static volatile bool touchInterruptPending = false;
+static void IRAM_ATTR onTouchInterrupt() { touchInterruptPending = true; }
+#pragma endregion
 
+#pragma region Public API
 void touchHalBegin() {
   touch.setPins(TP_RESET, TP_INT);
   bool touchOk = false;
-  for (int i = 0; i < 3 && !touchOk; i++) {  // sometimes fails on the first attempt
-    touchOk = touch.begin(Wire, 0x5A, IIC_SDA, IIC_SCL);
-    if (!touchOk) delay(150);
+  for (int i = 0; i < TOUCH_BEGIN_ATTEMPTS && !touchOk; i++) {
+    touchOk = touch.begin(Wire, TOUCH_ADDR, IIC_SDA, IIC_SCL);
+    if (!touchOk) delay(TOUCH_BEGIN_RETRY_DELAY_MS);
   }
-  if (!touchOk) Serial.println("CST9217 no detectado");
+  if (!touchOk) Serial.println("CST9217 not detected");
   // begin() leaves the chip in command mode (reads the ID and never exits);
   // a hardware reset is needed for it to report touches again
   touch.reset();
@@ -27,12 +36,12 @@ void touchHalBegin() {
   touch.setMirrorXY(true, true);  // the panel is mounted rotated 180 degrees
   // INT active-low: fires when data is available. Gates the I2C reads
   pinMode(TP_INT, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(TP_INT), touchIsr, FALLING);
+  attachInterrupt(digitalPinToInterrupt(TP_INT), onTouchInterrupt, FALLING);
 }
 
 bool touchHalHasEvent() {
-  if (!gTouchIrq) return false;
-  gTouchIrq = false;
+  if (!touchInterruptPending) return false;
+  touchInterruptPending = false;
   return true;
 }
 
@@ -53,5 +62,6 @@ bool touchHalGetPoint(int16_t *x, int16_t *y) {
   if (Wire.endTransmission() != 0) return false;  // no answer: retried in 20 ms
   return touch.getPoint(x, y, 1) > 0;
 }
+#pragma endregion
 
-#endif  // BOARD_WAVESHARE_ROUND
+#endif  // BOARD_TOUCH_CST9217

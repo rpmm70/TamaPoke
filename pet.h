@@ -1,8 +1,14 @@
 #pragma once
+
+#pragma region Includes
 #include <Arduino.h>
 #include <Preferences.h>
-#include "dex.h"  // DEX_COUNT, DEX_BITMAP_BYTES (dex.h only includes i18n.h: no cycle)
+#include "dex.h"       // DEX_COUNT, DEX_BITMAP_BYTES (dex.h only includes i18n.h: no cycle)
+#include "ceremony.h"  // CER_NONE, CER_FAREWELL, CER_RUNAWAY, CER_RELEASE
+#include "medals.h"    // MED_* bits, MED_COUNT
+#pragma endregion
 
+#pragma region Timing constants
 // 1 tick = 1 game minute. Lower this value to test faster
 // (e.g. 5000UL = stats drop 12x faster).
 #define PET_TICK_MS 60000UL
@@ -15,7 +21,9 @@
 #define CEREMONY_MS 10000UL                // duration of the farewell on screen
 #define FAREWELL_AGE_MIN (3UL * 24 * 60)   // says goodbye after 3 days of play (in final form)
 #define RUNAWAY_TICKS 60                   // runs away after 1 h with EVERYTHING at zero
+#pragma endregion
 
+#pragma region Timer helper
 // milliseconds left until `deadline` (0 if already past, or if deadline==0:
 // "timer inactive"). All game timers (dialogs, animations) are stored as an
 // absolute instant "deadline = millis() + duration" and used to be compared
@@ -29,19 +37,11 @@ static inline uint32_t timeLeft(uint32_t deadline) {
   int32_t left = (int32_t)(deadline - millis());
   return left > 0 ? (uint32_t)left : 0;
 }
+#pragma endregion
 
-// end-of-cycle ceremonies
-enum : uint8_t { CER_NONE = 0, CER_FAREWELL, CER_RUNAWAY, CER_RELEASE };
-
+#pragma region Mood
 enum PetMood : uint8_t { MOOD_HAPPY, MOOD_SAD, MOOD_EATING, MOOD_SLEEPING };
-
-// individual's medals (bitmask)
-enum : uint16_t {
-  MED_LV10 = 1 << 0, MED_LV25 = 1 << 1, MED_LV50 = 1 << 2,
-  MED_BERRY = 1 << 3, MED_STREAK7 = 1 << 4, MED_BOND = 1 << 5,
-  MED_FINAL = 1 << 6, MED_FIT = 1 << 7,
-};
-#define MED_COUNT 8
+#pragma endregion
 
 #pragma region Wild battle rewards
 // training stat raised by a wild battle win
@@ -52,8 +52,10 @@ struct BattleReward {
 };
 #pragma endregion
 
+#pragma region Pet class
 class Pet {
 public:
+  #pragma region Persistent state
   // Stats 0..100
   uint8_t fullness = 80;  // food
   uint8_t joy = 80;       // happiness
@@ -94,11 +96,14 @@ public:
   uint16_t gameHi = 0;     // minigame record (the player's)
   uint16_t coinHi = 0;     // coin chase record (the player's)
   uint16_t strHi = 0;      // punching bag hits record
+  #pragma endregion
 
+  #pragma region Lifecycle
   void begin();                 // loads state from NVS (or creates the first egg)
   void update(uint32_t nowMs);  // call on every loop()
+  #pragma endregion
 
-  // Actions (touch buttons)
+  #pragma region Actions (touch buttons)
   void feed();              // apple (compatibility)
   void feedBerry(uint8_t color);  // 0 apple, 1 hamburger, 2 pizza
   void feedCandy();
@@ -125,7 +130,9 @@ public:
   void setClock(uint32_t nowEpoch);   // sets the time without applying progression
   void startFarewell();  // also usable from the serial console (BYE)
   void startRunaway();   // also usable from the serial console (RUN)
+  #pragma endregion
 
+  #pragma region State queries
   bool isEgg() const { return speciesId < 0; }
   uint8_t eggCracks() const { return eggTaps; }
   bool eating() const { return timeLeft(eatUntil) > 0; }
@@ -146,7 +153,8 @@ public:
   // first game: the player picks the starter (Bulbasaur/Charmander/Squirtle)
   bool awaitingStarter() const { return starterPick; }
   void chooseStarter(int16_t dex) { eggTarget = dex; starterPick = false; save(); }
-  void factoryReset() { prefs.clear(); }  // wipes the NVS (test: WIPE serial command)
+  // wipes the whole NVS namespace, the save blob included (test: WIPE serial command)
+  void factoryReset() { prefs.clear(); }
   void dbgRunawayReady() { fullness = joy = energy = hygiene = 0; neglectTicks = RUNAWAY_TICKS; }  // test
   // uint16_t, not uint8_t: with MINUTES_PER_LEVEL=60 the level is the hours, so
   // a uint8_t wraps to 0 at level 256, after ~10.6 days. And that is reachable
@@ -157,16 +165,17 @@ public:
     return lv > 999 ? 999 : (uint16_t)lv;
   }
   bool isRegistered(int16_t dex) const {
-    return dex >= 1 && dex <= DEX_COUNT && (dexReg[(dex - 1) >> 3] & (1 << ((dex - 1) & 7)));
+    return dex >= 1 && dex <= DEX_COUNT && bitmapTest(dexReg, dex);
   }
   bool isShinyRegistered(int16_t dex) const {
-    return dex >= 1 && dex <= DEX_COUNT && (dexShinyReg[(dex - 1) >> 3] & (1 << ((dex - 1) & 7)));
+    return dex >= 1 && dex <= DEX_COUNT && bitmapTest(dexShinyReg, dex);
   }
   uint16_t registeredCount() const;  // raised species only (caught ones are separate)
+  #pragma endregion
 
   #pragma region Wild battles and catching
   bool isCaught(int16_t dex) const {
-    return dex >= 1 && dex <= DEX_COUNT && (dexCaught[(dex - 1) >> 3] & (1 << ((dex - 1) & 7)));
+    return dex >= 1 && dex <= DEX_COUNT && bitmapTest(dexCaught, dex);
   }
   uint16_t caughtCount() const;
   // marks a wild species as caught; a shiny catch also sets the shiny registry
@@ -188,6 +197,8 @@ public:
   BattleReward applyBattleWin(int16_t wildDex, bool closeWin);
   void applyBattleLoss();
   #pragma endregion
+
+  #pragma region Eggs and ceremonies
   bool lineHasUnregistered(int16_t base) const;
   uint8_t eggRarity() const;       // rarity of the current egg (without revealing the species)
   int16_t pickEggSpecies();        // public so rolls can be simulated (EGGS)
@@ -198,14 +209,17 @@ public:
     if (ceremony == CER_NONE) return 0.0f;
     return 1.0f - (float)timeLeft(ceremonyUntil) / (float)CEREMONY_MS;
   }
+  #pragma endregion
 
-  // streak / bond / medals / name
+  #pragma region Streak, bond, medals and name
   void rename(const char *name);
   bool hasMedal(uint16_t m) const { return medals & m; }
   bool showMedal() const { return timeLeft(medalUntil) > 0; }
   bool showMilestone() const { return timeLeft(milestoneUntil) > 0; }
   int careBonus() const;  // egg improvement from streak + bond
+  #pragma endregion
 
+  #pragma region Saving
   // deferred periodic save: tick() marks it pending and the loop flushes it
   // when the screen is dimmed/off (writing to flash freezes both cores for
   // ~1s: this way it is not visible and does not cut out the touch)
@@ -213,38 +227,69 @@ public:
   // last persisted real time; used to reseed an RTC that lost its time
   uint32_t savedEpoch() { return prefs.getUInt("seen", 0); }
   void flushSave();
+  #pragma endregion
 
 private:
+  #pragma region Runtime state (not persisted unless noted)
   Preferences prefs;
   uint32_t lastTick = 0;
   uint32_t eatUntil = 0;
   uint32_t heartUntil = 0;
   uint32_t evolveUntil = 0;
-  int16_t eggTarget = 1;       // hidden dex that will come out of the egg
-  bool eggShiny = false;       // surprise rolled when the egg is created
-  uint8_t eggTaps = 0;
+  int16_t eggTarget = 1;       // hidden dex that will come out of the egg (persisted)
+  bool eggShiny = false;       // surprise rolled when the egg is created (persisted)
+  uint8_t eggTaps = 0;         // (persisted)
   uint8_t mistakeCooldown = 0;
   uint8_t ticksSinceSave = 0;
   bool pendingSave = false;     // periodic save waiting to be flushed
   uint16_t evoDeclinedLv = 0;   // "keep form": do not offer evolution until next level
   uint32_t farDeclinedAge = 0;  // "stay together": do not offer farewell until this age
-  bool starterPick = false;     // first game: waiting for the player to pick a starter
+  bool starterPick = false;     // first game: waiting for the player to pick a starter (persisted)
   uint8_t neglectTicks = 0;
   uint16_t goodTicks = 0;  // well-cared streak: forges DEF
   uint32_t ceremonyUntil = 0;
   uint8_t bondToday = 0;       // daily cap on bond gain
   uint32_t medalUntil = 0;     // medal celebration on screen
   uint32_t milestoneUntil = 0; // streak milestone celebration
+  #pragma endregion
 
+  #pragma region Internal helpers
   uint32_t today() const { return lastSeenEpoch ? lastSeenEpoch / 86400 : 0; }
-  void registerCare();   // first care of the day: streak + bond
+  // Helpers below never write to flash: the public action that calls them saves
+  // once at the end.
+  bool registerCare();   // first care of the day: streak + bond; true if it counted
   void addBond(uint8_t amt);
   void applyPlaySessionEffects(uint8_t score);  // shared by the ball game and the coin chase
-  void checkMedals();
+  bool checkMedals();    // true if a new medal was earned
+  void applySleepingMinute();  // one minute of rest: energy up, needs drop slowly with floors
+  // raises a training stat by gain, capped at 100; returns what actually went in
+  static uint8_t addTrainingPoints(uint8_t &trainingStat, uint8_t gain);
+  void beginCeremony(uint8_t ceremonyKind, bool showHearts);
+  bool markCaught(int16_t dex, bool shinyVariant);  // false if dex is out of range
+  // fills branchesOut with the Eevee evolutions missing from the pokedex; returns how many
+  uint8_t collectUnregisteredEeveeBranches(int16_t *branchesOut) const;
   void tick();
   void hatch();
   void registerSpecies(int16_t dex);
+  static uint8_t clamp100(int v) { return v < 0 ? 0 : (v > 100 ? 100 : v); }
+  #pragma endregion
+
+  // dex 1 to DEX_COUNT maps to bit dex-1; callers check the range
+  #pragma region Dex bitmaps
+  static bool bitmapTest(const uint8_t *bitmap, int16_t dex) {
+    return bitmap[(dex - 1) >> 3] & (1 << ((dex - 1) & 7));
+  }
+  static void bitmapSet(uint8_t *bitmap, int16_t dex) {
+    bitmap[(dex - 1) >> 3] |= (1 << ((dex - 1) & 7));
+  }
+  static uint16_t bitmapCount(const uint8_t *bitmap);  // set bits for dex 1..DEX_COUNT only
+  #pragma endregion
+
+  #pragma region Storage (pet_storage.cpp)
   void save();
   void load();
-  static uint8_t clamp100(int v) { return v < 0 ? 0 : (v > 100 ? 100 : v); }
+  bool loadSaveBlob();     // true if a valid versioned blob was read
+  void loadLegacyKeys();   // pre-blob format: one NVS key per field
+  #pragma endregion
 };
+#pragma endregion

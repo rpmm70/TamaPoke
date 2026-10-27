@@ -3,6 +3,19 @@
 #include "boards/board_select.h"  // BOARD_HAS_WIFI
 #pragma endregion
 
+#pragma region Public API: board-independent display helpers
+// 2.4 GHz channels are 1..14; anything above is 5 GHz. The ESP32 and ESP32-S3
+// radios are 2.4 GHz only, so on these boards every network shows 2.4 GHz.
+bool wifiIsChannelOn5GHz(uint8_t channel) { return channel > 14; }
+
+uint8_t wifiSignalBarsForRssi(int32_t rssi) {
+  if (rssi >= -55) return 4;
+  if (rssi >= -67) return 3;
+  if (rssi >= -78) return 2;
+  return 1;
+}
+#pragma endregion
+
 #if BOARD_HAS_WIFI
 
 #pragma region WiFi includes
@@ -11,13 +24,14 @@
 #include <Preferences.h>
 #include <string.h>
 #include "esp_random.h"
+#include "nvs_settings.h"  // NVS_NAMESPACE
 #include "mbedtls/gcm.h"
 #include "mbedtls/sha256.h"
 #include "mbedtls/platform_util.h"  // mbedtls_platform_zeroize: a wipe the compiler cannot drop
 #pragma endregion
 
 #pragma region Configuration
-#define WIFI_NVS_NAMESPACE "tamapoke"
+#define WIFI_NVS_NAMESPACE NVS_NAMESPACE
 #define WIFI_NVS_KEY_ENABLED "wifiOn"
 #define WIFI_NVS_KEY_SSID "wifiSsid"
 #define WIFI_NVS_KEY_PASSWORD "wifiPass"
@@ -177,8 +191,8 @@ static void wipePendingWifiAttempt() {
 #pragma endregion
 
 #pragma region Internal helpers: radio
-// False when the WiFi stack cannot start (on the CYD: not enough internal RAM
-// next to the framebuffer). Logs the heap either way, to size the budget.
+// False when the WiFi stack cannot start (typically not enough internal RAM).
+// Logs the heap either way, to size the budget.
 static bool startWifiRadio() {
   Serial.printf("WiFi: starting, heap free=%u largest block=%u\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
   WiFi.persistent(false);  // the IDF must never keep its own plain-text copy in NVS
@@ -429,17 +443,6 @@ WifiSecurityKind wifiSecurityKindOf(uint8_t authMode) {
     default: return WIFI_SECURITY_PASSWORD;
   }
 }
-
-// 2.4 GHz channels are 1..14; anything above is 5 GHz. The ESP32 and ESP32-S3
-// radios are 2.4 GHz only, so on these boards every network shows 2.4 GHz.
-bool wifiIsChannelOn5GHz(uint8_t channel) { return channel > 14; }
-
-uint8_t wifiSignalBarsForRssi(int32_t rssi) {
-  if (rssi >= -55) return 4;
-  if (rssi >= -67) return 3;
-  if (rssi >= -78) return 2;
-  return 1;
-}
 #pragma endregion
 
 #else  // !BOARD_HAS_WIFI
@@ -462,8 +465,6 @@ const char *wifiConnectedSsid() { return ""; }
 bool wifiIsConnectedToSsid(const char *ssid) { (void)ssid; return false; }
 const char *wifiSecurityLabel(uint8_t authMode) { (void)authMode; return ""; }
 WifiSecurityKind wifiSecurityKindOf(uint8_t authMode) { (void)authMode; return WIFI_SECURITY_OPEN; }
-bool wifiIsChannelOn5GHz(uint8_t channel) { return channel > 14; }
-uint8_t wifiSignalBarsForRssi(int32_t rssi) { (void)rssi; return 1; }
 #pragma endregion
 
 #endif  // BOARD_HAS_WIFI

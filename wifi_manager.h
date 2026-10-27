@@ -4,8 +4,10 @@
 // signal strength, and connection to one saved network. The saved password is
 // stored in NVS encrypted with AES-256-GCM (see wifi_manager.cpp for the key).
 // Everything is non-blocking: wifiUpdate() advances the scan and the connection
-// from loop(). On boards without WiFi (BOARD_HAS_WIFI 0, the CYD) every call is
-// a stub: WiFi reads as off and the WiFi library is not linked.
+// from loop(). On boards without WiFi (BOARD_HAS_WIFI 0, the CYD) every radio
+// call is a stub: WiFi reads as off and the WiFi library is not linked. The
+// two pure display helpers (wifiIsChannelOn5GHz, wifiSignalBarsForRssi) are
+// the same on every board.
 
 #pragma region Includes
 #include <stdint.h>

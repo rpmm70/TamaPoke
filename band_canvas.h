@@ -4,8 +4,10 @@
 // PSRAM (CYD). The ESP32 has ~300 KB of free internal RAM, but it is split
 // into regions: the largest contiguous block is ~110 KB, so a single 150 KB
 // Arduino_Canvas never fits. Several 20 KB bands do (40 KB bands stopped
-// fitting once the WiFi library's static RAM shrank the region after .bss
-// to ~80 KB: small bands fill the leftover gaps). The scene is drawn ONCE
+// fitting when an earlier CYD build linked the WiFi library, whose static RAM
+// shrank the region after .bss to ~80 KB; small bands still fill whatever
+// gaps the heap has, so they are kept now that WiFi is compiled out of the
+// CYD build). The scene is drawn ONCE
 // (same drawing code as with Arduino_Canvas) and flush() sends the bands one
 // after the other, so the panel never shows a half-drawn frame.
 // Rotation 0 only: the landscape rotation is done by the panel (rotation=1).

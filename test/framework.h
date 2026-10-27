@@ -1,12 +1,16 @@
 // Micro test framework: no dependencies, a single binary.
 #pragma once
+
+#pragma region Includes
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <sstream>
 #include <string>
 #include <vector>
+#pragma endregion
 
+#pragma region Test registry
 struct TestCase {
   std::string suite;
   std::string name;
@@ -29,8 +33,10 @@ struct TestRegistrar {
     testRegistry().push_back(tc);
   }
 };
+#pragma endregion
 
-#define TEST(suite, name)                                                        \
+#pragma region Test declaration macros
+#define TEST(suite, name)                                                      \
   static void suite##_##name##_body();                                           \
   static TestRegistrar suite##_##name##_reg(#suite, #name, suite##_##name##_body); \
   static void suite##_##name##_body()
@@ -42,7 +48,9 @@ struct TestRegistrar {
   static TestRegistrar suite##_##name##_reg(#suite, #name, suite##_##name##_body, \
                                             true, note);                         \
   static void suite##_##name##_body()
+#pragma endregion
 
+#pragma region Failure reporting and value printing
 void testFail(const char *file, int line, const std::string &msg);
 extern int gAssertCount;
 
@@ -57,8 +65,10 @@ static inline std::string testStr(const T &v) {
   os << v;
   return os.str();
 }
+#pragma endregion
 
-#define CHECK(cond)                                                              \
+#pragma region Assertion macros
+#define CHECK(cond)                                                             \
   do {                                                                           \
     gAssertCount++;                                                              \
     if (!(cond)) testFail(__FILE__, __LINE__, "CHECK(" #cond ")");               \
@@ -95,3 +105,4 @@ static inline std::string testStr(const T &v) {
     if (!_sa || !_sb || strcmp(_sa, _sb) != 0)                                   \
       testFail(__FILE__, __LINE__, std::string(#a " == " #b " -> ") + testStr(_sa) + " vs " + testStr(_sb)); \
   } while (0)
+#pragma endregion

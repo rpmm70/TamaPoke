@@ -37,7 +37,7 @@
 <div class="wrap">
   <h1>🐢 TamaPoke</h1>
   <p class="sub">A 151-Pokémon tamagotchi for the Waveshare ESP32-S3-Touch-AMOLED-1.75.
-     Install it from your browser — no Arduino, no drivers.</p>
+     Install it from your browser - no Arduino, no drivers.</p>
 
   <p class="unsupported" id="unsupported">
     ⚠️ Your browser doesn't support Web Serial. Use <b>Chrome</b> or <b>Edge</b> on a computer.
@@ -52,7 +52,7 @@
       <span slot="not-allowed">Needs HTTPS.</span>
     </esp-web-install-button>
     <p class="note">🔄 <b>Updating to a new version? Install <u>without</u> erasing</b> to keep
-       your Pokémon — the save lives in flash and the sprites on the microSD, so a normal
+       your Pokémon - the save lives in flash and the sprites on the microSD, so a normal
        install keeps both. Only a full <b>Erase</b> wipes your saved pet (the SD sprites
        survive even that). First time on a fresh board? You can erase, no problem.</p>
   </div>
@@ -61,7 +61,7 @@
   <div class="step">
     <p>Put a microSD into the board (it formats itself). Press <b>Connect board</b>
        and then <b>Load sprites</b>: they download and copy over USB automatically
-       (~40 MB, a few minutes). Don't remove the card.</p>
+       (~42 MB, a few minutes). Don't remove the card.</p>
     <p class="note">Close the step-1 install tab first (only one program can use
        the port at a time).</p>
     <div class="row">
@@ -160,7 +160,7 @@ function parsePak(buf) {
 
 // resume: remembers which files were confirmed (name+size, so a regenerated
 // bundle with different content under the same name is not silently skipped),
-// so a reload after an interruption does not repeat the whole ~40 MB / ~10 min
+// so a reload after an interruption does not repeat the whole ~42 MB / ~10 min
 const RESUME_KEY = 'tamapoke_sent_files';
 const loadResumeSet = () => { try { return new Set(JSON.parse(localStorage.getItem(RESUME_KEY) || '[]')); } catch { return new Set(); } };
 const saveResumeSet = (s) => { try { localStorage.setItem(RESUME_KEY, JSON.stringify([...s])); } catch {} };
@@ -207,7 +207,7 @@ document.getElementById('connect').onclick = async () => {
 document.getElementById('auto').onclick = async () => {
   if (!writer) { log('Connect the board first.'); return; }
   document.getElementById('auto').disabled = true;
-  log('Downloading sprite bundle (~58 MB)...');
+  log('Downloading sprite bundle (~42 MB)...');
   let items;
   try {
     // sprites.pak served from the same origin (GitHub Pages) -> no CORS hassle

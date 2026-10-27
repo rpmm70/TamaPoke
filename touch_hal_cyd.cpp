@@ -1,63 +1,76 @@
+#pragma region Includes
 #include "touch_hal.h"
 #include "boards/board_select.h"
+#pragma endregion
 
-#if BOARD_CYD_RECT
+#if BOARD_TOUCH_XPT2046
 
 // Resistive XPT2046 read by bit-banging (TOUCH_* pins), NOT by hardware SPI.
 // Reason: the CYD spreads three devices across two SPI buses (display on
 // HSPI, SD on VSPI, touch on its own pins). An SPIClass for the touch would
 // clash with the SD; reading two 12-bit words by hand costs ~100 us and
 // cannot collide with anything. No extra library is needed.
+// Calibration (TOUCH_SWAP_XY / TOUCH_INVERT_* / TOUCH_RAW_*) lives in the board
+// header (boards/board_cyd_rect.h).
 
-// Calibrated on the real unit (landscape, rotation=1) with -DTOUCH_DEBUG, from
-// the four bottom buttons (x=40/120/200/280, y=218) plus a tap at the center:
-// the raw X channel follows the screen's Y and vice versa (hence SWAP), neither
-// axis is mirrored. ~11.2 raw units per px horizontally, ~15.1 vertically; the
-// ranges below are those lines extrapolated to the screen edges.
-// If touches come out rotated/mirrored, change TOUCH_SWAP/INVERT; if they are
-// off at the edges, adjust RAW_*. To see the raw values, build with
-// -DTOUCH_DEBUG and touch the four corners while watching serial.
-#ifndef TOUCH_SWAP_XY
-#define TOUCH_SWAP_XY 1
-#endif
-#ifndef TOUCH_INVERT_X
-#define TOUCH_INVERT_X 0
-#endif
-#ifndef TOUCH_INVERT_Y
-#define TOUCH_INVERT_Y 0
-#endif
-// per-axis ranges, in screen axes (applied after the swap)
-static const int RAW_X_MIN = 166;
-static const int RAW_X_MAX = 3726;
-static const int RAW_Y_MIN = 260;
-static const int RAW_Y_MAX = 3875;
+#pragma region XPT2046 protocol constants
+// Control byte: S=1, A2..A0 = channel, MODE=0 (12 bit), SER/DFR=0 (differential),
+// PD1..PD0 = 00 (power down between conversions, PENIRQ enabled)
+#define XPT2046_COMMAND_READ_X 0xD0
+#define XPT2046_COMMAND_READ_Y 0x90
+// Half period of the bit-banged clock. The XPT2046 allows up to 2.5 MHz (400 ns
+// per clock), so 1 us high + 1 us low (500 kHz) leaves plenty of margin.
+#define XPT2046_HALF_CLOCK_US 1
+#define XPT2046_CONVERSION_BITS 12
+#define XPT2046_PAD_CLOCKS 4      // pads the 8 + 12 clocks out to the 24-clock conversion frame
+#define TOUCH_SAMPLES_PER_AXIS 3  // median of three readings per axis
+// with no pressure the bus floats to 0 or 4095: readings outside this window are discarded
+#define TOUCH_RAW_FLOATING_LOW 50
+#define TOUCH_RAW_FLOATING_HIGH 4090
+#pragma endregion
 
-static inline void clk() {
+#pragma region Bit-banged XPT2046 access
+static inline void pulseTouchClock() {
   digitalWrite(TOUCH_CLK, HIGH);
-  delayMicroseconds(2);
+  delayMicroseconds(XPT2046_HALF_CLOCK_US);
   digitalWrite(TOUCH_CLK, LOW);
-  delayMicroseconds(2);
+  delayMicroseconds(XPT2046_HALF_CLOCK_US);
 }
 
 // Sends a control byte and returns the 12-bit conversion
-static uint16_t xptRead(uint8_t cmd) {
+static uint16_t readXpt2046Channel(uint8_t controlByte) {
+  #pragma region Shift out the control byte, MSB first
   for (int i = 7; i >= 0; i--) {
-    digitalWrite(TOUCH_MOSI, (cmd >> i) & 1);
-    clk();
+    digitalWrite(TOUCH_MOSI, (controlByte >> i) & 1);
+    pulseTouchClock();
   }
   digitalWrite(TOUCH_MOSI, LOW);
+  #pragma endregion
+
+  #pragma region Shift in the 12-bit result
   // No separate BUSY clock: the MSB comes out on the falling edge of the 9th
-  // clock, which is the first clk() of this loop. An extra clock here lost the
-  // MSB (every reading came out doubled, wrapped and always even).
-  uint16_t v = 0;
-  for (int i = 0; i < 12; i++) {
-    clk();
-    v = (v << 1) | (digitalRead(TOUCH_MISO) ? 1 : 0);
+  // clock, which is the first pulseTouchClock() of this loop. An extra clock
+  // here lost the MSB (every reading came out doubled, wrapped and always even).
+  uint16_t conversionValue = 0;
+  for (int i = 0; i < XPT2046_CONVERSION_BITS; i++) {
+    pulseTouchClock();
+    conversionValue = (conversionValue << 1) | (digitalRead(TOUCH_MISO) ? 1 : 0);
   }
-  for (int i = 0; i < 4; i++) clk();  // pad out to the 24-clock conversion
-  return v;
+  for (int i = 0; i < XPT2046_PAD_CLOCKS; i++) pulseTouchClock();
+  return conversionValue;
+  #pragma endregion
 }
 
+static int medianOfThree(int first, int second, int third) {
+  int swapTemporary;
+  if (first > second) { swapTemporary = first; first = second; second = swapTemporary; }
+  if (second > third) { swapTemporary = second; second = third; third = swapTemporary; }
+  if (first > second) { second = first; }
+  return second;
+}
+#pragma endregion
+
+#pragma region Public API
 void touchHalBegin() {
   pinMode(TOUCH_CS, OUTPUT);
   digitalWrite(TOUCH_CS, HIGH);
@@ -74,41 +87,40 @@ bool touchHalHasEvent() {
   return digitalRead(TOUCH_IRQ) == LOW;
 }
 
-static int median3(int a, int b, int c) {
-  if (a > b) { int t = a; a = b; b = t; }
-  if (b > c) { int t = b; b = c; c = t; }
-  if (a > b) { b = a; }
-  return b;
-}
-
 bool touchHalGetPoint(int16_t *x, int16_t *y) {
   if (digitalRead(TOUCH_IRQ) != LOW) return false;
 
+  #pragma region Sample both channels
   digitalWrite(TOUCH_CS, LOW);
-  int rx[3], ry[3];
-  for (int i = 0; i < 3; i++) {
-    rx[i] = xptRead(0xD0);  // X channel
-    ry[i] = xptRead(0x90);  // Y channel
+  int rawXSamples[TOUCH_SAMPLES_PER_AXIS], rawYSamples[TOUCH_SAMPLES_PER_AXIS];
+  for (int i = 0; i < TOUCH_SAMPLES_PER_AXIS; i++) {
+    rawXSamples[i] = readXpt2046Channel(XPT2046_COMMAND_READ_X);
+    rawYSamples[i] = readXpt2046Channel(XPT2046_COMMAND_READ_Y);
   }
-  xptRead(0x90 & ~0x03);  // PD=00: leaves the chip idle with IRQ enabled
+  // PD=00 (already in the command byte): the last conversion leaves the chip idle with IRQ enabled
+  readXpt2046Channel(XPT2046_COMMAND_READ_Y);
   digitalWrite(TOUCH_CS, HIGH);
+  #pragma endregion
 
-  int rawX = median3(rx[0], rx[1], rx[2]);
-  int rawY = median3(ry[0], ry[1], ry[2]);
+  int rawX = medianOfThree(rawXSamples[0], rawXSamples[1], rawXSamples[2]);
+  int rawY = medianOfThree(rawYSamples[0], rawYSamples[1], rawYSamples[2]);
 #ifdef TOUCH_DEBUG
   Serial.printf("touch raw x=%d y=%d\n", rawX, rawY);
 #endif
-  // with no pressure the bus floats to 0 or 4095: discard
-  if (rawX <= 50 || rawX >= 4090 || rawY <= 50 || rawY >= 4090) return false;
+  if (rawX <= TOUCH_RAW_FLOATING_LOW || rawX >= TOUCH_RAW_FLOATING_HIGH ||
+      rawY <= TOUCH_RAW_FLOATING_LOW || rawY >= TOUCH_RAW_FLOATING_HIGH) return false;
 
-  if (TOUCH_SWAP_XY) { int t = rawX; rawX = rawY; rawY = t; }
-  long mx = map(rawX, RAW_X_MIN, RAW_X_MAX, 0, LCD_WIDTH - 1);
-  long my = map(rawY, RAW_Y_MIN, RAW_Y_MAX, 0, LCD_HEIGHT - 1);
-  if (TOUCH_INVERT_X) mx = LCD_WIDTH - 1 - mx;
-  if (TOUCH_INVERT_Y) my = LCD_HEIGHT - 1 - my;
-  *x = (int16_t)constrain(mx, 0, LCD_WIDTH - 1);
-  *y = (int16_t)constrain(my, 0, LCD_HEIGHT - 1);
+  #pragma region Map raw readings to screen pixels
+  if (TOUCH_SWAP_XY) { int swapTemporary = rawX; rawX = rawY; rawY = swapTemporary; }
+  long screenX = map(rawX, TOUCH_RAW_X_MIN, TOUCH_RAW_X_MAX, 0, LCD_WIDTH - 1);
+  long screenY = map(rawY, TOUCH_RAW_Y_MIN, TOUCH_RAW_Y_MAX, 0, LCD_HEIGHT - 1);
+  if (TOUCH_INVERT_X) screenX = LCD_WIDTH - 1 - screenX;
+  if (TOUCH_INVERT_Y) screenY = LCD_HEIGHT - 1 - screenY;
+  *x = (int16_t)constrain(screenX, 0, LCD_WIDTH - 1);
+  *y = (int16_t)constrain(screenY, 0, LCD_HEIGHT - 1);
   return true;
+  #pragma endregion
 }
+#pragma endregion
 
-#endif  // BOARD_CYD_RECT
+#endif  // BOARD_TOUCH_XPT2046
