@@ -129,6 +129,8 @@ void setup() {
   pet.syncClock(bootEpoch);
   #pragma endregion
 
+  if (pet.awaitingStarter()) openClockForFirstRunSetup();  // first boot: date and time before the starter choice
+
   audioBegin();  // codec/speaker (plays a startup jingle)
   wifiBegin();   // after the framebuffer: the WiFi stack's RAM comes from what is left
 

@@ -83,7 +83,7 @@ enum OpenScreen : uint8_t {
 };
 
 static uint32_t currentOpenScreenKey() {
-  if (pet.awaitingStarter()) return OPEN_SCREEN_STARTER_SELECT;
+  if (pet.awaitingStarter() && settingsScreen == SETTINGS_CLOSED) return OPEN_SCREEN_STARTER_SELECT;
   if (galleryOpen) return OPEN_SCREEN_GALLERY;
   if (gameOpen) return OPEN_SCREEN_BALL_GAME;
   if (coinOpen) return OPEN_SCREEN_COIN_CHASE;
@@ -262,7 +262,7 @@ void render() {
   #pragma endregion
 
   #pragma region Full screens (static ones redraw only when dirty or on the safety refresh)
-  if (pet.awaitingStarter()) {  // first game: pick a starter (top priority)
+  if (pet.awaitingStarter() && settingsScreen == SETTINGS_CLOSED) {  // first game: pick a starter once the time is set
     renderStarterSelect();
     return;
   }

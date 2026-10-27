@@ -57,7 +57,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolucionar?", "Mantener forma", "Despedirse?", "Despedirse", "Quedaros juntos",
     "Elige tu inicial",
     "Sin sprites", "C\240rgalos en la SD",
-    "AJUSTES", "Apagar", "Audio / V\241deo", "Hora", "Idioma",
+    "AJUSTES", "Apagar", "Audio / V\241deo", "Fecha / Hora", "Idioma",
     "Sonido", "Brillo", "On", "Off",
     //#region ES wild battle strings
     "COMBATE SALVAJE", "Combate salvaje?", "LUCHAR", "Luego", "HUIR",
@@ -101,7 +101,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolve?", "Keep form", "Say goodbye?", "Goodbye", "Stay together",
     "Choose your starter",
     "No sprites", "Load them onto the SD",
-    "SETTINGS", "Screen Off", "Audio / Video", "Time", "Language",
+    "SETTINGS", "Screen Off", "Audio / Video", "Date / Time", "Language",
     "Sound", "Brightness", "On", "Off",
     //#region EN wild battle strings
     "WILD BATTLE", "Wild battle?", "FIGHT", "Later", "RUN",
@@ -145,7 +145,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "\220voluer?", "Garder forme", "Dire adieu?", "Adieu", "Rester ensemble",
     "Choisis ton starter",
     "Pas de sprites", "Charge-les sur la SD",
-    "R\220GLAGES", "\220teindre", "Audio / Vid\202o", "Heure", "Langue",
+    "R\220GLAGES", "\220teindre", "Audio / Vid\202o", "Date / Heure", "Langue",
     "Son", "Luminosit\202", "On", "Off",
     //#region FR wild battle strings
     "COMBAT SAUVAGE", "Combat sauvage?", "COMBAT", "Apr\212s", "FUIR",
@@ -194,7 +194,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Entwickeln?", "Form behalten", "Abschied?", "Leb wohl", "Zusammen bleiben",
     "W\204hle deinen Starter",
     "Keine Sprites", "Auf die SD laden",
-    "EINSTELLUNGEN", "Bildschirm aus", "Audio / Video", "Uhrzeit", "Sprache",
+    "EINSTELLUNGEN", "Bildschirm aus", "Audio / Video", "Datum / Uhrzeit", "Sprache",
     "Ton", "Helligkeit", "An", "Aus",
     //#region DE wild battle strings
     "WILDER KAMPF", "Wilder Kampf?", "KAMPF", "Sp\204ter", "FLIEHEN",
@@ -238,7 +238,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evolvere?", "Mantieni forma", "Salutare?", "Addio", "Restare insieme",
     "Scegli l'iniziale",
     "Senza sprite", "Caricali sulla SD",
-    "IMPOSTAZIONI", "Spegni schermo", "Audio / Video", "Ora", "Lingua",
+    "IMPOSTAZIONI", "Spegni schermo", "Audio / Video", "Data / Ora", "Lingua",
     "Suono", "Luminosit\205", "On", "Off",
     //#region IT wild battle strings
     "LOTTA SELVATICA", "Lotta selvatica?", "LOTTA", "Dopo", "FUGGI",
@@ -282,7 +282,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Evoluir?", "Manter forma", "Despedir?", "Adeus", "Ficar juntos",
     "Escolhe o inicial",
     "Sem sprites", "Carrega-os no SD",
-    "AJUSTES", "Desligar visor", "Audio / V\241deo", "Hora", "Idioma",
+    "AJUSTES", "Desligar visor", "Audio / V\241deo", "Data / Hora", "Idioma",
     "Som", "Brilho", "On", "Off",
     //#region PT wild battle strings
     "BATALHA SELVAGEM", "Batalha selvagem?", "LUTAR", "Depois", "FUGIR",
@@ -350,7 +350,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
 
     "スプライトなし", "SDにいれてください",
 
-    "せってい", "がめんオフ", "おと / がめん", "じかん", "ことば",
+    "せってい", "がめんオフ", "おと / がめん", "ひづけ / じかん", "ことば",
 
     "おと", "あかるさ", "オン", "オフ",
     //#region JA wild battle strings
@@ -400,7 +400,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "진화할까요?", "형태 유지", "작별할까요?", "작별", "계속 함께",
     "스타터를 선택하세요",
     "스프라이트 없음", "SD 카드에 넣어주세요",
-    "설정", "화면 끄기", "소리 / 화면", "시간", "언어",
+    "설정", "화면 끄기", "소리 / 화면", "날짜 / 시간", "언어",
     "소리", "밝기", "켬", "끔",
     //#region KO wild battle strings
     "야생 배틀", "야생 배틀?", "싸운다", "나중에", "도망",

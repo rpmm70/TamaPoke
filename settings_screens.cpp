@@ -4,6 +4,7 @@
 #pragma region Includes
 #include "settings_screens.h"
 #include <Preferences.h>
+#include <time.h>           // gmtime_r, mktime (date fields of the time screen)
 #include "app_state.h"      // settingsScreen, clockH/clockM, settingsBrightnessLevel, pet
 #include "audio.h"          // audioEnabled, audioSetEnabled, sfxPlay
 #include "board_display.h"  // gfx, clearScreenToDayBackground
@@ -27,35 +28,101 @@ static void openWifiSettings();
 #endif
 #pragma endregion
 
-#pragma region On-screen time setting helpers (settings menu > Time)
-// The user sets their LOCAL time by eye; the firmware uses it as-is, so there
-// is no time zone to manage. Preserves the day (does not break streak/age).
+#pragma region On-screen date and time setting helpers (settings menu > Time)
+// The user sets their LOCAL date and time by eye; the firmware uses it as-is, so
+// there is no time zone to manage. One field (year, month, day, hour or minute)
+// is selected at a time by tapping it, and the single -/+ pair steps that field.
+// Moving the date moves the day the streak counts from, like a real calendar day.
 
-// time the editor starts from and keeps the day of: the last saved time, else the RTC
+enum ClockField : uint8_t { CLOCK_FIELD_YEAR, CLOCK_FIELD_MONTH, CLOCK_FIELD_DAY, CLOCK_FIELD_HOUR, CLOCK_FIELD_MINUTE,
+                            CLOCK_FIELD_COUNT };
+// years the editor offers: the RTC chip treats years before 2025 as "no time", and uint32 epochs end in 2106
+#define CLOCK_YEAR_MIN 2025
+#define CLOCK_YEAR_MAX 2099
+// "2026-10-27" and "14:35": characters per line, and the width of one character cell (5x7 font + 1 px gap)
+#define CLOCK_DATE_CHAR_COUNT 10
+#define CLOCK_TIME_CHAR_COUNT 5
+#define CLOCK_CHAR_CELL_W 6
+
+// where each field sits: on the date line or the time line, first character and character count
+struct ClockFieldSpan {
+  bool onDateLine;
+  uint8_t firstChar, charCount;
+};
+static const ClockFieldSpan CLOCK_FIELD_SPANS[CLOCK_FIELD_COUNT] = {
+  { true, 0, 4 }, { true, 5, 2 }, { true, 8, 2 },  // year, month, day
+  { false, 0, 2 }, { false, 3, 2 },                // hour, minute
+};
+
+// date being edited (the time is clockH / clockM in app_state) and the field the -/+ pair steps
+static int clockYear = CLOCK_YEAR_MIN, clockMonth = 1, clockDay = 1;
+static ClockField clockSelectedField = CLOCK_FIELD_HOUR;
+// first boot: the time screen opens on its own before the starter choice; OK is the
+// only way out (no X) and it closes the settings instead of going back to the menu
+static bool clockIsFirstRunSetup = false;
+
+// time the editor starts from: the last saved time, else the RTC
 static uint32_t clockEditorBaseEpoch() {
   return pet.lastSeenEpoch ? pet.lastSeenEpoch : rtcEpoch();
 }
 
+static int daysInClockMonth(int year, int month) {
+  static const uint8_t DAYS_PER_MONTH[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+  bool leapYear = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+  return (month == 2 && leapYear) ? 29 : DAYS_PER_MONTH[month - 1];
+}
+
+// after a month or year change: Jan 31 -> Feb becomes Feb 28 (or 29)
+static void clampClockDayToMonth() {
+  int lastDay = daysInClockMonth(clockYear, clockMonth);
+  if (clockDay > lastDay) clockDay = lastDay;
+}
+
 static void openClock() {
-  uint32_t baseEpoch = clockEditorBaseEpoch();
-  clockH = (baseEpoch / 3600) % 24;
-  clockM = (baseEpoch / 60) % 60;
+  #pragma region Split the base time into date and time fields
+  time_t epochSeconds = clockEditorBaseEpoch();
+  struct tm calendarTime;
+  gmtime_r(&epochSeconds, &calendarTime);
+  clockYear = calendarTime.tm_year + 1900;
+  clockMonth = calendarTime.tm_mon + 1;
+  clockDay = calendarTime.tm_mday;
+  clockH = calendarTime.tm_hour;
+  clockM = calendarTime.tm_min;
+  #pragma endregion
+  #pragma region No clock yet (or out of range): start the date on Jan 1 of the first offered year
+  if (clockYear < CLOCK_YEAR_MIN || clockYear > CLOCK_YEAR_MAX) {
+    clockYear = CLOCK_YEAR_MIN;
+    clockMonth = 1;
+    clockDay = 1;
+  }
+  #pragma endregion
+  clockSelectedField = CLOCK_FIELD_HOUR;
   settingsScreen = SETTINGS_TIME;
 }
 
+void openClockForFirstRunSetup() {
+  openClock();
+  clockIsFirstRunSetup = true;
+}
 
-// OK: sets the time and goes back to the settings menu
+// OK: sets the date and time and goes back to the settings menu (first boot: on to the starter choice)
 static void applyClock() {
-  uint32_t baseEpoch = clockEditorBaseEpoch();
-  uint32_t newEpoch = (baseEpoch / 86400) * 86400 + (uint32_t)clockH * 3600 + (uint32_t)clockM * 60;
+  struct tm calendarTime = {};
+  calendarTime.tm_year = clockYear - 1900;
+  calendarTime.tm_mon = clockMonth - 1;
+  calendarTime.tm_mday = clockDay;
+  calendarTime.tm_hour = clockH;
+  calendarTime.tm_min = clockM;
+  uint32_t newEpoch = (uint32_t)mktime(&calendarTime);  // default TZ = UTC, consistent with gmtime_r (as in rtcbat.cpp)
   rtcSetEpoch(newEpoch);
   pet.setClock(newEpoch);
   saveClockFormatToNvs();  // the 12h/24h choice is persisted when the screen closes
-  settingsScreen = SETTINGS_MENU;
+  settingsScreen = clockIsFirstRunSetup ? SETTINGS_CLOSED : SETTINGS_MENU;
+  clockIsFirstRunSetup = false;
 }
 
 static void drawClockBtn(int buttonLeft, int buttonTop, const char *label) {
-  drawBorderedBox(buttonLeft, buttonTop, CLK_BTN, CLK_BTN, CLK_BTN_R, UI_WHITE, UI_INK);
+  drawBorderedBox(buttonLeft, buttonTop, CLK_BTN, CLK_BTN_H, CLK_BTN_R, UI_WHITE, UI_INK);
   gfx->setTextColor(UI_INK);
   setSize(TS(4));
   setCur(buttonLeft + CLK_GLYPH_DX, buttonTop + CLK_GLYPH_DY);
@@ -238,7 +305,7 @@ static void renderAudioVideoSettings() {
   drawSettingsLabel(T(S_BRIGHTNESS), SETTINGS_BRIGHTNESS_LABEL_Y);
   drawClockBtn(SETTINGS_BRIGHTNESS_MINUS_X, SETTINGS_BRIGHTNESS_ROW_Y, "-");
   drawClockBtn(SETTINGS_BRIGHTNESS_PLUS_X, SETTINGS_BRIGHTNESS_ROW_Y, "+");
-  const int barTop = SETTINGS_BRIGHTNESS_ROW_Y + (CLK_BTN - SETTINGS_BRIGHTNESS_BAR_H) / 2;
+  const int barTop = SETTINGS_BRIGHTNESS_ROW_Y + (CLK_BTN_H - SETTINGS_BRIGHTNESS_BAR_H) / 2;
   drawInsetProgressBar(SETTINGS_BRIGHTNESS_BAR_X, barTop, SETTINGS_BRIGHTNESS_BAR_W, SETTINGS_BRIGHTNESS_BAR_H,
                        SETTINGS_BRIGHTNESS_BAR_H / 2, (SETTINGS_BRIGHTNESS_BAR_H - 4) / 2, settingsBrightnessLevel,
                        SETTINGS_BRIGHTNESS_MAX, UI_BAR_OK);
@@ -259,11 +326,11 @@ static void handleAudioVideoSettingsTap(int16_t touchX, int16_t touchY) {
     if (audioEnabled()) sfxPlay(SFX_TAP);  // confirms when turning on
     return;
   }
-  if (isTouchInsideRect(touchX, touchY, SETTINGS_BRIGHTNESS_MINUS_X, SETTINGS_BRIGHTNESS_ROW_Y, CLK_BTN, CLK_BTN)) {
+  if (isTouchInsideRect(touchX, touchY, SETTINGS_BRIGHTNESS_MINUS_X, SETTINGS_BRIGHTNESS_ROW_Y, CLK_BTN, CLK_BTN_H)) {
     if (settingsBrightnessLevel > 0) settingsBrightnessLevel--;
     return;
   }
-  if (isTouchInsideRect(touchX, touchY, SETTINGS_BRIGHTNESS_PLUS_X, SETTINGS_BRIGHTNESS_ROW_Y, CLK_BTN, CLK_BTN)) {
+  if (isTouchInsideRect(touchX, touchY, SETTINGS_BRIGHTNESS_PLUS_X, SETTINGS_BRIGHTNESS_ROW_Y, CLK_BTN, CLK_BTN_H)) {
     if (settingsBrightnessLevel < SETTINGS_BRIGHTNESS_MAX) settingsBrightnessLevel++;
   }
 }
@@ -316,34 +383,108 @@ static void drawClockToggleButton(int buttonLeft, const char *currentLabel, bool
   drawTextCenteredInBox(currentLabel, TS(3), buttonLeft, CLK_MODE_Y, CLK_MODE_W, CLK_MODE_H);
 }
 
-// HOUR / MIN label centered under its -/+ button pair
-static void drawClockPairLabel(const char *label, int pairLeft) {
-  int pairCenterX = pairLeft + CLK_PAIR_W / 2;
-  setSize(2);
-  setCur(pairCenterX - (int)textW(label, 2) / 2, CLK_LBL_Y);
-  printT(label);
+#pragma endregion
+
+#pragma region Time settings screen: field selection and stepping
+// -/+ on the selected field (fieldStep -1 or +1); every field wraps around.
+// Month and year changes pull the day back into the new month.
+static void stepSelectedClockField(int fieldStep) {
+  switch (clockSelectedField) {
+    case CLOCK_FIELD_YEAR: {
+      int yearRange = CLOCK_YEAR_MAX - CLOCK_YEAR_MIN + 1;
+      clockYear = CLOCK_YEAR_MIN + (clockYear - CLOCK_YEAR_MIN + yearRange + fieldStep) % yearRange;
+      clampClockDayToMonth();
+      break;
+    }
+    case CLOCK_FIELD_MONTH:
+      clockMonth = (clockMonth - 1 + 12 + fieldStep) % 12 + 1;
+      clampClockDayToMonth();
+      break;
+    case CLOCK_FIELD_DAY: {
+      int lastDay = daysInClockMonth(clockYear, clockMonth);
+      clockDay = (clockDay - 1 + lastDay + fieldStep) % lastDay + 1;
+      break;
+    }
+    case CLOCK_FIELD_HOUR: stepClockHour(fieldStep); break;
+    default: clockM = (clockM + 60 + fieldStep) % 60; break;
+  }
+}
+
+#pragma region Line geometry (shared by drawing and touch)
+static int clockLineTextSize(bool dateLine) { return dateLine ? CLK_DATE_SIZE : CLK_DIG_SIZE; }
+static int clockLineTop(bool dateLine) { return dateLine ? CLK_DATE_Y : CLK_DIG_Y; }
+static int clockLineCharWidth(bool dateLine) { return CLOCK_CHAR_CELL_W * clockLineTextSize(dateLine); }
+static int clockLineLeft(bool dateLine) {
+  int charCount = dateLine ? CLOCK_DATE_CHAR_COUNT : CLOCK_TIME_CHAR_COUNT;
+  return CX - charCount * clockLineCharWidth(dateLine) / 2;
+}
+#pragma endregion
+
+// Field under a tap, or CLOCK_FIELD_COUNT for none. Each field owns its line's
+// height (plus the highlight padding) and reaches sideways to the middle of the
+// separators next to it; the outer fields reach the screen edges.
+static ClockField clockFieldAtTouch(int16_t touchX, int16_t touchY) {
+  for (int field = 0; field < CLOCK_FIELD_COUNT; field++) {
+    const ClockFieldSpan &span = CLOCK_FIELD_SPANS[field];
+    #pragma region Vertical: the line of the field
+    int lineTop = clockLineTop(span.onDateLine) - CLK_FIELD_PAD;
+    int lineBottom = clockLineTop(span.onDateLine) + FONT_H * clockLineTextSize(span.onDateLine) + CLK_FIELD_PAD;
+    if (touchY < lineTop || touchY >= lineBottom) continue;
+    #pragma endregion
+    #pragma region Horizontal: between the neighboring separators
+    int charCount = span.onDateLine ? CLOCK_DATE_CHAR_COUNT : CLOCK_TIME_CHAR_COUNT;
+    int lineLeft = clockLineLeft(span.onDateLine), charWidth = clockLineCharWidth(span.onDateLine);
+    int regionLeft = span.firstChar == 0 ? 0 : lineLeft + (span.firstChar - 1) * charWidth + charWidth / 2;
+    int lastChar = span.firstChar + span.charCount;
+    int regionRight = lastChar == charCount ? LCD_WIDTH : lineLeft + lastChar * charWidth + charWidth / 2;
+    if (touchX >= regionLeft && touchX < regionRight) return (ClockField)field;
+    #pragma endregion
+  }
+  return CLOCK_FIELD_COUNT;
+}
+
+// One line of digits; the selected field (if it is on this line) is inverted: ink box, white digits
+static void drawClockLine(bool dateLine, const char *lineText) {
+  int textSize = clockLineTextSize(dateLine), lineTop = clockLineTop(dateLine), lineLeft = clockLineLeft(dateLine);
+  gfx->setTextColor(UI_INK);
+  setSize(textSize);
+  setCur(lineLeft, lineTop);
+  printT(lineText);
+
+  #pragma region Selected field highlight
+  const ClockFieldSpan &span = CLOCK_FIELD_SPANS[clockSelectedField];
+  if (span.onDateLine != dateLine) return;
+  int charWidth = clockLineCharWidth(dateLine);
+  int fieldLeft = lineLeft + span.firstChar * charWidth;
+  int glyphsWidth = span.charCount * charWidth - textSize;  // without the last blank column
+  gfx->fillRoundRect(fieldLeft - CLK_FIELD_PAD, lineTop - CLK_FIELD_PAD, glyphsWidth + 2 * CLK_FIELD_PAD,
+                     (FONT_H - 1) * textSize + 2 * CLK_FIELD_PAD, CLK_BTN_R / 2, UI_INK);
+  char fieldText[5];
+  memcpy(fieldText, lineText + span.firstChar, span.charCount);
+  fieldText[span.charCount] = '\0';
+  gfx->setTextColor(UI_WHITE);
+  setCur(fieldLeft, lineTop);
+  printT(fieldText);
+  #pragma endregion
 }
 #pragma endregion
 
 #pragma region Time settings screen
 static void renderClock() {
-  beginSettingsScreen(T(S_SET_TIME));
+  beginSettingsScreen(T(S_MENU_TIME));  // same label as its menu row, like Audio / Video
 
-  gfx->setTextColor(UI_INK);
+  #pragma region Date (YYYY-MM-DD, language-neutral) and time lines
+  char dateText[16];
+  snprintf(dateText, sizeof(dateText), "%04d-%02d-%02d", clockYear, clockMonth, clockDay);
+  drawClockLine(true, dateText);
   char timeText[8];
   if (clockUses24Hour) snprintf(timeText, sizeof(timeText), "%02d:%02d", clockH, clockM);
   else snprintf(timeText, sizeof(timeText), "%2d:%02d", clockHourOn12HourDial(), clockM);  // same 5 chars: stays centered
-  setSize(CLK_DIG_SIZE);
-  setCur(CX - CLK_DIG_HALF, CLK_DIG_Y);
-  printT(timeText);
+  drawClockLine(false, timeText);
+  #pragma endregion
 
-  drawClockBtn(CLK_HM_X, CLK_BTN_Y, "-");  // hour -
-  drawClockBtn(CLK_HP_X, CLK_BTN_Y, "+");  // hour +
-  drawClockBtn(CLK_MM_X, CLK_BTN_Y, "-");  // min -
-  drawClockBtn(CLK_MP_X, CLK_BTN_Y, "+");  // min +
-  gfx->setTextColor(UI_LABEL);
-  drawClockPairLabel(T(S_HOUR), CLK_HM_X);
-  drawClockPairLabel(T(S_MIN), CLK_MM_X);
+  drawClockBtn(CLK_MINUS_X, CLK_BTN_Y, "-");  // selected field -
+  drawClockBtn(CLK_PLUS_X, CLK_BTN_Y, "+");   // selected field +
 
   #pragma region 12h/24h and AM/PM toggle buttons (language-neutral literals)
   drawClockToggleButton(CLK_FORMAT_X, clockUses24Hour ? "24h" : "12h", true);
@@ -356,23 +497,28 @@ static void renderClock() {
   setCur(CX - CLK_OK_TX, CLK_OK_TY);
   printT("OK");
 
-  drawScreenCloseButton();
+  if (!clockIsFirstRunSetup) drawScreenCloseButton();  // first boot: OK is the only way out
   gfx->flush();
 }
 
 // The +/- row and the OK button keep their original inclusive bottom / right
 // edges (<=), so they are not converted to isTouchInsideRect.
 static void clockTap(int16_t touchX, int16_t touchY) {
-  if (isTouchOnScreenCloseButton(touchX, touchY)) {  // back to the menu WITHOUT applying the time
+  if (!clockIsFirstRunSetup && isTouchOnScreenCloseButton(touchX, touchY)) {  // back to the menu WITHOUT applying the date and time
     saveClockFormatToNvs();  // the 12h/24h choice is kept either way
     settingsScreen = SETTINGS_MENU;
     return;
   }
-  if (touchY >= CLK_BTN_Y && touchY <= CLK_BTN_Y + CLK_BTN) {  // row of +/- buttons
-    if (touchX >= CLK_HM_X && touchX < CLK_HM_X + CLK_BTN) stepClockHour(-1);
-    else if (touchX >= CLK_HP_X && touchX < CLK_HP_X + CLK_BTN) stepClockHour(1);
-    else if (touchX >= CLK_MM_X && touchX < CLK_MM_X + CLK_BTN) clockM = (clockM + 59) % 60;
-    else if (touchX >= CLK_MP_X && touchX < CLK_MP_X + CLK_BTN) clockM = (clockM + 1) % 60;
+  #pragma region Tapping a field of the date or time selects it
+  ClockField tappedField = clockFieldAtTouch(touchX, touchY);
+  if (tappedField != CLOCK_FIELD_COUNT) {
+    clockSelectedField = tappedField;
+    return;
+  }
+  #pragma endregion
+  if (touchY >= CLK_BTN_Y && touchY <= CLK_BTN_Y + CLK_BTN_H) {  // -/+ pair: steps the selected field
+    if (touchX >= CLK_MINUS_X && touchX < CLK_MINUS_X + CLK_BTN) stepSelectedClockField(-1);
+    else if (touchX >= CLK_PLUS_X && touchX < CLK_PLUS_X + CLK_BTN) stepSelectedClockField(1);
     return;
   }
   #pragma region 12h/24h toggle (flips, persisted on close) and AM/PM toggle (12h only)

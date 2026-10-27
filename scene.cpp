@@ -879,3 +879,203 @@ void drawCoinChaseField() {
   #pragma endregion
 }
 #pragma endregion
+
+#pragma region Ball game stage
+// Theater seen from the audience: a dark back wall, red side curtains gathered
+// by gold tie-backs, a scalloped valance across the top, a plank stage floor with
+// a spotlight pool and a wooden apron below its front edge.
+static const uint16_t STAGE_WALL_COLOR = C565(0x2A, 0x1A, 0x2E);
+static const uint16_t STAGE_CURTAIN_COLOR = C565(0xB0, 0x1E, 0x2A);
+static const uint16_t STAGE_CURTAIN_SHADOW_COLOR = C565(0x7A, 0x12, 0x1C);
+static const uint16_t STAGE_CURTAIN_SHINE_COLOR = C565(0xD8, 0x3A, 0x40);
+static const uint16_t STAGE_GOLD_COLOR = C565(0xE8, 0xB8, 0x4A);
+static const uint16_t STAGE_FLOOR_COLOR = C565(0xB8, 0x80, 0x48);
+static const uint16_t STAGE_FLOOR_LIT_COLOR = C565(0xD8, 0xA4, 0x66);
+static const uint16_t STAGE_PLANK_SEAM_COLOR = C565(0x8A, 0x5A, 0x30);
+static const uint16_t STAGE_APRON_COLOR = C565(0x5A, 0x34, 0x1C);
+static const uint16_t STAGE_APRON_SEAM_COLOR = C565(0x40, 0x24, 0x12);
+// folds per side curtain, plank rows on the floor, rows per curtain band
+static const int STAGE_CURTAIN_FOLDS = 5;
+static const int STAGE_PLANK_ROWS = 3;
+static const int STAGE_CURTAIN_BAND_H = 2;
+// the tie-back sits this far down the curtain (0 = top, 1 = floor)
+static const float STAGE_TIE_BACK_RATIO = 0.6f;
+
+// width of a side curtain at curtainY: wide at the top, pinched at the tie-back, flared at the floor
+static int stageCurtainWidthAt(int curtainY, int curtainBottom) {
+  int topWidth = SX(118), tieWidth = SX(48), bottomWidth = SX(84);
+  float progress = (float)curtainY / curtainBottom;
+  if (progress < STAGE_TIE_BACK_RATIO) {
+    float towardTie = progress / STAGE_TIE_BACK_RATIO;
+    return topWidth + (int)((tieWidth - topWidth) * towardTie * towardTie);
+  }
+  float towardFloor = (progress - STAGE_TIE_BACK_RATIO) / (1.0f - STAGE_TIE_BACK_RATIO);
+  return tieWidth + (int)((bottomWidth - tieWidth) * towardFloor * towardFloor);
+}
+
+// one band of fold stripes for both side curtains (the right one mirrored)
+static void drawStageCurtainBand(int bandTop, int curtainWidth) {
+  for (int fold = 0; fold < STAGE_CURTAIN_FOLDS; fold++) {
+    int foldLeft = curtainWidth * fold / STAGE_CURTAIN_FOLDS;
+    int foldWidth = curtainWidth * (fold + 1) / STAGE_CURTAIN_FOLDS - foldLeft;
+    int shadowWidth = foldWidth / 3, shineWidth = max(1, foldWidth / 6);
+    int shineLeft = foldLeft + foldWidth * 3 / 5;
+    #pragma region Left curtain
+    gfx->fillRect(foldLeft, bandTop, foldWidth, STAGE_CURTAIN_BAND_H, STAGE_CURTAIN_COLOR);
+    gfx->fillRect(foldLeft, bandTop, shadowWidth, STAGE_CURTAIN_BAND_H, STAGE_CURTAIN_SHADOW_COLOR);
+    gfx->fillRect(shineLeft, bandTop, shineWidth, STAGE_CURTAIN_BAND_H, STAGE_CURTAIN_SHINE_COLOR);
+    #pragma endregion
+    #pragma region Right curtain (mirrored)
+    gfx->fillRect(LCD_WIDTH - foldLeft - foldWidth, bandTop, foldWidth, STAGE_CURTAIN_BAND_H, STAGE_CURTAIN_COLOR);
+    gfx->fillRect(LCD_WIDTH - foldLeft - shadowWidth, bandTop, shadowWidth, STAGE_CURTAIN_BAND_H, STAGE_CURTAIN_SHADOW_COLOR);
+    gfx->fillRect(LCD_WIDTH - shineLeft - shineWidth, bandTop, shineWidth, STAGE_CURTAIN_BAND_H, STAGE_CURTAIN_SHINE_COLOR);
+    #pragma endregion
+  }
+}
+
+void drawBallGameStage() {
+  int floorTop = STAGE_FLOOR_TOP_Y, frontEdge = STAGE_FRONT_Y;
+
+  #pragma region Back wall
+  gfx->fillRect(0, 0, LCD_WIDTH, floorTop, STAGE_WALL_COLOR);
+  #pragma endregion
+
+  #pragma region Stage floor: planks with staggered joints and a spotlight pool in the middle
+  int floorHeight = frontEdge - floorTop;
+  gfx->fillRect(0, floorTop, LCD_WIDTH, floorHeight, STAGE_FLOOR_COLOR);
+  int spotRadiusX = SX(150), spotRadiusY = floorHeight / 2 - 1, spotCenterY = floorTop + floorHeight / 2;
+  for (int rowOffset = -spotRadiusY; rowOffset <= spotRadiusY; rowOffset++) {
+    float rowFraction = (float)rowOffset / spotRadiusY;
+    int halfWidth = (int)(spotRadiusX * sqrtf(1.0f - rowFraction * rowFraction));
+    gfx->drawFastHLine(CX - halfWidth, spotCenterY + rowOffset, 2 * halfWidth + 1, STAGE_FLOOR_LIT_COLOR);
+  }
+  int plankLength = SX(96);
+  for (int plankRow = 0; plankRow < STAGE_PLANK_ROWS; plankRow++) {
+    int rowTop = floorTop + floorHeight * plankRow / STAGE_PLANK_ROWS;
+    int rowBottom = floorTop + floorHeight * (plankRow + 1) / STAGE_PLANK_ROWS;
+    gfx->drawFastHLine(0, rowTop, LCD_WIDTH, STAGE_PLANK_SEAM_COLOR);
+    for (int jointX = (plankRow & 1) ? plankLength / 2 : 0; jointX < LCD_WIDTH; jointX += plankLength)
+      gfx->drawFastVLine(jointX, rowTop, rowBottom - rowTop, STAGE_PLANK_SEAM_COLOR);
+  }
+  #pragma endregion
+
+  #pragma region Front edge: gold lip, then the apron in vertical panels
+  int lipHeight = SKM(4);
+  gfx->fillRect(0, frontEdge, LCD_WIDTH, lipHeight, STAGE_GOLD_COLOR);
+  gfx->fillRect(0, frontEdge + lipHeight, LCD_WIDTH, LCD_HEIGHT - frontEdge - lipHeight, STAGE_APRON_COLOR);
+  for (int panelX = SX(58); panelX < LCD_WIDTH; panelX += SX(58))
+    gfx->drawFastVLine(panelX, frontEdge + lipHeight, LCD_HEIGHT - frontEdge - lipHeight, STAGE_APRON_SEAM_COLOR);
+  #pragma endregion
+
+  #pragma region Side curtains, pooling a little onto the floor, with gold tie-backs
+  int curtainBottom = floorTop + SK(12);
+  for (int bandTop = 0; bandTop < curtainBottom; bandTop += STAGE_CURTAIN_BAND_H)
+    drawStageCurtainBand(bandTop, stageCurtainWidthAt(bandTop, curtainBottom));
+  int tieBackY = (int)(curtainBottom * STAGE_TIE_BACK_RATIO), tieBackHeight = SKM(8);
+  int tieBackWidth = stageCurtainWidthAt(tieBackY, curtainBottom);
+  gfx->fillRect(0, tieBackY - tieBackHeight / 2, tieBackWidth, tieBackHeight, STAGE_GOLD_COLOR);
+  gfx->fillRect(LCD_WIDTH - tieBackWidth, tieBackY - tieBackHeight / 2, tieBackWidth, tieBackHeight, STAGE_GOLD_COLOR);
+  #pragma endregion
+
+  #pragma region Valance: red band with a gold trim and scallops hanging below it
+  int valanceHeight = SY(20), scallopRadius = max(3, (int)SK(10)), trimHeight = SKM(3);
+  gfx->fillRect(0, 0, LCD_WIDTH, valanceHeight, STAGE_CURTAIN_COLOR);
+  for (int scallopX = scallopRadius; scallopX < LCD_WIDTH + scallopRadius; scallopX += 2 * scallopRadius) {
+    gfx->fillCircle(scallopX, valanceHeight, scallopRadius, STAGE_CURTAIN_COLOR);
+    gfx->drawFastVLine(scallopX + scallopRadius, 0, valanceHeight, STAGE_CURTAIN_SHADOW_COLOR);
+  }
+  gfx->fillRect(0, valanceHeight - trimHeight, LCD_WIDTH, trimHeight, STAGE_GOLD_COLOR);
+  #pragma endregion
+
+#if BOARD_IS_ROUND
+  #pragma region Black outside the bezel
+  int cornerDistance = (int)ceilf(sqrtf((float)(CX * CX + CY * CY))) + 1;
+  fillRingHalves(CX, CY, cornerDistance, BEZEL_RADIUS + 1, true, true, RGB565_BLACK);
+  #pragma endregion
+#endif
+}
+#pragma endregion
+
+#pragma region Training bag boxing ring
+// Standing on the canvas looking at the far side: a dark arena,
+// two corner posts (red pad left, blue pad right) joined by red / white / blue
+// ropes, the side ropes and canvas edges running toward the viewer, and a
+// spotlight pool on the canvas.
+static const uint16_t RING_ARENA_COLOR = C565(0x16, 0x14, 0x22);
+static const uint16_t RING_CANVAS_COLOR = C565(0xC8, 0xCE, 0xDA);
+static const uint16_t RING_CANVAS_LIT_COLOR = C565(0xE6, 0xEA, 0xF0);
+static const uint16_t RING_CANVAS_EDGE_COLOR = C565(0x6A, 0x70, 0x82);
+static const uint16_t RING_POST_COLOR = C565(0x9A, 0x9E, 0xA8);
+static const uint16_t RING_RED_COLOR = C565(0xD0, 0x2A, 0x2A);
+static const uint16_t RING_WHITE_COLOR = C565(0xF0, 0xF0, 0xF0);
+static const uint16_t RING_BLUE_COLOR = C565(0x2A, 0x4A, 0xC0);
+static const uint16_t RING_ROPE_SHADOW_COLOR = C565(0x0C, 0x0A, 0x14);
+static const int RING_ROPE_COUNT = 3;
+
+// thick straight rope from (startX, startY) to (endX, endY), with a dark underside
+static void drawRingRope(int startX, int startY, int endX, int endY, int thickness, uint16_t color) {
+  for (int row = 0; row < thickness; row++) gfx->drawLine(startX, startY + row, endX, endY + row, color);
+  gfx->drawLine(startX, startY + thickness, endX, endY + thickness, RING_ROPE_SHADOW_COLOR);
+}
+
+void drawBoxingRingInterior() {
+  int canvasTop = RING_CANVAS_TOP_Y;
+  int ropeSpacing = SK(40), ropeThickness = max(2, (int)SK(6));
+  int leftPostX = SX(40), rightPostX = LCD_WIDTH - 1 - SX(40);
+  int topRopeY = canvasTop - RING_ROPE_COUNT * ropeSpacing;
+  // the side canvas edges drop this far between a post and the screen edge
+  int sideDrop = SK(70);
+  static const uint16_t ropeColors[RING_ROPE_COUNT] = {RING_RED_COLOR, RING_WHITE_COLOR, RING_BLUE_COLOR};
+
+  #pragma region Arena backdrop
+  gfx->fillRect(0, 0, LCD_WIDTH, canvasTop, RING_ARENA_COLOR);
+  #pragma endregion
+
+  #pragma region Canvas: far edge between the posts, side edges running down toward the viewer
+  gfx->fillRect(0, canvasTop, LCD_WIDTH, LCD_HEIGHT - canvasTop, RING_CANVAS_COLOR);
+  gfx->fillTriangle(0, canvasTop, leftPostX, canvasTop, 0, canvasTop + sideDrop, RING_ARENA_COLOR);
+  gfx->fillTriangle(LCD_WIDTH - 1, canvasTop, rightPostX, canvasTop, LCD_WIDTH - 1, canvasTop + sideDrop, RING_ARENA_COLOR);
+  int spotRadiusX = SX(150), spotRadiusY = SK(34), spotCenterY = canvasTop + SK(44);
+  for (int rowOffset = -spotRadiusY; rowOffset <= spotRadiusY; rowOffset++) {
+    float rowFraction = (float)rowOffset / spotRadiusY;
+    int halfWidth = (int)(spotRadiusX * sqrtf(1.0f - rowFraction * rowFraction));
+    gfx->drawFastHLine(CX - halfWidth, spotCenterY + rowOffset, 2 * halfWidth + 1, RING_CANVAS_LIT_COLOR);
+  }
+  int edgeThickness = SKM(3);
+  drawRingRope(leftPostX, canvasTop, rightPostX, canvasTop, edgeThickness, RING_CANVAS_EDGE_COLOR);
+  drawRingRope(leftPostX, canvasTop, 0, canvasTop + sideDrop, edgeThickness, RING_CANVAS_EDGE_COLOR);
+  drawRingRope(rightPostX, canvasTop, LCD_WIDTH - 1, canvasTop + sideDrop, edgeThickness, RING_CANVAS_EDGE_COLOR);
+  #pragma endregion
+
+  #pragma region Corner posts
+  int postWidth = max(3, (int)SK(12)), postTop = topRopeY - SK(16);
+  gfx->fillRect(leftPostX - postWidth / 2, postTop, postWidth, canvasTop - postTop, RING_POST_COLOR);
+  gfx->fillRect(rightPostX - postWidth / 2, postTop, postWidth, canvasTop - postTop, RING_POST_COLOR);
+  #pragma endregion
+
+  #pragma region Ropes: far side between the posts, side ropes spreading toward the viewer
+  for (int rope = 0; rope < RING_ROPE_COUNT; rope++) {
+    int ropeY = topRopeY + rope * ropeSpacing;
+    // a side rope keeps its height above the canvas edge, grown by the perspective
+    int sideRopeEndY = canvasTop + sideDrop - (canvasTop - ropeY) * 3 / 2;
+    drawRingRope(leftPostX, ropeY, rightPostX, ropeY, ropeThickness, ropeColors[rope]);
+    drawRingRope(leftPostX, ropeY, 0, sideRopeEndY, ropeThickness * 3 / 2, ropeColors[rope]);
+    drawRingRope(rightPostX, ropeY, LCD_WIDTH - 1, sideRopeEndY, ropeThickness * 3 / 2, ropeColors[rope]);
+  }
+  #pragma endregion
+
+  #pragma region Corner pads over the rope ends
+  int padWidth = max(5, (int)SK(22)), padTop = topRopeY - SK(8);
+  int padHeight = (RING_ROPE_COUNT - 1) * ropeSpacing + ropeThickness + SK(16), padRadius = max(2, (int)SK(6));
+  gfx->fillRoundRect(leftPostX - padWidth / 2, padTop, padWidth, padHeight, padRadius, RING_RED_COLOR);
+  gfx->fillRoundRect(rightPostX - padWidth / 2, padTop, padWidth, padHeight, padRadius, RING_BLUE_COLOR);
+  #pragma endregion
+
+#if BOARD_IS_ROUND
+  #pragma region Black outside the bezel
+  int cornerDistance = (int)ceilf(sqrtf((float)(CX * CX + CY * CY))) + 1;
+  fillRingHalves(CX, CY, cornerDistance, BEZEL_RADIUS + 1, true, true, RGB565_BLACK);
+  #pragma endregion
+#endif
+}
+#pragma endregion

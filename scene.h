@@ -3,7 +3,9 @@
 // Background scenes: sky by the real time of day, the creature's biome and its
 // details, clouds, sun/moon and night stars. drawScene() is the main screen's
 // landscape, drawGameScene() the lower-horizon habitat of the minigames, and
-// drawBattleArena() the top-down court behind battles.
+// drawBattleArena() the top-down court behind battles, drawCoinChaseField() and
+// drawBallGameStage() the coin chase and ball game backgrounds, drawBoxingRingInterior()
+// the training bag background.
 
 #pragma region Includes
 #include <Arduino.h>
@@ -24,4 +26,11 @@ void drawGameScene();
 void drawBattleArena();
 // Coin chase background: top-down grass field fenced by red posts (same at any time of day)
 void drawCoinChaseField();
+// Ball game background: theater stage with red curtains; the creature walks on its floor
+// (between STAGE_FLOOR_TOP_Y and STAGE_FRONT_Y, same at any time of day)
+void drawBallGameStage();
+// Training bag background: inside a boxing ring, looking at the far ropes
+// and corner posts in a dark arena; the canvas starts at RING_CANVAS_TOP_Y
+// (same at any time of day)
+void drawBoxingRingInterior();
 #pragma endregion

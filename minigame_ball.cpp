@@ -3,14 +3,14 @@
 #pragma region Includes
 #include "minigame_ball.h"
 #include <math.h>
-#include "app_state.h"        // ball game state and BALL_* tuning, pet, isNightHour
+#include "app_state.h"        // ball game state and BALL_* tuning, pet
 #include "audio.h"            // sfxPlay
 #include "board_display.h"    // gfx
 #include "boards/layout.h"    // ARENA_*, LIFE_*, BALL_*, GAME_PET_*, MINIGAME_SCORE_*
 #include "colors.h"
 #include "i18n.h"             // T()
 #include "minigame_common.h"  // canStartMinigame, drawMinigamePet, isMinigameOkTapped, drawMinigameResults
-#include "scene.h"            // drawGameScene, sceneHour
+#include "scene.h"            // drawBallGameStage
 #include "species.h"          // SPR_ICON_PLAY
 #include "sprite_draw.h"      // drawMap
 #include "ui_text.h"          // drawGlyphCenteredText
@@ -205,18 +205,17 @@ static void stepGame() {
 
 #pragma region Drawing
 void renderGame() {
-  // no fillScreen(BLACK): drawGameScene covers the full screen. If the
+  // no fillScreen(BLACK): drawBallGameStage covers the full screen. If the
   // previous flush's DMA is still reading the buffer, it sees valid content
   // (not half-painted black), which was the flicker at 25 fps.
-  bool night = isNightHour(sceneHour());
-  uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
+  const uint16_t ink = UI_WHITE;  // the stage is dark (wall, valance, apron) at any hour
 
   if (gameOver) {
     drawMinigameResults(S_SCORE_FMT, gameScore, gameNewHi && gameScore > 0, false, pet.gameHi, gameAttackGain, S_ATK_GAIN_FMT);
     return;
   }
 
-  drawGameScene();
+  drawBallGameStage();
   stepGame();
 
   #pragma region Record and lives (top)
@@ -233,14 +232,14 @@ void renderGame() {
   }
   #pragma endregion
 
-  #pragma region The creature, walking toward the ball
+  #pragma region The creature, walking toward the ball on the stage floor
   uint8_t act = (ballX > gamePetX + BALL_PET_WALK_DEAD_ZONE)   ? PMD_WALKR
                 : (ballX < gamePetX - BALL_PET_WALK_DEAD_ZONE) ? PMD_WALKL
                                                                : PMD_IDLE;
   drawMinigamePet(act, (int)gamePetX, GAME_PET_Y, GAME_PET_MAX_SCALE, 100);
   #pragma endregion
 
-  #pragma region Score (bottom, centered on CX, like the coin chase; the creature stands just above it)
+  #pragma region Score (bottom, centered on CX, on the stage apron)
   char scoreLine[24];
   snprintf(scoreLine, sizeof(scoreLine), T(S_SCORE_FMT), gameScore);
   gfx->setTextColor(ink);

@@ -18,7 +18,7 @@
 #include "minigame_common.h"   // isMinigameOkTapped
 #include "settings_screens.h"  // handleSettingsTap, openSettingsMenu
 #include "touch_hal.h"         // touchHalHasEvent, touchHalGetPoint
-#include "ui_widgets.h"        // isTouchInsideRect, isTouchInsideCircle
+#include "ui_widgets.h"        // isTouchInsideRect, isTouchInsideCircle, isTouchOnScreenCloseButton
 #pragma endregion
 
 #pragma region Gesture thresholds and timeouts
@@ -35,8 +35,6 @@ static const uint32_t SWIPE_MAX_MS = 800;
 // tap: short and nearly still
 static const uint32_t TAP_MAX_MS = 1500;
 static const int TAP_MAX_MOVE_PX = 40;  // not scaled per board
-// training bag: touching above this line quits
-#define TRAINING_BAG_QUIT_ZONE_BOTTOM SY(72)
 // evolve / farewell decision dialog and the food / play pickers close on their own
 static const uint32_t CHOICE_DIALOG_TIMEOUT_MS = 12000;
 static const uint32_t PICKER_TIMEOUT_MS = 6000;
@@ -94,8 +92,8 @@ static void onSwipe(int direction) {
 }
 
 static void onTap(int16_t x, int16_t y) {
-  #pragma region First game: pick a starter
-  if (pet.awaitingStarter()) {
+  #pragma region First game: pick a starter (after the first-boot time screen closes)
+  if (pet.awaitingStarter() && settingsScreen == SETTINGS_CLOSED) {
     for (int i = 0; i < (int)countof(STARTER_DEX); i++) {
       if (isTouchInsideRect(x, y, STARTER_ROW_X, starterRowTop(i), STARTER_ROW_W + 1, STARTER_ROW_H + 1)) {
         pet.chooseStarter(STARTER_DEX[i]);
@@ -339,8 +337,8 @@ void handleTouch() {
           sackOpen = false;
           sfxPlay(SFX_TAP);
         }
-      } else if (y < TRAINING_BAG_QUIT_ZONE_BOTTOM) {
-        sackOpen = false;  // touching the top = quit
+      } else if (isTouchOnScreenCloseButton(x, y)) {
+        sackOpen = false;  // X = quit with no reward
       } else {
         sackTap();
       }

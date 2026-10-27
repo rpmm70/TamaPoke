@@ -195,10 +195,10 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #define WIFI_PAGE_TEXT_SIZE 2
 #pragma endregion
 
-#pragma region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN squares) and bar
+#pragma region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN x CLK_BTN_H) and bar
 // Under the TS(5) title (y 58..98): label 122..146 (below the close button's hit
-// circle, which ends at y 122), pill 158..210, label 240..264, -/+ row 276..334
-// (its farthest corners, (63, 334) and (403, 334), are 198 px from the center)
+// circle, which ends at y 122), pill 158..210, label 240..264, -/+ row 276..324
+// (its farthest corners, (63, 324) and (403, 324), are 193 px from the center)
 #define SETTINGS_SOUND_LABEL_Y 122
 #define SETTINGS_SOUND_PILL_Y 158
 #define SETTINGS_SOUND_PILL_W 140
@@ -222,21 +222,24 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #define SETTINGS_LANG_CELL_R 12
 #pragma endregion
 
-#pragma region Time setting: digits, -/+ buttons, HOUR/MIN labels, toggles, OK
-// under the TS(5) title (y 58..98): digits 120..168, -/+ 190..248,
-// HOUR/MIN 256..272, toggles 290..334, OK 352..400 (its bottom corners are 195 px from the center)
-#define CLK_DIG_Y 120
-#define CLK_DIG_SIZE 6   // one size under the old TS(7)
-#define CLK_BTN 58
-#define CLK_BTN_Y 190
-#define CLK_HM_X 104
-#define CLK_HP_X 170
-#define CLK_MM_X 252
-#define CLK_MP_X 318
+#pragma region Time setting: date and time lines, one -/+ pair, toggles, OK
+// under the TS(5) title (y 58..98): date 116..148 (highlight from 110), time 160..200,
+// -/+ 218..266, toggles 290..334, OK 352..400 (its bottom corners are 195 px from the center)
+#define CLK_DATE_Y 116
+#define CLK_DATE_SIZE 4  // "2026-10-27": 240 px wide
+#define CLK_DIG_Y 160
+#define CLK_DIG_SIZE 5   // "14:35": 150 px wide
+#define CLK_FIELD_PAD 6  // selected field highlight, beyond the glyphs
+#define CLK_BTN 58       // -/+ buttons here and for the brightness: CLK_BTN wide, CLK_BTN_H tall
+#define CLK_BTN_H 48
+#define CLK_BTN_Y 218
+#define CLK_STEP_GAP 24  // between the - and + buttons
 #define CLK_BTN_R 12
 #define CLK_GLYPH_DX 17
-#define CLK_GLYPH_DY 15
-#define CLK_LBL_Y 256
+#define CLK_GLYPH_DY 10
+#define CLK_FORMAT_X 104
+#define CLK_AMPM_X 238   // mirrors the 12h/24h toggle
+#define CLK_MODE_W 124
 #define CLK_MODE_Y 290
 #define CLK_MODE_H 44
 #define CLK_MODE_R 12
@@ -418,7 +421,7 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #define LIFE_R 6
 #pragma endregion
 
-#pragma region Minigame score line (bottom, centered): ball game and coin chase
+#pragma region Minigame score line (bottom, centered): ball game (coin chase has COIN_SCORE_Y)
 #define MINIGAME_SCORE_Y 404
 #define MINIGAME_SCORE_TEXT_SIZE 2
 #define MINIGAME_SCORE_MAX_W 260
@@ -427,7 +430,9 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #pragma region Ball game: ball, creature, heart
 #define BALL_S 3
 #define BALL_OFF 24
-#define GAME_PET_Y (MINIGAME_SCORE_Y - 10)  // ball game: feet just above the score line
+#define STAGE_FLOOR_TOP_Y 318  // stage floor, back edge
+#define STAGE_FRONT_Y 378      // stage floor, front edge (the apron below carries the score)
+#define GAME_PET_Y 356         // ball game: feet on the stage floor
 #define PET_HEART_SCALE 2  // "likes it" heart over the creature (32 px bitmap)
 #pragma endregion
 
@@ -444,9 +449,19 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #define PLAY_MENU_R 14
 #pragma endregion
 
+#pragma region Training bag: seconds left (top middle), bag hook, boxing ring canvas, hit count (bottom)
+#define SACK_TIMER_Y 52            // below the bezel curve, left of the close button
+#define SACK_TIMER_TEXT_SIZE 4
+#define SACK_ROPE_TOP 128          // bag hook: the bag hangs centered on CY
+#define RING_CANVAS_TOP_Y 330      // ring canvas, far edge (the ropes sit above it)
+#define SACK_HINT_Y 350
+#define SACK_SCORE_Y MINIGAME_SCORE_Y
+#pragma endregion
+
 #pragma region Coin chase: timer (top middle), coin and sprite sizes, play area inside the bezel
-#define COIN_TIMER_Y 40
+#define COIN_TIMER_Y 52            // below the fence ring
 #define COIN_TIMER_TEXT_SIZE 4
+#define COIN_SCORE_Y 392           // above the fence ring
 #define COIN_RADIUS 14
 #define COIN_PET_MAX_SCALE 2
 #define COIN_PET_SIZE_PERCENT 125  // x2 zoom grown to x2.5

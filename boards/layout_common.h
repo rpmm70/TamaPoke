@@ -71,7 +71,7 @@
 #define SETTINGS_MENU_ROW_X (CX - SETTINGS_MENU_ROW_W / 2)
 #define SETTINGS_SOUND_PILL_X (CX - SETTINGS_SOUND_PILL_W / 2)
 #define SETTINGS_BRIGHTNESS_BAR_X (CX - SETTINGS_BRIGHTNESS_BAR_W / 2)
-// the + button mirrors the - button on the right edge (both are CLK_BTN squares)
+// the + button mirrors the - button on the right edge (both CLK_BTN x CLK_BTN_H)
 #define SETTINGS_BRIGHTNESS_PLUS_X (LCD_WIDTH - SETTINGS_BRIGHTNESS_MINUS_X - CLK_BTN)
 // language grid: 2 columns centered on the screen
 #define SETTINGS_LANG_CELL_X0 ((LCD_WIDTH - (SETTINGS_LANG_CELL_COL_STEP + SETTINGS_LANG_CELL_W)) / 2)
@@ -79,15 +79,9 @@
 #define WIFI_PAGE_TEXT_Y ((WIFI_ARROW_UP_CY + WIFI_ARROW_DOWN_CY) / 2 - 4 * WIFI_PAGE_TEXT_SIZE)
 #pragma endregion
 
-#pragma region Time setting: digits, -/+ pairs, toggles, OK button
-// half of "12:34" at CLK_DIG_SIZE: 5 chars * 6 px * size / 2
-#define CLK_DIG_HALF (5 * 6 * CLK_DIG_SIZE / 2)
-// one -/+ pair, edge to edge (HOUR/MIN center under it)
-#define CLK_PAIR_W (CLK_HP_X + CLK_BTN - CLK_HM_X)
-// 12h/24h toggle under the hour pair, AM/PM toggle under the minute pair
-#define CLK_MODE_W CLK_PAIR_W
-#define CLK_FORMAT_X CLK_HM_X
-#define CLK_AMPM_X CLK_MM_X
+#pragma region Time setting: the -/+ pair centered on CX, OK button
+#define CLK_MINUS_X (CX - CLK_STEP_GAP / 2 - CLK_BTN)
+#define CLK_PLUS_X (CX + CLK_STEP_GAP / 2)
 // OK button centered, its "OK" label (TS(3)) centered inside it
 #define CLK_OK_X (CX - CLK_OK_W / 2)
 #define CLK_OK_TX (6 * TS(3))                      // half of "OK": 2 chars * 6 px * size / 2

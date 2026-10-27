@@ -1,5 +1,5 @@
 // Creature info card (tap the name on the main screen): profile with the
-// animated portrait, stats, medals and progress pages. See info_card.h.
+// animated portrait, stats, progress and medals pages. See info_card.h.
 
 #pragma region Includes
 #include "info_card.h"
@@ -37,7 +37,7 @@
 // profile page (page 0): bond bar scale and bar corner radius
 #define CARD_PROFILE_BOND_MAX 100
 #define CARD_PROFILE_BAR_R 3
-// progress page (page 3): bar to the next level
+// progress page (page 2): bar to the next level
 #define CARD_PROGRESS_BAR_X SX(93)
 #define CARD_PROGRESS_BAR_W SX(280)
 #define CARD_PROGRESS_BAR_TRACK_R 6
@@ -46,7 +46,7 @@
 #ifndef CARD_TEXT_MAX_W
 #define CARD_TEXT_MAX_W (LCD_WIDTH - 2 * CARD_SIDE_MARGIN)
 #endif
-// medal pills (page 2)
+// medal pills (page 3)
 #define CARD_MEDAL_RADIUS 10
 // evolution blocked while the lowest need is under this
 #define CARD_EVO_MIN_LOWEST_STAT 40
@@ -423,7 +423,7 @@ static void renderCardStats() {
   #pragma endregion
 }
 
-// page 2: medals with descriptive labels
+// page 3: medals with descriptive labels
 static void renderCardMedals() {
   gfx->setTextColor(UI_INK);
   #pragma region Title (same style as the progress page)
@@ -451,7 +451,7 @@ static void renderCardMedals() {
   }
 }
 
-// page 3: progress (level, evolution, care mistakes) - surfaces mechanics that
+// page 2: progress (level, evolution, care mistakes) - surfaces mechanics that
 // used to be invisible (how long until leveling up/evolving and why)
 static void renderCardProgress() {
   const DexEntry &speciesEntry = DEX_TBL[pet.speciesId];
@@ -518,8 +518,8 @@ void renderCard() {
   clearScreenToDayBackground();
   if (cardPage == 0) renderCardProfile();
   else if (cardPage == 1) renderCardStats();
-  else if (cardPage == 2) renderCardMedals();
-  else renderCardProgress();
+  else if (cardPage == 2) renderCardProgress();
+  else renderCardMedals();
 
   #pragma region Close button (top right) and page arrows on the side edges (none past the first or the last page)
   drawPageNavigation(cardPage > 0, cardPage < CARD_PAGE_COUNT - 1);

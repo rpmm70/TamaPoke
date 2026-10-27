@@ -18,7 +18,7 @@
 #pragma region Firmware version
 // Bump this number on every release (and manifest.json for the web installer).
 // Shown on the settings screen and over serial at boot.
-#define FW_VERSION "1.17"
+#define FW_VERSION "1.24"
 #pragma endregion
 
 #pragma region Static screen redraw
@@ -99,7 +99,7 @@ extern bool galleryFilterDirty;
 extern bool screenOff;  // short press of the PWR / BOOT button, or Screen Off in the settings menu
 extern bool cardOpen;   // creature info card (tap the name on the main screen)
 extern bool kbOpen;     // keyboard: renames the creature or asks for a WiFi password
-extern uint8_t cardPage;  // 0 profile, 1 stats, 2 medals, 3 progress
+extern uint8_t cardPage;  // 0 profile, 1 stats, 2 progress, 3 medals
 #define CARD_PAGE_COUNT 4
 extern uint32_t feedMenuUntil;  // food picker open until this millis
 extern uint32_t playMenuUntil;  // play picker (ball game / coin chase / training bag / wild battle) open until this millis

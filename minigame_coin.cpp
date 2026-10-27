@@ -7,7 +7,7 @@
 #include "app_state.h"        // coin chase state and COIN_* tuning, pet, lastSpriteDrawnBounds, isNightHour
 #include "audio.h"            // sfxPlay
 #include "board_display.h"    // gfx
-#include "boards/layout.h"    // COIN_* layout, MINIGAME_SCORE_*
+#include "boards/layout.h"    // COIN_* layout, MINIGAME_SCORE_TEXT_SIZE / _MAX_W
 #include "colors.h"
 #include "i18n.h"             // T()
 #include "minigame_common.h"  // canStartMinigame, drawMinigamePet, isMinigameOkTapped, drawMinigameResults
@@ -223,7 +223,7 @@ void renderCoinGame() {
   char scoreLine[24];
   snprintf(scoreLine, sizeof(scoreLine), T(S_SCORE_FMT), coinPoints);
   gfx->setTextColor(ink);
-  ctext(scoreLine, MINIGAME_SCORE_TEXT_SIZE, MINIGAME_SCORE_Y, MINIGAME_SCORE_MAX_W);
+  ctext(scoreLine, MINIGAME_SCORE_TEXT_SIZE, COIN_SCORE_Y, MINIGAME_SCORE_MAX_W);
   #pragma endregion
 
   drawScreenCloseButton();  // quit (see coinGameTap)

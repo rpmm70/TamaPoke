@@ -10,6 +10,8 @@
 
 #pragma region Public API
 void openSettingsMenu();
+// first boot: opens the time screen before the starter choice; OK closes it
+void openClockForFirstRunSetup();
 // NVS settings read once in setup()
 void loadBrightnessLevelFromNvs();
 void loadClockFormatFromNvs();

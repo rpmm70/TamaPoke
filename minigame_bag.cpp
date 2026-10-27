@@ -2,37 +2,35 @@
 
 #pragma region Includes
 #include "minigame_bag.h"
-#include "app_state.h"        // training bag state, pet, isNightHour
+#include "app_state.h"        // training bag state, pet
 #include "audio.h"            // sfxPlay
 #include "board_display.h"    // gfx
-#include "boards/layout.h"    // CX, SX()/SY()/SK()/SKM()
+#include "boards/layout.h"    // CX, SK()/SKM(), SACK_* layout, MINIGAME_SCORE_TEXT_SIZE / _MAX_W
 #include "colors.h"
 #include "i18n.h"             // T()
 #include "minigame_common.h"  // canStartMinigame, drawMinigameResults
 #include "pet.h"              // timeLeft
-#include "scene.h"            // drawGameScene, sceneHour
+#include "scene.h"            // drawBoxingRingInterior
 #include "ui_text.h"          // ctext
-#include "ui_widgets.h"       // sineOfMillis
+#include "ui_widgets.h"       // sineOfMillis, drawScreenCloseButton
 #pragma endregion
 
 #pragma region Constants
 // length of one round
 #define SACK_DURATION_MS 10000
+// the timer turns red with this much time left
+#define SACK_LOW_TIME_WARNING_MS 3000
 // each hit sets the shake to this many px; it decays by SACK_SHAKE_DECAY per frame
 #define SACK_HIT_SHAKE 16
 #define SACK_SHAKE_DECAY 0.84f
 #define SACK_SHAKE_RADIANS_PER_MS 0.05f
-// layout in 466 px units (rescaled by SX/SY/SK)
-#define SACK_ROPE_TOP SK(56)
-#define SACK_BAG_TOP SK(86)
-#define SACK_HIT_COUNT_Y SY(268)
-#define SACK_HIT_COUNT_TEXT_SIZE 6
-#define SACK_HINT_Y SY(322)
+// the bag hangs this far (466 px units, rescaled by SK) below the hook
+#define SACK_BAG_TOP (SACK_ROPE_TOP + SK(30))
 #define SACK_HINT_TEXT_SIZE 2
-#define SACK_TIME_BAR_Y SY(350)
-#define SACK_TIME_BAR_W SX(280)
 #define SACK_BAG_COLOR C565(0xb5, 0x3a, 0x3a)
 #define SACK_BAG_CAP_COLOR C565(0x7e, 0x28, 0x28)
+// hook and chain: light metal against the dark arena
+#define SACK_CHAIN_COLOR C565(0x9a, 0x9e, 0xa8)
 #pragma endregion
 
 #pragma region Start and touch
@@ -55,7 +53,7 @@ void sackTap() {
 
 #pragma region Drawing
 void renderSack() {
-  // read before the time check, so the time bar below never sees a deadline already past
+  // read before the time check, so the timer below never sees a deadline already past
   uint32_t now = millis();
 
   #pragma region Time is up: apply the training (ATK) once, then the results right away
@@ -75,37 +73,39 @@ void renderSack() {
   }
   #pragma endregion
 
-  drawGameScene();  // habitat background
-  bool night = isNightHour(sceneHour());
-  uint16_t ink = night ? UI_INK_NIGHT : UI_INK;
+  drawBoxingRingInterior();  // same at any time of day
+  const uint16_t ink = UI_INK;  // the bag outline and the text on the light canvas
+
+  #pragma region Timer (top middle, over the dark arena): whole seconds, rounded up
+  uint32_t timeLeftMs = sackUntil - now;
+  char timerText[8];
+  snprintf(timerText, sizeof(timerText), "%lu", (unsigned long)((timeLeftMs + 999) / 1000));
+  gfx->setTextColor(timeLeftMs <= SACK_LOW_TIME_WARNING_MS ? UI_BAR_BAD : UI_INK_NIGHT);
+  ctext(timerText, SACK_TIMER_TEXT_SIZE, SACK_TIMER_Y);
+  #pragma endregion
 
   #pragma region The bag swinging from its rope (active mashing)
   sackShake *= SACK_SHAKE_DECAY;
   int shakeOffset = (int)(sackShake * sineOfMillis(now, SACK_SHAKE_RADIANS_PER_MS));
   int bagCenterX = CX + shakeOffset, bagTop = SACK_BAG_TOP;
-  gfx->fillRect(CX - SKM(6) / 2, SACK_ROPE_TOP, SKM(6), bagTop - SACK_ROPE_TOP, ink);  // hook/rope
-  gfx->fillRect(bagCenterX - SKM(8) / 2, bagTop - SK(30), SKM(8), SK(34), ink);        // chain
+  // the hanging line starts just under the timer digits (8 px font rows per text size step)
+  int lineTop = SACK_TIMER_Y + 8 * TS(SACK_TIMER_TEXT_SIZE) + SKM(4);
+  gfx->fillRect(bagCenterX - SKM(8) / 2, lineTop, SKM(8), bagTop + SK(4) - lineTop, SACK_CHAIN_COLOR);  // chain, swings with the bag
   gfx->fillRoundRect(bagCenterX - SK(42), bagTop, SK(84), SK(150), SK(26), SACK_BAG_COLOR);      // bag
   gfx->fillRoundRect(bagCenterX - SK(42), bagTop, SK(84), SK(22), SK(18), SACK_BAG_CAP_COLOR);   // cap
   gfx->drawRoundRect(bagCenterX - SK(42), bagTop, SK(84), SK(150), SK(26), ink);
   gfx->fillRect(bagCenterX - SK(42), bagTop + SK(70), SK(84), SKM(4), SACK_BAG_CAP_COLOR);       // seam
   #pragma endregion
 
-  #pragma region Hit counter and hint
-  char hitCountText[8];
-  snprintf(hitCountText, sizeof(hitCountText), "%u", sackHits);
+  #pragma region Hint and hit count (bottom, centered on CX, on the canvas)
   gfx->setTextColor(ink);
-  ctext(hitCountText, SACK_HIT_COUNT_TEXT_SIZE, SACK_HIT_COUNT_Y);
   ctext(T(S_HIT_FAST), SACK_HINT_TEXT_SIZE, SACK_HINT_Y);
+  char scoreLine[24];
+  snprintf(scoreLine, sizeof(scoreLine), T(S_HITS_FMT), sackHits);
+  ctext(scoreLine, MINIGAME_SCORE_TEXT_SIZE, SACK_SCORE_Y, MINIGAME_SCORE_MAX_W);
   #pragma endregion
 
-  #pragma region Time bar
-  uint32_t timeLeftMs = sackUntil - now;
-  int barWidth = SACK_TIME_BAR_W, fillWidth = (int)((uint32_t)barWidth * timeLeftMs / SACK_DURATION_MS);
-  gfx->fillRoundRect(CX - barWidth / 2, SACK_TIME_BAR_Y, barWidth, SKM(16), SKM(5), UI_TRACK);
-  if (fillWidth > 2) gfx->fillRoundRect(CX - barWidth / 2, SACK_TIME_BAR_Y, fillWidth, SKM(16), SKM(5), UI_BAR_OK);
-  #pragma endregion
-
+  drawScreenCloseButton();  // quit (see handleTouch)
   gfx->flush();
 }
 #pragma endregion
