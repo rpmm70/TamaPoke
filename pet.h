@@ -74,6 +74,7 @@ public:
   uint8_t careMistakes = 0;   // neglect events: each delays evolution by 1 level
   bool sleeping = false;
   uint32_t lastSeenEpoch = 0;   // last RTC time seen (for offline progression)
+  uint32_t hatchedEpoch = 0;    // RTC time it hatched (0 = egg, or no clock at the time)
   uint8_t ceremony = CER_NONE;  // farewell/runaway/release in progress
   uint8_t lastEnd = CER_NONE;   // how the previous one ended (affects the egg)
   uint8_t dexReg[DEX_BITMAP_BYTES] = { 0 };       // pokedex of raised species (DEX_COUNT-bit bitmap)
@@ -163,6 +164,12 @@ public:
   uint16_t level() const {
     uint32_t lv = 1 + ageMinutes / MINUTES_PER_LEVEL;
     return lv > 999 ? 999 : (uint16_t)lv;
+  }
+  // age is real time since hatching (the level stays on play time, ageMinutes);
+  // without a hatch time or a clock it falls back to the play time
+  uint32_t ageDays() const {
+    if (!hatchedEpoch || !lastSeenEpoch) return ageMinutes / 1440;
+    return lastSeenEpoch > hatchedEpoch ? (lastSeenEpoch - hatchedEpoch) / 86400 : 0;
   }
   bool isRegistered(int16_t dex) const {
     return dex >= 1 && dex <= DEX_COUNT && bitmapTest(dexReg, dex);

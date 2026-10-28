@@ -66,6 +66,7 @@ void Pet::newEgg() {
   hygiene = 100;
   poops = 0;
   ageMinutes = 0;
+  hatchedEpoch = 0;
   careMistakes = 0;
   mistakeCooldown = 0;
   sleeping = false;
@@ -112,7 +113,10 @@ void Pet::syncClock(uint32_t nowEpoch) {
   for (uint32_t i = 0; i < mins; i++) {
     ageMinutes++;
     if (isEgg()) {
-      if (ageMinutes >= 3) hatch();  // hatches while you are away
+      if (ageMinutes >= 3) {  // hatches while you are away
+        hatch();
+        hatchedEpoch = seenEpoch + (i + 1) * 60;  // the minute it hatched, not the boot time
+      }
       continue;
     }
     if (sleeping) {  // resting: drops slowly and with a floor, same as live
@@ -583,6 +587,7 @@ void Pet::release() {
 void Pet::hatch() {
   speciesId = eggTarget;
   shiny = eggShiny;
+  hatchedEpoch = lastSeenEpoch;  // 0 if there is no clock yet: ageDays() falls back to play time
   // the individual's genes: 90-110% per stat (each raising is unique)
   geneAtk = 90 + random(21);
   geneDef = 90 + random(21);

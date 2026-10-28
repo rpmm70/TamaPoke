@@ -380,7 +380,7 @@ static void renderCardProfile() {
   rowTop += CARD_PROFILE_ROW_STEP;
 
   char ageText[24];
-  snprintf(ageText, sizeof(ageText), T(S_CARD_AGE_FMT), (unsigned long)(pet.ageMinutes / 1440));
+  snprintf(ageText, sizeof(ageText), T(S_CARD_AGE_FMT), (unsigned long)pet.ageDays());
   drawCardProfileTextRow(rowTop, T(S_CARD_AGE), ageText);
   #pragma endregion
 }

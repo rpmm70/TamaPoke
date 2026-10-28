@@ -7,12 +7,13 @@
 #pragma region Includes
 #include "pet.h"
 #include "countof.h"
+#include <stddef.h>  // offsetof
 #pragma endregion
 
 #pragma region Save blob format
-#define PET_BLOB_KEY "pet_v2"
+#define PET_BLOB_KEY "pet_v2"        // key kept from version 2 so the upgrade reads it in place
 #define PET_BLOB_MAGIC 0x54455054UL  // "TPET" little-endian
-#define PET_BLOB_VERSION 2           // version 1 was the per-key format
+#define PET_BLOB_VERSION 3           // version 1 was the per-key format, 2 had no hatchedEpoch
 
 // Field order: widest first, so the layout has no interior padding (save()
 // zeroes the whole struct, trailing padding included). Changing any
@@ -23,6 +24,7 @@ struct PetSaveBlob {
   uint16_t size;  // sizeof(PetSaveBlob)
   uint32_t ageMinutes;
   uint32_t lastCareDay;
+  uint32_t hatchedEpoch;  // new in version 3
   int16_t speciesId;
   int16_t eggTarget;
   uint16_t streak, bestStreak;
@@ -40,6 +42,10 @@ struct PetSaveBlob {
   char nick[sizeof(Pet::nick)];
 };
 
+// version 2 was this same layout without hatchedEpoch (both sizes are multiples of 4)
+#define PET_BLOB_V2_VERSION 2
+#define PET_BLOB_V2_SIZE (sizeof(PetSaveBlob) - sizeof(uint32_t))
+
 // keys written by the per-key format ("spec"/"eggT" by the even older one)
 static const char *const LEGACY_PET_KEYS[] = {
   "full", "joy", "ene", "hyg", "poop", "wgt", "gatk", "gdef", "gspe",
@@ -51,10 +57,28 @@ static const char *const LEGACY_PET_KEYS[] = {
 #pragma endregion
 
 #pragma region Internal helpers
-// reads the blob and checks magic, version and size; false if missing or invalid
+// a version 2 blob read into the start of `blob` (readLength bytes): shifts the
+// fields after lastCareDay over to make room for hatchedEpoch (0 = unknown, load()
+// estimates it). False if it is not a valid version 2 blob.
+static bool upgradeVersion2SaveBlob(PetSaveBlob &blob, size_t readLength) {
+  if (readLength != PET_BLOB_V2_SIZE || blob.magic != PET_BLOB_MAGIC ||
+      blob.version != PET_BLOB_V2_VERSION || blob.size != PET_BLOB_V2_SIZE) return false;
+  uint8_t *blobBytes = (uint8_t *)&blob;
+  size_t hatchedOffset = offsetof(PetSaveBlob, hatchedEpoch);
+  memmove(blobBytes + hatchedOffset + sizeof(blob.hatchedEpoch), blobBytes + hatchedOffset,
+          PET_BLOB_V2_SIZE - hatchedOffset);
+  blob.hatchedEpoch = 0;
+  blob.version = PET_BLOB_VERSION;
+  blob.size = sizeof(PetSaveBlob);
+  return true;
+}
+
+// reads the blob and checks magic, version and size (upgrading a version 2 one);
+// false if missing or invalid
 static bool readValidSaveBlob(Preferences &preferences, PetSaveBlob &blob) {
   if (!preferences.isKey(PET_BLOB_KEY)) return false;
-  if (preferences.getBytes(PET_BLOB_KEY, &blob, sizeof(blob)) != sizeof(blob)) return false;
+  size_t readLength = preferences.getBytes(PET_BLOB_KEY, &blob, sizeof(blob));
+  if (readLength != sizeof(blob)) return upgradeVersion2SaveBlob(blob, readLength);
   return blob.magic == PET_BLOB_MAGIC && blob.version == PET_BLOB_VERSION &&
          blob.size == sizeof(PetSaveBlob);
 }
@@ -99,6 +123,7 @@ void Pet::save() {
   blob.size = sizeof(PetSaveBlob);
   blob.ageMinutes = ageMinutes;
   blob.lastCareDay = lastCareDay;
+  blob.hatchedEpoch = hatchedEpoch;
   blob.speciesId = speciesId;
   blob.eggTarget = eggTarget;
   blob.streak = streak;
@@ -165,6 +190,11 @@ void Pet::load() {
   }
   // seed: the current pet counts as raised (old saves)
   if (speciesId >= 1) registerSpecies(speciesId);
+  // hatched before the hatch time was saved: estimate it from the play time
+  uint32_t savedSeenEpoch = savedEpoch();
+  uint32_t playedSeconds = ageMinutes * 60;
+  if (speciesId >= 1 && !hatchedEpoch && savedSeenEpoch > playedSeconds)
+    hatchedEpoch = savedSeenEpoch - playedSeconds;
   #pragma endregion
 
   #pragma region Finish the migration
@@ -181,6 +211,7 @@ bool Pet::loadSaveBlob() {
   if (!readValidSaveBlob(prefs, blob)) return false;
   ageMinutes = blob.ageMinutes;
   lastCareDay = blob.lastCareDay;
+  hatchedEpoch = blob.hatchedEpoch;
   speciesId = blob.speciesId;
   eggTarget = blob.eggTarget;
   streak = blob.streak;

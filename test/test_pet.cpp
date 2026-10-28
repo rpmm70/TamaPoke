@@ -6,6 +6,7 @@
 #include "../pet.h"
 #include "../dex.h"
 #include "../battle.h"  // battleLevelFor
+#include "../nvs_settings.h"  // NVS_NAMESPACE
 #include <string.h>
 #pragma endregion
 
@@ -1013,6 +1014,7 @@ TEST(offline, egg_hatches_while_you_are_away) {
   p.syncClock(1000u * 86400 + 600);  // 10 minutes
   CHECK(!p.isEgg());
   CHECK_RANGE(p.speciesId, (int16_t)1, (int16_t)DEX_COUNT);
+  CHECK_EQ(p.hatchedEpoch, (uint32_t)(1000u * 86400 + 3 * 60));  // the minute it hatched, not the boot
 }
 
 TEST(offline, sleeping_pet_also_rests_while_powered_off) {
@@ -1037,11 +1039,54 @@ TEST(offline, without_a_clock_nothing_is_applied) {
 }
 #pragma endregion
 
+#pragma region Age
+TEST(age, counts_real_days_since_hatching_while_level_counts_play_time) {
+  mockNvsReset();
+  mockSetMillis(0);
+  Pet p;
+  p.begin();
+  p.setClock(1000u * 86400);
+  p.chooseStarter(4);
+  p.eggTap();
+  p.eggTap();
+  p.eggTap();
+  CHECK_EQ(p.hatchedEpoch, (uint32_t)(1000u * 86400));
+  p.lastSeenEpoch = 1000u * 86400 + 5u * 86400 + 3600;  // 5 days later, not played
+  CHECK_EQ(p.ageDays(), (uint32_t)5);
+  CHECK_EQ(p.level(), (uint16_t)1);
+}
+
+TEST(age, falls_back_to_play_time_without_a_hatch_time) {
+  Pet p;
+  makePet(p, 4);  // hatched with no clock
+  CHECK_EQ(p.hatchedEpoch, (uint32_t)0);
+  p.ageMinutes = 3 * 1440;
+  CHECK_EQ(p.ageDays(), (uint32_t)3);
+}
+
+TEST(age, clock_set_before_the_hatch_time_reads_zero) {
+  Pet p;
+  makePet(p, 4);
+  p.hatchedEpoch = 1000u * 86400;
+  p.lastSeenEpoch = 999u * 86400;
+  CHECK_EQ(p.ageDays(), (uint32_t)0);
+}
+
+TEST(age, new_egg_clears_the_hatch_time) {
+  Pet p;
+  makePet(p, 4);
+  p.hatchedEpoch = 1000u * 86400;
+  p.newEgg();
+  CHECK_EQ(p.hatchedEpoch, (uint32_t)0);
+}
+#pragma endregion
+
 #pragma region Saving
 TEST(save, state_survives_a_reboot) {
   Pet a;
   makePet(a, 25);  // PIKACHU
   a.ageMinutes = 1234;
+  a.hatchedEpoch = 123456;
   a.streak = 9;
   a.bestStreak = 11;
   a.bond = 44;
@@ -1054,6 +1099,7 @@ TEST(save, state_survives_a_reboot) {
   b.begin();  // same "NVS": simulates a reboot
   CHECK_EQ(b.speciesId, (int16_t)25);
   CHECK_EQ(b.ageMinutes, (uint32_t)1234);
+  CHECK_EQ(b.hatchedEpoch, (uint32_t)123456);
   CHECK_EQ(b.streak, (uint16_t)9);
   CHECK_EQ(b.bestStreak, (uint16_t)11);
   CHECK_EQ(b.bond, (uint8_t)44);
@@ -1063,6 +1109,39 @@ TEST(save, state_survives_a_reboot) {
   CHECK_STREQ(b.nick, "SPARKY");
   CHECK(b.isRegistered(25));
   CHECK(!b.awaitingStarter());
+}
+
+// a version 2 save (no hatchedEpoch) still loads, and the hatch time is
+// estimated from the play time
+TEST(save, version_2_blob_is_upgraded_in_place) {
+  #pragma region Write a version 3 save, then rewrite it as version 2
+  Pet a;
+  makePet(a, 25);
+  a.ageMinutes = 600;
+  a.bond = 44;
+  a.setClock(1000u * 86400);  // saves
+  Preferences raw;
+  raw.begin(NVS_NAMESPACE, false);
+  uint8_t blobBytes[512];
+  size_t blobLength = raw.getBytes("pet_v2", blobBytes, sizeof(blobBytes));
+  CHECK(blobLength > 20);
+  const size_t hatchedOffset = 16;  // after magic, version, size, ageMinutes, lastCareDay
+  memmove(blobBytes + hatchedOffset, blobBytes + hatchedOffset + 4, blobLength - hatchedOffset - 4);
+  blobLength -= 4;
+  blobBytes[4] = 2;  // version (little-endian uint16)
+  blobBytes[5] = 0;
+  blobBytes[6] = (uint8_t)(blobLength & 0xFF);  // size
+  blobBytes[7] = (uint8_t)(blobLength >> 8);
+  raw.putBytes("pet_v2", blobBytes, blobLength);
+  raw.end();
+  #pragma endregion
+
+  Pet b;
+  b.begin();
+  CHECK_EQ(b.speciesId, (int16_t)25);
+  CHECK_EQ(b.ageMinutes, (uint32_t)600);
+  CHECK_EQ(b.bond, (uint8_t)44);
+  CHECK_EQ(b.hatchedEpoch, (uint32_t)(1000u * 86400 - 600 * 60));
 }
 
 TEST(save, nickname_is_trimmed_to_11_characters) {
