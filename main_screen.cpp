@@ -4,7 +4,7 @@
 #pragma region Includes
 #include "main_screen.h"
 #include "app_state.h"         // pet, screen flags, gNight, inkColor, STARTER_DEX, markScreenDirty, ...
-#include "bath.h"              // drawBath
+#include "bath.h"              // updateBathScene, drawBath
 #include "battle_ui.h"         // renderBattle, drawWildPrompt
 #include "board_display.h"     // gfx, clearScreenToDayBackground
 #include "boards/layout.h"     // CX, SY(), BOTTOM_PANEL_Y, STARTER_*, FEED_*, PLAY_MENU_*, CONF_*
@@ -21,9 +21,9 @@
 #include "minigame_ball.h"     // renderGame
 #include "minigame_coin.h"     // renderCoinGame
 #include "pet_render.h"        // drawPet, drawPetHeart, drawSleepBubble
-#include "scene.h"             // sceneHour, drawScene
+#include "scene.h"             // sceneHour, drawScene, drawShowerRoom
 #include "settings_screens.h"  // renderSettingsScreen
-#include "species.h"           // SPR_EGG, SPR_ICON_*, SPRITE_H
+#include "species.h"           // SPR_EGG, SPR_ICON_*
 #include "sprite_draw.h"       // drawMap, drawThumbCell
 #include "ui_text.h"           // ctext, setSize, setCur, fitSize, printT
 #include "ui_widgets.h"        // drawBorderedBox, drawLabeledButton, drawTextCenteredOnCx
@@ -35,8 +35,9 @@
 #pragma region Layout constants
 // the flash icons of the food and play pickers are 16x16 pixel maps
 static const int PICKER_ICON_PIXELS = 16;
-// egg drawn at a fixed zoom (also on the CYD)
-static const int EGG_SPRITE_SCALE = 5;
+// the 80x80 egg map drawn at a fixed zoom (160 px, also on the CYD)
+static const int EGG_SPRITE_PIXELS = (int)countof(SPR_EGG);
+static const int EGG_SPRITE_SCALE = 2;
 // rare / legendary egg label and the "POKEDEX n/151" line on the bottom panel
 #define EGG_RARITY_LABEL_Y SY(316)
 #define EGG_POKEDEX_COUNT_Y SY(348)
@@ -47,9 +48,11 @@ static const int CONFIRM_BUTTON_RADIUS = 12;
 #pragma endregion
 
 #pragma region Egg cracks
-// pixels of the egg sprite painted in the outline color as it cracks
-static const uint8_t CRACK1[][2] = { {15,8},{16,9},{15,10} };
-static const uint8_t CRACK2[][2] = { {11,13},{12,14},{11,15},{20,12},{19,13},{20,14} };
+// zig-zag crack paths (egg sprite coordinates) painted in the outline color:
+// the first runs down from the top, the second branches left and right from it
+static const uint8_t CRACK1[][2] = { {40,11},{37,15},{41,19},{37,24},{40,28} };
+static const uint8_t CRACK2_LEFT[][2] = { {37,24},{32,27},{27,32},{21,33},{16,38} };
+static const uint8_t CRACK2_RIGHT[][2] = { {40,28},{45,30},{50,35},{56,34},{61,39} };
 #pragma endregion
 
 #pragma region Picker icons
@@ -135,11 +138,22 @@ static void drawBottomPanel() {
   gfx->fillRect(0, BOTTOM_PANEL_Y, LCD_WIDTH, LCD_HEIGHT - BOTTOM_PANEL_Y, gNight ? UI_BG_NIGHT : UI_BG_DAY);
 }
 
-// egg crack pixels (sprite coordinates) at the egg sprite scale
-static void drawCracks(const uint8_t (*crackPixels)[2], size_t crackPixelCount, int spriteLeft, int spriteTop, int scale) {
-  for (size_t i = 0; i < crackPixelCount; i++)
-    gfx->fillRect(spriteLeft + crackPixels[i][0] * scale, spriteTop + crackPixels[i][1] * scale, scale, scale,
-                  SPRITE_OUTLINE_COLOR);
+// egg crack path (sprite coordinates) at the egg sprite scale: each segment is
+// stepped one sprite pixel at a time, two sprite pixels wide
+static void drawCrackPath(const uint8_t (*crackVertices)[2], size_t crackVertexCount, int spriteLeft, int spriteTop,
+                          int scale) {
+  for (size_t i = 0; i + 1 < crackVertexCount; i++) {
+    const int startX = crackVertices[i][0], startY = crackVertices[i][1];
+    const int deltaX = crackVertices[i + 1][0] - startX, deltaY = crackVertices[i + 1][1] - startY;
+    const int stepCount = max(abs(deltaX), abs(deltaY));
+    for (int step = 0; step <= stepCount; step++) {
+      #pragma region Nearest sprite pixel along the segment
+      const int pixelX = (2 * (startX * stepCount + deltaX * step) + stepCount) / (2 * stepCount);
+      const int pixelY = (2 * (startY * stepCount + deltaY * step) + stepCount) / (2 * stepCount);
+      #pragma endregion
+      gfx->fillRect(spriteLeft + pixelX * scale, spriteTop + pixelY * scale, 2 * scale, scale, SPRITE_OUTLINE_COLOR);
+    }
+  }
 }
 
 // white strip with an ink outline and iconCount 16x16 icons, one per itemWidth slot
@@ -183,10 +197,13 @@ static void renderEggView() {
   drawPokedexButton();
   drawHeaderClock();
   const int scale = EGG_SPRITE_SCALE;
-  const int eggLeft = CX - (SPRITE_H / 2) * scale, eggTop = PET_CY - (SPRITE_H / 2) * scale;
-  drawMap(SPR_EGG, SPRITE_H, eggLeft, eggTop, scale, false);
-  if (pet.eggCracks() >= 1) drawCracks(CRACK1, countof(CRACK1), eggLeft, eggTop, scale);
-  if (pet.eggCracks() >= 2) drawCracks(CRACK2, countof(CRACK2), eggLeft, eggTop, scale);
+  const int eggLeft = CX - (EGG_SPRITE_PIXELS / 2) * scale, eggTop = PET_CY - (EGG_SPRITE_PIXELS / 2) * scale;
+  drawMap(SPR_EGG, EGG_SPRITE_PIXELS, eggLeft, eggTop, scale, false);
+  if (pet.eggCracks() >= 1) drawCrackPath(CRACK1, countof(CRACK1), eggLeft, eggTop, scale);
+  if (pet.eggCracks() >= 2) {
+    drawCrackPath(CRACK2_LEFT, countof(CRACK2_LEFT), eggLeft, eggTop, scale);
+    drawCrackPath(CRACK2_RIGHT, countof(CRACK2_RIGHT), eggLeft, eggTop, scale);
+  }
   if (pet.eggRarity() >= R_RARE) {
     const char *rarityLabel = (pet.eggRarity() == R_LEGENDARY) ? T(S_EGG_LEGEND) : T(S_EGG_RARE);
     gfx->setTextColor(pet.eggRarity() == R_LEGENDARY ? UI_BAR_WARN : WATER_BLUE_COLOR);
@@ -215,7 +232,7 @@ static void renderCreatureView() {
   if (pet.showHeart()) drawPetHeart();
   if (pet.sleeping) drawSleepBubble();
   drawBath();
-  drawPoops();
+  if (!bathUntil) drawPoops();  // the shower room floor stays clean: the poops are gone when it ends
   drawBottomPanel();
   drawBars();
   drawButtons();
@@ -305,15 +322,22 @@ void render() {
   }
   #pragma endregion
 
-  #pragma region Landscape
-  // by the clock only: a sleeping creature keeps the current sky (the panel still dims, see updateBrightness)
-  gNight = isNightHour(sceneHour());
-  // drawScene covers the full screen: no prior fillScreen(BLACK), so an
+  #pragma region Landscape, or the shower room while the bath runs
+  // updateBathScene also applies the cleaning when the shower ends: that frame is already back on the landscape
+  bool showerRunning = updateBathScene() && !pet.ceremony && !pet.isEgg();
+  // by the clock only: a sleeping creature keeps the current sky (the panel still dims, see updateBrightness);
+  // the shower room is lit at any hour
+  gNight = !showerRunning && isNightHour(sceneHour());
+  // both backgrounds cover the full screen: no prior fillScreen(BLACK), so an
   // overlapping DMA flush never captures half-drawn black (anti-flicker).
   // The main and egg views cover the ground below BOTTOM_PANEL_Y with their
   // panel; the ceremony shows the full ground.
-  drawScene(pet.isEgg() ? BIOME_MEADOW : DEX_TBL[pet.speciesId].biome, millis(), gNight,
-            pet.ceremony ? LCD_HEIGHT : BOTTOM_PANEL_Y);
+  if (showerRunning) {
+    drawShowerRoom(BOTTOM_PANEL_Y);
+  } else {
+    drawScene(pet.isEgg() ? BIOME_MEADOW : DEX_TBL[pet.speciesId].biome, millis(), gNight,
+              pet.ceremony ? LCD_HEIGHT : BOTTOM_PANEL_Y);
+  }
   #pragma endregion
 
   #pragma region Ceremony (farewell, runaway, release)

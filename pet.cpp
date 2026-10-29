@@ -599,6 +599,8 @@ void Pet::hatch() {
   medals = 0;
   newMedal = 0;
   nick[0] = 0;
+  battleWins = battleLosses = 0;  // the battle record belongs to the individual too
+  battleStreak = bestBattleStreak = 0;
   registerSpecies(speciesId);  // raised = registered in the pokedex
   checkMedals();     // in case it is born already in final form (legendary)
   sfxPlay(SFX_HATCH);

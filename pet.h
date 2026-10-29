@@ -81,7 +81,7 @@ public:
   uint8_t dexShinyReg[DEX_BITMAP_BYTES] = { 0 };  // raised or caught in shiny version
   #pragma region Wild battle state
   uint8_t dexCaught[DEX_BITMAP_BYTES] = { 0 };    // pokedex of caught wild species
-  uint16_t battleWins = 0, battleLosses = 0;      // the player's: persist across raisings
+  uint16_t battleWins = 0, battleLosses = 0;      // the individual's: reset on hatch
   uint16_t battleStreak = 0, bestBattleStreak = 0;  // consecutive wins / best ever
   #pragma endregion
   // daily care streak (the player's: persists across raisings)

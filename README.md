@@ -338,7 +338,8 @@ streak flame, the ☰ **settings** button (top left) and the **Pokédex** button
 - ⚽ **Play** → picker: ball game, coin chase, 🥊 training bag or ⚔️ a wild battle.
 - 🌙 **Light** → sleep/wake (recovers energy, dims the screen). While asleep,
   needs decay much slower (rest).
-- 🛁 **Bath** → a foam scene that cleans up the poops.
+- 🛁 **Bath** → the scene switches to a shower with falling water droplets; when
+  the creature is clean (poops gone) it goes back to the landscape.
 
 **Touch:**
 - Tap the creature = pet it (+happiness, bond).

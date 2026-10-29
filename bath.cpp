@@ -1,96 +1,130 @@
-// Bath scene (see bath.h): foam bubbles over the creature, and the cleanup when
-// they pop. Every distance is a 466-px design value scaled with SX()/SY()/SK()
+// Bath scene (see bath.h): a shower in the bathroom of drawShowerRoom(), water
+// droplets falling from its head over the creature, and the cleanup when it
+// ends. Every distance is a 466-px design value scaled with SX()/SY()/SK()
 // (an exact no-op on the 466x466 round board).
 
 #pragma region Includes
 #include "bath.h"
-#include <math.h>
-#include "app_state.h"      // pet, pmd, beh, bathUntil, bathPending, bubbles
+#include "app_state.h"      // pet, pmd, beh, bathUntil, bathPending, PET_GROUND
 #include "board_display.h"  // gfx
-#include "boards/layout.h"  // SX()/SY()/SK()
-#include "colors.h"         // BATH_BUBBLE_OUTLINE_COLOR
+#include "boards/layout.h"  // SX()/SY()/SK()/SKM()
+#include "colors.h"         // SHOWER_DROPLET_COLOR, UI_WHITE
+#include "scene.h"          // SHOWER_HEAD_CX, SHOWER_HEAD_FACE_Y, SHOWER_HEAD_HALF_WIDTH
 #include "sprite_draw.h"    // pmdActTotalMs
-#include "ui_widgets.h"     // millisPhaseRadians
 #pragma endregion
 
 #pragma region Constants
 static const uint32_t BATH_DURATION_MS = 3000;
-// the last BATH_POP_MS of the bath show the popping sparkles instead of the foam
-static const uint32_t BATH_POP_MS = 800;
-// bubbles spawn within BATH_SPAWN_HALF_WIDTH px of the creature, up to BATH_SPAWN_HEIGHT above its ground
-#define BATH_SPAWN_HALF_WIDTH SX(70)
-#define BATH_SPAWN_WIDTH SX(140)
-#define BATH_SPAWN_HEIGHT SY(150)
-// bubble radius: BATH_BUBBLE_MIN_RADIUS plus up to BATH_BUBBLE_RADIUS_RANGE - 1
-#define BATH_BUBBLE_MIN_RADIUS SK(8)
-#define BATH_BUBBLE_RADIUS_RANGE SK(16)
-static const int BATH_BUBBLE_PHASE_RANGE = 64;
-// foam sway: radians per ms and px per side
-static const float BATH_SWAY_RADIANS_PER_MS = 1.0f / 220.0f;
-#define BATH_SWAY_AMPLITUDE SX(6)
-// foam rise: 1 px (466-px units) every BATH_RISE_MS_PER_PX ms
-static const uint32_t BATH_RISE_MS_PER_PX = 90;
-// sparkles of the first BATH_SPARKLE_COUNT bubbles, BATH_SPARKLE_RISE px above them
-static const int BATH_SPARKLE_COUNT = 8;
-#define BATH_SPARKLE_RISE SY(18)
+// droplets in the spray; each falls for SHOWER_FALL_MS, splashes for
+// SHOWER_SPLASH_MS, then starts again from the head at a new spot
+static const int SHOWER_DROPLET_COUNT = 28;
+static const uint32_t SHOWER_FALL_MS = 520;
+static const uint32_t SHOWER_SPLASH_MS = 140;
+static const uint32_t SHOWER_DROPLET_PERIOD_MS = SHOWER_FALL_MS + SHOWER_SPLASH_MS;
+// by the floor the spray is this wide, in percent of the head's face
+static const int SHOWER_SPRAY_SPREAD_PERCENT = 170;
+// droplet: a round bottom of SHOWER_DROPLET_RADIUS with a point SHOWER_DROPLET_TAIL above its center
+#define SHOWER_DROPLET_RADIUS SKM(3)
+#define SHOWER_DROPLET_TAIL SKM(9)
+// splash: two specks thrown SHOWER_SPLASH_REACH px sideways and up to SHOWER_SPLASH_RISE px high
+#define SHOWER_SPLASH_REACH SK(10)
+#define SHOWER_SPLASH_RISE SK(8)
+#define SHOWER_SPLASH_SPECK_RADIUS SKM(2)
 // the clean creature strikes its pose for this many loops of the action
 static const uint32_t BATH_POSE_LOOPS = 2;
+#pragma endregion
+
+#pragma region Internal helpers
+// 0..range-1, fixed for one fall of one droplet (no jitter from frame to frame)
+static int dropletFallHash(int dropletIndex, uint32_t fallNumber, int range) {
+  uint32_t hash = (uint32_t)(dropletIndex * 83492791) ^ (fallNumber * 2654435761u);
+  hash ^= hash >> 15;
+  hash *= 2246822519u;
+  hash ^= hash >> 13;
+  return (int)(hash % (uint32_t)range);
+}
+
+// teardrop centered on (dropletX, dropletY), point up, with a white glint
+static void drawShowerDroplet(int dropletX, int dropletY) {
+  gfx->fillCircle(dropletX, dropletY, SHOWER_DROPLET_RADIUS, SHOWER_DROPLET_COLOR);
+  gfx->fillTriangle(dropletX - SHOWER_DROPLET_RADIUS, dropletY, dropletX + SHOWER_DROPLET_RADIUS, dropletY,
+                    dropletX, dropletY - SHOWER_DROPLET_TAIL, SHOWER_DROPLET_COLOR);
+  gfx->drawPixel(dropletX - SHOWER_DROPLET_RADIUS / 2, dropletY - SHOWER_DROPLET_RADIUS / 2, UI_WHITE);
+}
+
+// two specks flying out of the landing point; splashPermille 0..1000 over SHOWER_SPLASH_MS
+static void drawShowerSplash(int landingX, int splashPermille) {
+  int speckOffsetX = SHOWER_SPLASH_REACH * splashPermille / 1000;
+  // up then back down: highest halfway through the splash
+  int speckRise = SHOWER_SPLASH_RISE * 4 * splashPermille * (1000 - splashPermille) / 1000000;
+  int speckY = PET_GROUND - speckRise;
+  gfx->fillCircle(landingX - speckOffsetX, speckY, SHOWER_SPLASH_SPECK_RADIUS, SHOWER_DROPLET_COLOR);
+  gfx->fillCircle(landingX + speckOffsetX, speckY, SHOWER_SPLASH_SPECK_RADIUS, SHOWER_DROPLET_COLOR);
+}
 #pragma endregion
 
 #pragma region Public API
 void startBath() {
   if (pet.isEgg() || pet.sleeping || pet.ceremony || bathUntil) return;
-  bathUntil = millis() + BATH_DURATION_MS;
+  uint32_t now = millis();
+  bathUntil = now + BATH_DURATION_MS;
   bathPending = true;
-  int creatureCenterX = (int)beh.x;
-  for (auto &bubble : bubbles) {
-    bubble.x = creatureCenterX - BATH_SPAWN_HALF_WIDTH + random(BATH_SPAWN_WIDTH);
-    bubble.y = PET_GROUND - random(BATH_SPAWN_HEIGHT);
-    bubble.r = BATH_BUBBLE_MIN_RADIUS + random(BATH_BUBBLE_RADIUS_RANGE);
-    bubble.ph = random(BATH_BUBBLE_PHASE_RANGE);
+  #pragma region The creature stands still under the shower head while the water runs
+  beh.x = beh.targetX = SHOWER_HEAD_CX;
+  beh.mode = PET_BEHAVIOR_IDLE;
+  beh.t0 = now;
+  beh.until = bathUntil;
+  #pragma endregion
+}
+
+bool updateBathScene() {
+  if (!bathUntil) return false;
+  if (timeLeft(bathUntil)) return true;
+  #pragma region Shower over: apply the cleaning once, with a happy pose
+  bathUntil = 0;
+  if (bathPending) {
+    bathPending = false;
+    pet.clean();
+    if (pmd.has(PMD_POSE)) {
+      uint32_t now = millis();
+      beh.mode = PET_BEHAVIOR_GESTURE;
+      beh.act = PMD_POSE;
+      beh.t0 = now;
+      beh.until = now + pmdActTotalMs(pmd.acts[PMD_POSE]) * BATH_POSE_LOOPS;
+    }
   }
+  #pragma endregion
+  return false;
 }
 
 void drawBath() {
-  uint32_t now = millis();
-  #pragma region Bath over: apply the cleaning once, with a happy pose
-  if (!timeLeft(bathUntil)) {
-    bathUntil = 0;
-    if (bathPending) {
-      bathPending = false;
-      pet.clean();
-      if (pmd.has(PMD_POSE)) {
-        beh.mode = PET_BEHAVIOR_GESTURE;
-        beh.act = PMD_POSE;
-        beh.t0 = now;
-        beh.until = now + pmdActTotalMs(pmd.acts[PMD_POSE]) * BATH_POSE_LOOPS;
-      }
-    }
-    return;
-  }
-  #pragma endregion
-  uint32_t remainingMs = bathUntil - now;
-  if (remainingMs > BATH_POP_MS) {
-    #pragma region Foam: bubbles swaying and slowly rising
-    float swayPhase = millisPhaseRadians(now, BATH_SWAY_RADIANS_PER_MS);
-    for (auto &bubble : bubbles) {
-      int bubbleX = bubble.x + (int)(sinf(swayPhase + bubble.ph) * BATH_SWAY_AMPLITUDE);
-      int bubbleY = bubble.y - SY((int)((BATH_DURATION_MS - remainingMs) / BATH_RISE_MS_PER_PX));
-      gfx->fillCircle(bubbleX, bubbleY, bubble.r, UI_WHITE);
-      gfx->drawCircle(bubbleX, bubbleY, bubble.r, BATH_BUBBLE_OUTLINE_COLOR);
-      gfx->fillCircle(bubbleX - bubble.r / 3, bubbleY - bubble.r / 3, bubble.r / 4, UI_BG_DAY);
-    }
+  if (!bathUntil) return;
+  uint32_t showerElapsedMs = millis() - (bathUntil - BATH_DURATION_MS);
+  // a droplet's center goes from just under the head's face down to the floor
+  int fallHeight = PET_GROUND - SHOWER_HEAD_FACE_Y - SHOWER_DROPLET_TAIL;
+  for (int i = 0; i < SHOWER_DROPLET_COUNT; i++) {
+    #pragma region Where this droplet is in its fall-and-splash cycle
+    // the droplets are spread evenly over one cycle so the spray stays steady
+    uint32_t dropletTimeMs = showerElapsedMs + (uint32_t)i * SHOWER_DROPLET_PERIOD_MS / SHOWER_DROPLET_COUNT;
+    uint32_t fallNumber = dropletTimeMs / SHOWER_DROPLET_PERIOD_MS;
+    uint32_t cycleMs = dropletTimeMs % SHOWER_DROPLET_PERIOD_MS;
+    if (cycleMs > showerElapsedMs) continue;  // this fall began before the water was turned on
+    int headOffsetX = dropletFallHash(i, fallNumber, 2 * SHOWER_HEAD_HALF_WIDTH + 1) - SHOWER_HEAD_HALF_WIDTH;
+    int landingX = SHOWER_HEAD_CX + headOffsetX * SHOWER_SPRAY_SPREAD_PERCENT / 100;
     #pragma endregion
-  } else {
-    #pragma region The bubbles pop: sparkles
-    for (int i = 0; i < BATH_SPARKLE_COUNT; i++) {
-      auto &bubble = bubbles[i];
-      int sparkleX = bubble.x + (i % 3) * 6 - 6, sparkleY = bubble.y - BATH_SPARKLE_RISE;
-      uint16_t sparkleColor = (i % 2) ? UI_BAR_WARN : UI_WHITE;
-      gfx->fillRect(sparkleX - 6, sparkleY - 1, 13, 3, sparkleColor);
-      gfx->fillRect(sparkleX - 1, sparkleY - 6, 3, 13, sparkleColor);
+    if (cycleMs < SHOWER_FALL_MS) {
+      #pragma region Falling: speeding up and spreading out toward the floor
+      int fallPermille = (int)(cycleMs * 1000 / SHOWER_FALL_MS);
+      int dropPermille = fallPermille * (1000 + fallPermille) / 2000;  // gentle acceleration
+      int dropletX = SHOWER_HEAD_CX + headOffsetX * (100 + (SHOWER_SPRAY_SPREAD_PERCENT - 100) * fallPermille / 1000) / 100;
+      int dropletY = SHOWER_HEAD_FACE_Y + SHOWER_DROPLET_TAIL + fallHeight * dropPermille / 1000;
+      drawShowerDroplet(dropletX, dropletY);
+      #pragma endregion
+    } else {
+      #pragma region Landed: splash on the floor
+      drawShowerSplash(landingX, (int)((cycleMs - SHOWER_FALL_MS) * 1000 / SHOWER_SPLASH_MS));
+      #pragma endregion
     }
-    #pragma endregion
   }
 }
 #pragma endregion

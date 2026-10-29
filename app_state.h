@@ -155,12 +155,9 @@ extern uint8_t settingsBrightnessSavedLevel;  // last value in NVS (skips no-op 
 #pragma endregion
 
 #pragma region Bath scene
-// foam over the creature and cleanup when it pops
-struct BathBubble { int16_t x, y; uint8_t r, ph; };
-#define BATH_BUBBLE_COUNT 14
+// shower over the creature (bath.cpp) and cleanup when it ends
 extern uint32_t bathUntil;
 extern bool bathPending;
-extern BathBubble bubbles[BATH_BUBBLE_COUNT];
 #pragma endregion
 
 #pragma region Ball game (keepy-uppy) state

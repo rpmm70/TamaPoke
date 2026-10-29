@@ -14,6 +14,7 @@ Pillow is only needed to render the sheet (--no-sheet skips it).
 #region Imports
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -50,9 +51,13 @@ PALETTE = {
     'L': '#6f7cb8',  # lavender shadow
     's': '#aab0bc',  # cannon gray
     'S': '#787e8c',  # gray shadow
+    'h': '#fff4d6',  # egg highlight cream
+    'e': '#c99a48',  # egg core shadow
+    'q': '#8fdc9a',  # egg spot highlight green
 }
 
 W = H = 32
+EGG_SIZE = 80  # the egg is drawn at its own size (zoom 2 instead of the creatures' 5)
 #endregion
 
 #region Sprite canvas
@@ -390,14 +395,115 @@ def blastoise():
 
 #region Generic sprites
 
+#region Egg
+# 80x80 egg, narrower at the top, lit from the upper left: banded cream
+# shading with a checkerboard dither between bands, green spots shaded to
+# follow the curve, and a two-pixel outline. The crack paths drawn over it
+# live in main_screen.cpp (CRACK1 / CRACK2_*) in the same 80x80 coordinates.
+
+EGG_CENTER_X, EGG_CENTER_Y = 39.5, 42.0
+EGG_RADIUS_X, EGG_RADIUS_Y = 28.0, 34.0
+EGG_SPOTS = [
+    # (center x, center y, radius x, radius y)
+    (29.0, 27.0, 7.0, 5.5),
+    (51.5, 44.0, 7.6, 6.5),
+    (32.0, 58.0, 6.0, 4.5),
+    (16.5, 44.0, 3.4, 4.2),
+    (47.5, 22.0, 3.3, 2.6),
+    (57.5, 62.0, 3.3, 3.6),
+]
+
+
+def egg_surface_normal(column, row):
+    """(horizontal, vertical, depth) of the egg's surface at a pixel, or None outside it."""
+    vertical = (row + 0.5 - EGG_CENTER_Y) / EGG_RADIUS_Y
+    if abs(vertical) >= 1.0:
+        return None
+    # taper: narrower toward the top
+    width_factor = 0.86 + 0.14 * vertical
+    horizontal = (column + 0.5 - EGG_CENTER_X) / (EGG_RADIUS_X * width_factor)
+    radial = horizontal * horizontal + vertical * vertical
+    if radial > 1.0:
+        return None
+    return horizontal, vertical, math.sqrt(max(0.0, 1.0 - radial))
+
+
+def egg_light_level(surface_normal):
+    """Lambert light from the upper left: 1 faces the light, below 0 faces away."""
+    light_x, light_y, light_z = -0.55, -0.6, 0.58
+    light_length = math.sqrt(light_x ** 2 + light_y ** 2 + light_z ** 2)
+    return (surface_normal[0] * light_x + surface_normal[1] * light_y + surface_normal[2] * light_z) / light_length
+
+
+def egg_spot_offset(column, row):
+    """(offset x, offset y) inside the spot covering a pixel (1 = its rim), or None."""
+    for center_x, center_y, radius_x, radius_y in EGG_SPOTS:
+        offset_x = (column + 0.5 - center_x) / radius_x
+        offset_y = (row + 0.5 - center_y) / radius_y
+        # slightly irregular edge
+        wobble = 1.0 + 0.12 * math.sin(3.0 * math.atan2(offset_y, offset_x) + center_x)
+        if offset_x * offset_x + offset_y * offset_y <= wobble:
+            return offset_x, offset_y
+    return None
+
+
 def egg():
-    g = G()
-    g.disk(16, 17, 8.6, 11.0, 'y', 'Y')
-    g.outline()
-    g.rect(12, 11, 13, 12, 'g'); g.px(12, 13, 'g')
-    g.rect(19, 16, 20, 17, 'g'); g.px(20, 18, 'g')
-    g.rect(13, 22, 14, 23, 'g')
-    return g.rows()
+    egg_grid = [['.'] * EGG_SIZE for _ in range(EGG_SIZE)]
+
+    #region Shell shading and spots
+    for row in range(EGG_SIZE):
+        for column in range(EGG_SIZE):
+            surface_normal = egg_surface_normal(column, row)
+            if surface_normal is None:
+                continue
+            light_level = egg_light_level(surface_normal)
+            # checkerboard dither softens the band edges
+            dithered_light_level = light_level + (0.035 if (column + row) % 2 == 0 else -0.035)
+            if dithered_light_level > 0.965:
+                shade = 'w'
+            elif dithered_light_level > 0.80:
+                shade = 'h'
+            elif dithered_light_level > 0.33:
+                shade = 'y'
+            elif dithered_light_level > -0.02:
+                shade = 'Y'
+            else:
+                shade = 'e'
+            spot_offset = egg_spot_offset(column, row)
+            if spot_offset is not None:
+                if light_level > 0.90:
+                    shade = 'q'
+                elif light_level > 0.25:
+                    shade = 'g'
+                else:
+                    shade = 'G'
+                # inner rim of the spot facing away from the light
+                if spot_offset[0] + spot_offset[1] > 0.95:
+                    shade = 'G'
+            egg_grid[row][column] = shade
+    #endregion
+
+    #region Two-pixel outline
+    for outline_pass in range(2):
+        # pass 0 rings the transparent edge, pass 1 rings the first outline
+        boundary_characters = '.' if outline_pass == 0 else '.k'
+        outlined_grid = [grid_row[:] for grid_row in egg_grid]
+        for row in range(EGG_SIZE):
+            for column in range(EGG_SIZE):
+                if egg_grid[row][column] in '.k':
+                    continue
+                for neighbor_column, neighbor_row in ((column - 1, row), (column + 1, row),
+                                                      (column, row - 1), (column, row + 1)):
+                    if (not (0 <= neighbor_column < EGG_SIZE and 0 <= neighbor_row < EGG_SIZE)
+                            or egg_grid[neighbor_row][neighbor_column] in boundary_characters):
+                        outlined_grid[row][column] = 'k'
+                        break
+        egg_grid = outlined_grid
+    #endregion
+
+    return [''.join(grid_row) for grid_row in egg_grid]
+
+#endregion
 
 
 def poop():

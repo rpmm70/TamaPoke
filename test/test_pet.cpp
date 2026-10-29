@@ -1253,6 +1253,22 @@ TEST(battle_pet, win_and_loss_update_counters_and_streak) {
   CHECK_EQ(rebooted.bestBattleStreak, (uint16_t)2);
 }
 
+TEST(battle_pet, hatching_a_new_egg_resets_the_battle_record) {
+  Pet p;
+  makePet(p, 4);
+  p.applyBattleWin(16, false);
+  p.applyBattleLoss();
+  p.newEgg();
+  p.eggTap();
+  p.eggTap();
+  p.eggTap();
+  CHECK(!p.isEgg());
+  CHECK_EQ(p.battleWins, (uint16_t)0);
+  CHECK_EQ(p.battleLosses, (uint16_t)0);
+  CHECK_EQ(p.battleStreak, (uint16_t)0);
+  CHECK_EQ(p.bestBattleStreak, (uint16_t)0);
+}
+
 TEST(battle_pet, win_trains_the_stat_opposite_to_the_wild_strength) {
   Pet p;
   makePet(p, 4);

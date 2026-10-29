@@ -89,7 +89,6 @@ uint8_t settingsBrightnessSavedLevel = SETTINGS_BRIGHTNESS_DEFAULT;
 #pragma region Bath scene
 uint32_t bathUntil = 0;
 bool bathPending = false;
-BathBubble bubbles[BATH_BUBBLE_COUNT];
 #pragma endregion
 
 #pragma region Ball game state

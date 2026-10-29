@@ -416,7 +416,7 @@ static void renderCardStats() {
   rowTop += CARD_STATS_ROW_STEP;
   #pragma endregion
 
-  #pragma region Battle record: the player lifetime wild battle wins and losses (no bar)
+  #pragma region Battle record: this individual's wild battle wins and losses (no bar)
   drawCardStatLabelAndNumber(rowTop, T(S_STAT_WINS), pet.battleWins);
   rowTop += CARD_STATS_ROW_STEP;
   drawCardStatLabelAndNumber(rowTop, T(S_STAT_LOSSES), pet.battleLosses);

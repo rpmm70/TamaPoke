@@ -52,6 +52,6 @@ inline uint16_t lerp565(uint16_t colorA, uint16_t colorB, int step, int totalSte
 #define BOND_BAR_COLOR C565(0xd4, 0x52, 0x7e)
 // Charging bolt inside the battery icon
 #define BATTERY_BOLT_COLOR C565(0xff, 0xd9, 0x4a)
-// Outline of the bath foam bubbles
-#define BATH_BUBBLE_OUTLINE_COLOR 0x7E3D
+// Water droplets and splashes of the bath shower
+#define SHOWER_DROPLET_COLOR C565(0x4A, 0xA8, 0xE8)
 #pragma endregion

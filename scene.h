@@ -5,7 +5,7 @@
 // landscape, drawGameScene() the lower-horizon habitat of the minigames, and
 // drawBattleArena() the top-down court behind battles, drawCoinChaseField() and
 // drawBallGameStage() the coin chase and ball game backgrounds, drawBoxingRingInterior()
-// the training bag background.
+// the training bag background, drawShowerRoom() the bath background.
 
 #pragma region Includes
 #include <Arduino.h>
@@ -33,4 +33,14 @@ void drawBallGameStage();
 // and corner posts in a dark arena; the canvas starts at RING_CANVAS_TOP_Y
 // (same at any time of day)
 void drawBoxingRingInterior();
+// Bath background: tiled bathroom with a shower head over the middle of the
+// screen; the floor is filled down to floorBottom (same at any time of day)
+void drawShowerRoom(int floorBottom = LCD_HEIGHT);
+#pragma endregion
+
+#pragma region Shower head geometry
+// face of the drawShowerRoom() shower head: the bath droplets fall from it
+#define SHOWER_HEAD_CX CX
+#define SHOWER_HEAD_FACE_Y SY(158)
+#define SHOWER_HEAD_HALF_WIDTH SX(44)
 #pragma endregion

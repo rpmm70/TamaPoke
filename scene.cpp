@@ -108,9 +108,14 @@ static void drawNightStars(uint32_t nowMs, uint16_t skyTop, uint16_t skyBottom, 
   }
 }
 
+// clouds drift 1 px (466-px units, so the same share of the screen on every
+// board) to the right every CLOUD_DRIFT_MS_PER_PX ms (higher = slower)
+static const uint32_t CLOUD_DRIFT_MS_PER_PX = 100;
+
 static void drawClouds(uint32_t now, uint16_t cloudColor) {
   for (int k = 0; k < 2; k++) {
-    int cloudX = (int)((now / 50 + k * SX(250)) % SX(560)) - SX(40);
+    // wrapped in 466-px units first, then scaled: SX() of the raw millis count would overflow
+    int cloudX = (int)SX((now / CLOUD_DRIFT_MS_PER_PX + k * 250) % 560) - SX(40);
     int cloudY = SY(70) + k * SY(34);
     gfx->fillCircle(cloudX, cloudY, 16, cloudColor);
     gfx->fillCircle(cloudX + 18, cloudY + 3, 13, cloudColor);
@@ -1077,5 +1082,70 @@ void drawBoxingRingInterior() {
   fillRingHalves(CX, CY, cornerDistance, BEZEL_RADIUS + 1, true, true, RGB565_BLACK);
   #pragma endregion
 #endif
+}
+#pragma endregion
+
+#pragma region Shower room
+// Bath background: a tiled wall over a tiled floor seen in perspective, with a
+// chrome shower pipe coming down from the ceiling to the head over the middle
+// of the screen (its face is SHOWER_HEAD_* in scene.h).
+static const uint16_t SHOWER_WALL_TILE_COLOR = C565(0xD4, 0xEC, 0xF2);
+static const uint16_t SHOWER_WALL_GROUT_COLOR = C565(0xA8, 0xCC, 0xD8);
+static const uint16_t SHOWER_FLOOR_TILE_COLOR = C565(0x8C, 0xB8, 0xC8);
+static const uint16_t SHOWER_FLOOR_GROUT_COLOR = C565(0x6A, 0x96, 0xA8);
+static const uint16_t SHOWER_BASEBOARD_COLOR = C565(0x5A, 0x84, 0x96);
+static const uint16_t SHOWER_CHROME_COLOR = C565(0xB8, 0xC2, 0xCC);
+static const uint16_t SHOWER_CHROME_SHADOW_COLOR = C565(0x7A, 0x86, 0x94);
+static const uint16_t SHOWER_CHROME_SHINE_COLOR = C565(0xEE, 0xF2, 0xF6);
+// wall tiles across the screen width; the floor seams are two wall tiles apart at the front
+static const int SHOWER_WALL_TILES_ACROSS = 12;
+// the floor starts here; the creature stands on it at PET_GROUND
+#define SHOWER_FLOOR_TOP_Y SY(276)
+// the pipe comes down from the top edge; the head spans SHOWER_HEAD_TOP_Y to SHOWER_HEAD_FACE_Y
+#define SHOWER_HEAD_TOP_Y SY(122)
+#define SHOWER_HEAD_NECK_HALF_WIDTH SX(12)
+
+void drawShowerRoom(int floorBottom) {
+  int floorTop = SHOWER_FLOOR_TOP_Y;
+  int wallTileSize = LCD_WIDTH / SHOWER_WALL_TILES_ACROSS;
+
+  #pragma region Wall tiles
+  gfx->fillRect(0, 0, LCD_WIDTH, floorTop, SHOWER_WALL_TILE_COLOR);
+  for (int groutY = floorTop - wallTileSize; groutY > 0; groutY -= wallTileSize)
+    gfx->drawFastHLine(0, groutY, LCD_WIDTH, SHOWER_WALL_GROUT_COLOR);
+  for (int groutX = wallTileSize; groutX < LCD_WIDTH; groutX += wallTileSize)
+    gfx->drawFastVLine(groutX, 0, floorTop, SHOWER_WALL_GROUT_COLOR);
+  #pragma endregion
+
+  #pragma region Floor tiles in perspective: the seams fan out toward the viewer
+  gfx->fillRect(0, floorTop, LCD_WIDTH, floorBottom - floorTop, SHOWER_FLOOR_TILE_COLOR);
+  gfx->drawFastHLine(0, floorTop + (floorBottom - floorTop) * 2 / 5, LCD_WIDTH, SHOWER_FLOOR_GROUT_COLOR);
+  int floorSeamSpacing = 2 * wallTileSize;
+  int floorSeamsPerSide = LCD_WIDTH / floorSeamSpacing + 1;
+  for (int seam = -floorSeamsPerSide; seam <= floorSeamsPerSide; seam++)
+    gfx->drawLine(CX + seam * floorSeamSpacing / 2, floorTop, CX + seam * floorSeamSpacing, floorBottom - 1,
+                  SHOWER_FLOOR_GROUT_COLOR);
+  int baseboardHeight = SKM(4);
+  gfx->fillRect(0, floorTop - baseboardHeight, LCD_WIDTH, baseboardHeight, SHOWER_BASEBOARD_COLOR);
+  #pragma endregion
+
+  #pragma region Shower pipe from the ceiling straight down to the head
+  int pipeThickness = max(3, (int)SK(10));
+  int pipeLeft = SHOWER_HEAD_CX - pipeThickness / 2;
+  gfx->fillRect(pipeLeft, 0, pipeThickness, SHOWER_HEAD_TOP_Y, SHOWER_CHROME_COLOR);
+  gfx->drawFastVLine(pipeLeft, 0, SHOWER_HEAD_TOP_Y, SHOWER_CHROME_SHINE_COLOR);
+  gfx->drawFastVLine(pipeLeft + pipeThickness - 1, 0, SHOWER_HEAD_TOP_Y, SHOWER_CHROME_SHADOW_COLOR);
+  #pragma endregion
+
+  #pragma region Shower head: narrow at the neck, SHOWER_HEAD_HALF_WIDTH wide at its face
+  int neckLeft = SHOWER_HEAD_CX - SHOWER_HEAD_NECK_HALF_WIDTH, neckRight = SHOWER_HEAD_CX + SHOWER_HEAD_NECK_HALF_WIDTH;
+  int faceLeft = SHOWER_HEAD_CX - SHOWER_HEAD_HALF_WIDTH, faceRight = SHOWER_HEAD_CX + SHOWER_HEAD_HALF_WIDTH;
+  gfx->fillTriangle(neckLeft, SHOWER_HEAD_TOP_Y, neckRight, SHOWER_HEAD_TOP_Y, faceLeft, SHOWER_HEAD_FACE_Y,
+                    SHOWER_CHROME_COLOR);
+  gfx->fillTriangle(neckRight, SHOWER_HEAD_TOP_Y, faceRight, SHOWER_HEAD_FACE_Y, faceLeft, SHOWER_HEAD_FACE_Y,
+                    SHOWER_CHROME_COLOR);
+  gfx->drawLine(neckLeft, SHOWER_HEAD_TOP_Y, faceLeft, SHOWER_HEAD_FACE_Y, SHOWER_CHROME_SHINE_COLOR);
+  gfx->fillRect(faceLeft, SHOWER_HEAD_FACE_Y, faceRight - faceLeft + 1, SKM(4), SHOWER_CHROME_SHADOW_COLOR);
+  #pragma endregion
 }
 #pragma endregion
