@@ -26,8 +26,6 @@ static const uint32_t EVOLVE_FLASH_PERIOD_MS = 300;
 // flash sprites blink for BLINK_DURATION_MS out of every BLINK_CYCLE_MS
 static const uint32_t BLINK_CYCLE_MS = 3500;
 static const uint32_t BLINK_DURATION_MS = 300;
-// zoom limit of the main creature's PMD sprite
-static const uint8_t PET_PMD_MAX_SCALE = 5;
 // the Hop pose shown while eating (sprites with no Eat pose) keeps this much of its jump height
 static const uint8_t EATING_HOP_HEIGHT_PERCENT = 35;
 // PMD walk: px per frame, and how close to the target counts as arrived
@@ -142,15 +140,13 @@ static void drawPetPMD() {
   PetMood mood = pet.mood();
   uint8_t act;
   bool loop = true;
-  bool keepIdleScale = false;
   uint8_t jumpHeightPercent = 100;
   if (mood == MOOD_SLEEPING && pmd.has(PMD_SLEEP)) {
     act = PMD_SLEEP;
     beh.mode = PET_BEHAVIOR_IDLE;
   } else if (mood == MOOD_EATING && (pmd.has(PMD_EAT) || pmd.has(PMD_HOP))) {
-    // most sprites have no Eat pose: a small happy Hop stands in, at the Idle zoom so it does not shrink
+    // most sprites have no Eat pose: a small happy Hop stands in (every action uses the Idle zoom)
     act = pmd.has(PMD_EAT) ? PMD_EAT : PMD_HOP;
-    keepIdleScale = true;
     if (act == PMD_HOP) jumpHeightPercent = EATING_HOP_HEIGHT_PERCENT;
     beh.t0 = 0;
   } else if (mood == MOOD_SAD && pmd.has(PMD_HURT)) {
@@ -175,8 +171,8 @@ static void drawPetPMD() {
   }
   #pragma endregion
 
-  drawPmdAct(act, (int)beh.x, PET_GROUND, now - beh.t0, loop || act == PMD_IDLE, false, PET_PMD_MAX_SCALE, keepIdleScale,
-             jumpHeightPercent);
+  drawPmdActNormalized(act, (int)beh.x, PET_GROUND, now - beh.t0, loop || act == PMD_IDLE, false, PET_VISIBLE_HEIGHT,
+                       PET_MAX_VISIBLE_WIDTH, jumpHeightPercent);
   // the "likes it" heart is drawn by render() next to the head (drawPetHeart)
 }
 #pragma endregion

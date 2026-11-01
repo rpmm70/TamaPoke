@@ -6,7 +6,7 @@
 #pragma region Includes
 #include "ceremony_fx.h"
 #include <math.h>
-#include "app_state.h"      // pet, pmd, evoPmd, choiceKind, CHOICE_EVOLVE, PET_GROUND
+#include "app_state.h"      // pet, pmd, evoPmd, choiceKind, CHOICE_EVOLVE, PET_GROUND, PET_VISIBLE_HEIGHT
 #include "board_display.h"  // gfx
 #include "boards/layout.h"  // CX, SX()/SY()/SK(), CH_*, EVO_*, FAR_*, PET_HEART_SCALE
 #include "ceremony.h"       // CER_RUNAWAY
@@ -21,8 +21,6 @@
 #pragma endregion
 
 #pragma region Constants
-// zoom limit of the creature during the ceremonies and the evolution
-static const uint8_t CEREMONY_PET_MAX_SCALE = 5;
 static const int HEART_MAP_SIZE = 32;
 // corner radius of the two buttons inside the decision dialog
 static const int CHOICE_BUTTON_RADIUS = 12;
@@ -70,7 +68,8 @@ void drawCeremony() {
       creatureX = CX - (int)(((ceremonyProgress - 0.30f) / 0.70f) * (CX + SX(120)));
       fade = (ceremonyProgress > 0.6f) && ((now / 160) % 2 == 0);  // flickers toward the silhouette
     }
-    drawPmdAct(act, creatureX, creatureGroundY, now, true, fade, CEREMONY_PET_MAX_SCALE);  // fade=silhouette: it blurs as it leaves
+    // fade=silhouette: it blurs as it leaves
+    drawPmdActNormalized(act, creatureX, creatureGroundY, now, true, fade, PET_VISIBLE_HEIGHT, PET_MAX_VISIBLE_WIDTH);
     #pragma endregion
     #pragma region Tear falling from the creature
     if (ceremonyProgress < 0.55f) {
@@ -103,7 +102,7 @@ void drawCeremony() {
     act = pmd.has(PMD_WALKR) ? PMD_WALKR : PMD_IDLE;
     creatureX = CX + (int)(((ceremonyProgress - 0.45f) / 0.55f) * (CX + SX(140)));
   }
-  drawPmdAct(act, creatureX, creatureGroundY, now, true, false, CEREMONY_PET_MAX_SCALE);
+  drawPmdActNormalized(act, creatureX, creatureGroundY, now, true, false, PET_VISIBLE_HEIGHT, PET_MAX_VISIBLE_WIDTH);
   if (pet.showHeart())  // big heart following the creature
     drawMap(SPR_HEART, HEART_MAP_SIZE, creatureX + SX(50), creatureGroundY - SY(190), PET_HEART_SCALE, false);
   #pragma endregion
@@ -194,8 +193,10 @@ void drawEvolveFX(uint32_t now) {
   // at the end (progress > 0.9) it stays on the new one for the reveal flash
   int flashPeriodMs = 60 + (int)(220 * (1.0f - evolveProgress));
   bool showOld = evolveProgress < 0.9f && evoPmd.loaded && ((now / flashPeriodMs) % 2) == 0;
-  if (showOld) drawPmdActM(evoPmd, PMD_IDLE, centerX, PET_GROUND, 0, true, true, CEREMONY_PET_MAX_SCALE);
-  else drawPmdAct(PMD_IDLE, centerX, PET_GROUND, 0, true, true, CEREMONY_PET_MAX_SCALE);
+  if (showOld)
+    drawPmdActNormalizedM(evoPmd, PMD_IDLE, centerX, PET_GROUND, 0, true, true, PET_VISIBLE_HEIGHT, PET_MAX_VISIBLE_WIDTH);
+  else
+    drawPmdActNormalized(PMD_IDLE, centerX, PET_GROUND, 0, true, true, PET_VISIBLE_HEIGHT, PET_MAX_VISIBLE_WIDTH);
   #pragma endregion
 
   #pragma region Sparks shooting out

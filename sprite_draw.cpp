@@ -27,6 +27,10 @@ static const int PMD_IDLE_TARGET_HEIGHT = SY(170);
 static const int PMD_ACTION_MAX_HEIGHT = SY(250);
 // sizePercent that keeps the whole-number zoom unchanged
 static const uint16_t PMD_NATURAL_SIZE_PERCENT = 100;
+// normalized zoom limits: never smaller than x1, never past x12 (the smallest
+// creatures are ~14 visible px tall; scaledColumnEdges stays within int16_t)
+static const uint16_t PMD_NORMALIZED_MIN_SCALE_PERCENT = 100;
+static const uint16_t PMD_NORMALIZED_MAX_SCALE_PERCENT = 1200;
 // fallback duration of an action whose frame times add up to 0
 static const uint32_t PMD_EMPTY_ACTION_MS = 100;
 #pragma endregion
@@ -160,22 +164,12 @@ static uint8_t lowestOpaqueRowOfFrame(const uint8_t *framePixels, uint8_t w, uin
   return 0;
 }
 
-void drawPmdActResizedM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS,
-                        uint16_t sizePercent, bool keepIdleScale, uint8_t jumpHeightPercent) {
+// draws the current frame of actId at scalePercent with its feet (act.base) on groundY
+static void drawPmdActAnchoredAtScalePercent(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop,
+                                             bool sil, uint16_t scalePercent, uint8_t jumpHeightPercent) {
   const PmdAct &act = m.acts[actId];
-  if (!act.frames) return;
-  #pragma region Whole zoom: idle height target, clamped, stepped down for tall actions
-  uint8_t baseScale = m.acts[PMD_IDLE].h ? PMD_IDLE_TARGET_HEIGHT / m.acts[PMD_IDLE].h : PMD_FALLBACK_SCALE;
-  const uint8_t minimumScale = PMD_MIN_SCALE;
-  if (baseScale < minimumScale) baseScale = minimumScale;
-  if (baseScale > maxS) baseScale = maxS;
-  uint8_t scale = baseScale;
-  if (!keepIdleScale)
-    while (scale > minimumScale && act.h * scale > PMD_ACTION_MAX_HEIGHT) scale--;  // actions with a large frame (attack)
-  #pragma endregion
   // anchor by the feet (act.base), not by the canvas height: that way actions
   // with different padding (Hurt, Eat...) all sit at the same ground height
-  uint16_t scalePercent = (uint16_t)scale * sizePercent;
   int canvasLeft = cx - act.w * scalePercent / 200;
   int canvasTop = groundY - (act.base ? act.base : act.h) * scalePercent / 100;
   #pragma region Lower jump: push the frame down by the part of its rise that is dropped
@@ -190,6 +184,47 @@ void drawPmdActResizedM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t 
   }
   #pragma endregion
   drawPmdFrameAtScalePercent(m, actId, canvasLeft, canvasTop, t, loop, sil, scalePercent);
+}
+
+void drawPmdActResizedM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS,
+                        uint16_t sizePercent, bool keepIdleScale, uint8_t jumpHeightPercent) {
+  const PmdAct &act = m.acts[actId];
+  if (!act.frames) return;
+  #pragma region Whole zoom: idle height target, clamped, stepped down for tall actions
+  uint8_t baseScale = m.acts[PMD_IDLE].h ? PMD_IDLE_TARGET_HEIGHT / m.acts[PMD_IDLE].h : PMD_FALLBACK_SCALE;
+  const uint8_t minimumScale = PMD_MIN_SCALE;
+  if (baseScale < minimumScale) baseScale = minimumScale;
+  if (baseScale > maxS) baseScale = maxS;
+  uint8_t scale = baseScale;
+  if (!keepIdleScale)
+    while (scale > minimumScale && act.h * scale > PMD_ACTION_MAX_HEIGHT) scale--;  // actions with a large frame (attack)
+  #pragma endregion
+  drawPmdActAnchoredAtScalePercent(m, actId, cx, groundY, t, loop, sil, (uint16_t)scale * sizePercent, jumpHeightPercent);
+}
+
+uint16_t pmdNormalizedScalePercent(const PmdMon &m, uint8_t actId, int targetVisibleHeight, int maxVisibleWidth) {
+  #pragma region Reference box: the Idle pose (the drawn action when there is no Idle)
+  const PmdAct &reference = m.acts[PMD_IDLE].frames ? m.acts[PMD_IDLE] : m.acts[actId];
+  int visibleHeight = reference.base - reference.top;
+  int visibleWidth = reference.right - reference.left;
+  if (visibleHeight <= 0 || visibleWidth <= 0) return PMD_NORMALIZED_MIN_SCALE_PERCENT;
+  #pragma endregion
+  #pragma region Fractional zoom: target height, narrowed to the width limit
+  uint32_t scalePercent = (uint32_t)targetVisibleHeight * 100 / visibleHeight;
+  uint32_t widthLimitedScalePercent = (uint32_t)maxVisibleWidth * 100 / visibleWidth;
+  if (widthLimitedScalePercent < scalePercent) scalePercent = widthLimitedScalePercent;
+  if (scalePercent < PMD_NORMALIZED_MIN_SCALE_PERCENT) scalePercent = PMD_NORMALIZED_MIN_SCALE_PERCENT;
+  if (scalePercent > PMD_NORMALIZED_MAX_SCALE_PERCENT) scalePercent = PMD_NORMALIZED_MAX_SCALE_PERCENT;
+  return (uint16_t)scalePercent;
+  #pragma endregion
+}
+
+void drawPmdActNormalizedM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil,
+                           int targetVisibleHeight, int maxVisibleWidth, uint8_t jumpHeightPercent) {
+  if (!m.acts[actId].frames) return;
+  drawPmdActAnchoredAtScalePercent(m, actId, cx, groundY, t, loop, sil,
+                                   pmdNormalizedScalePercent(m, actId, targetVisibleHeight, maxVisibleWidth),
+                                   jumpHeightPercent);
 }
 
 void drawPmdFrameAtScale(PmdMon &m, uint8_t actId, int canvasLeft, int canvasTop, uint32_t t, bool loop, bool sil, uint8_t scale) {
@@ -247,6 +282,11 @@ static void drawPmdFrameAtScalePercent(PmdMon &m, uint8_t actId, int canvasLeft,
 void drawPmdAct(uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS,
                 bool keepIdleScale, uint8_t jumpHeightPercent) {
   drawPmdActM(pmd, actId, cx, groundY, t, loop, sil, maxS, keepIdleScale, jumpHeightPercent);
+}
+
+void drawPmdActNormalized(uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, int targetVisibleHeight,
+                          int maxVisibleWidth, uint8_t jumpHeightPercent) {
+  drawPmdActNormalizedM(pmd, actId, cx, groundY, t, loop, sil, targetVisibleHeight, maxVisibleWidth, jumpHeightPercent);
 }
 #pragma endregion
 

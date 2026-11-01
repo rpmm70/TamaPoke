@@ -39,6 +39,16 @@ void drawPmdActResizedM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t 
 // drawPmdActM on the main creature's sprite (pmd)
 void drawPmdAct(uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, uint8_t maxS,
                 bool keepIdleScale = false, uint8_t jumpHeightPercent = 100);
+// same size for every species: the Idle pose's VISIBLE pixels (not its padded
+// canvas) are zoomed to targetVisibleHeight px tall, or less if they would be wider
+// than maxVisibleWidth px. Fractional zoom; every action of the species uses it.
+uint16_t pmdNormalizedScalePercent(const PmdMon &m, uint8_t actId, int targetVisibleHeight, int maxVisibleWidth);
+// draws action actId of m with its feet at (cx, groundY) at pmdNormalizedScalePercent()
+void drawPmdActNormalizedM(PmdMon &m, uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil,
+                           int targetVisibleHeight, int maxVisibleWidth, uint8_t jumpHeightPercent = 100);
+// drawPmdActNormalizedM on the main creature's sprite (pmd)
+void drawPmdActNormalized(uint8_t actId, int cx, int groundY, uint32_t t, bool loop, bool sil, int targetVisibleHeight,
+                          int maxVisibleWidth, uint8_t jumpHeightPercent = 100);
 // current frame of an action, canvas top-left at (canvasLeft, canvasTop), at a fixed whole scale
 void drawPmdFrameAtScale(PmdMon &m, uint8_t actId, int canvasLeft, int canvasTop, uint32_t t, bool loop, bool sil, uint8_t scale);
 // scalePercent 250 = x2.5: source pixel pixelIndex covers screen coordinates from

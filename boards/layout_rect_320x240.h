@@ -450,9 +450,7 @@ static_assert(LCD_WIDTH == 320 && LCD_HEIGHT == 240, "layout_rect_320x240.h is d
 #define COIN_TIMER_TEXT_SIZE 4
 #define COIN_SCORE_Y (LCD_HEIGHT - 30)  // above the bottom fence rail
 #define COIN_RADIUS 9
-#define COIN_PET_MAX_SCALE 1
-#define COIN_PET_SIZE_PERCENT 125  // x1 zoom grown to x1.25
-#define COIN_PET_BODY_OFFSET 25    // body center sits this far above the feet
+#define COIN_PET_BODY_OFFSET 31    // body center sits this far above the feet (sprite: MINIGAME_PET_VISIBLE_H)
 #define COIN_PLAY_LEFT 24          // body center stays inside this rectangle
 #define COIN_PLAY_RIGHT (LCD_WIDTH - 24)
 #define COIN_PLAY_TOP 44           // below the timer and the close button
@@ -515,12 +513,14 @@ static_assert(LCD_WIDTH == 320 && LCD_HEIGHT == 240, "layout_rect_320x240.h is d
 #define BATTLE_RUN_HIT_H 40
 #pragma endregion
 
-#pragma region Wild battle: sprites at scale 2 with feet on y 150 over drawGameScene()
+#pragma region Wild battle: sprites with feet on y 150 over drawGameScene()
 // each creature centered in its half of the screen, its thumbnail fallback centered on it
 #define BATTLE_PET_CX (LCD_WIDTH / 4)
 #define BATTLE_WILD_CX (LCD_WIDTH * 3 / 4)
 #define BATTLE_GROUND_Y 150
-#define BATTLE_SPRITE_MAX_S 2
+// every species at this visible height (under the type chips, y 63..150), at most this wide
+#define BATTLE_SPRITE_VISIBLE_H 56
+#define BATTLE_SPRITE_MAX_VISIBLE_W 140  // the two centers are 160 px apart
 #define BATTLE_PET_THUMB_X (BATTLE_PET_CX - BATTLE_THUMB_CELL / 2)
 #define BATTLE_WILD_THUMB_X (BATTLE_WILD_CX - BATTLE_THUMB_CELL / 2)
 #define BATTLE_THUMB_Y 65

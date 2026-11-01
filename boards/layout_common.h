@@ -40,7 +40,9 @@
 #pragma endregion
 
 #pragma region Sprite zoom limits
-#define GAME_PET_MAX_SCALE 3                  // ball game creature
+// ball game and coin chase creature: every species at this visible height, at most this wide
+#define MINIGAME_PET_VISIBLE_H SY(76)
+#define MINIGAME_PET_MAX_VISIBLE_W SX(120)
 #define PMD_MIN_SCALE (BOARD_IS_ROUND ? 2 : 1)  // at 320x240 a x2 zoom is already half the screen
 #pragma endregion
 

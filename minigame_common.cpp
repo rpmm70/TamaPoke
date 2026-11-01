@@ -5,17 +5,19 @@
 #include "minigame_common.h"
 #include "app_state.h"      // pet, mon, pmd, lastSpriteDrawnBounds, isNightHour
 #include "board_display.h"  // gfx
-#include "boards/layout.h"  // CX, BATTLE_RESULT_*, BATTLE_OK_*, BATTLE_GROUND_Y, BATTLE_SPRITE_MAX_S
+#include "boards/layout.h"  // CX, BATTLE_RESULT_*, BATTLE_OK_*, BATTLE_GROUND_Y, BATTLE_SPRITE_VISIBLE_H/MAX_VISIBLE_W
 #include "colors.h"
 #include "i18n.h"           // T()
 #include "scene.h"          // drawGameScene, sceneHour
-#include "sprite_draw.h"    // drawPmdActResizedM, scaledPixelEdge
+#include "sprite_draw.h"    // drawPmdActNormalizedM, scaledPixelEdge
 #include "ui_widgets.h"     // drawBorderedBox, drawLabeledButton, drawResultLine, isTouchInsideRect
 #pragma endregion
 
 #pragma region Constants
 // the B/W sprite is at most this wide (SdMon::load rejects wider files)
 #define MINIGAME_BW_SPRITE_MAX_WIDTH 256
+// the B/W sprite is never drawn smaller than x1
+#define MINIGAME_BW_MIN_SCALE_PERCENT 100
 // joy line: from this score on the results say "great joy" instead of "+joy"
 #define MINIGAME_GREAT_JOY_SCORE 10
 #pragma endregion
@@ -27,13 +29,15 @@ bool canStartMinigame() {
 #pragma endregion
 
 #pragma region The creature in a minigame
-void drawMinigamePet(uint8_t act, int centerX, int feetY, uint8_t maxScale, uint16_t sizePercent) {
+void drawMinigamePet(uint8_t act, int centerX, int feetY, int targetVisibleHeight, int maxVisibleWidth) {
   if (pmd.loaded) {
     if (!pmd.has(act)) act = PMD_IDLE;
-    drawPmdActResizedM(pmd, act, centerX, feetY, millis(), true, false, maxScale, sizePercent);
+    drawPmdActNormalizedM(pmd, act, centerX, feetY, millis(), true, false, targetVisibleHeight, maxVisibleWidth);
   } else if (mon.loaded) {
     #pragma region Frame, size and position of the B/W sprite
-    uint16_t scalePercent = ((mon.h * 2 > 130) ? 1 : 2) * sizePercent;
+    // no visible box is measured for the legacy format: its whole canvas gets the target height
+    uint16_t scalePercent = (uint16_t)((uint32_t)targetVisibleHeight * 100 / mon.h);
+    if (scalePercent < MINIGAME_BW_MIN_SCALE_PERCENT) scalePercent = MINIGAME_BW_MIN_SCALE_PERCENT;
     int scaledWidth = mon.w * scalePercent / 100, scaledHeight = mon.h * scalePercent / 100;
     uint16_t frameDurationMs = mon.frameMs ? mon.frameMs : 100;
     uint16_t frameIndex = (millis() / frameDurationMs) % mon.frames;
@@ -99,7 +103,7 @@ void drawMinigameResults(StrId scoreFormat, uint16_t score, bool newRecord, bool
   bool night = isNightHour(sceneHour());
   uint16_t resultInk = night ? UI_INK_NIGHT : UI_INK;
 
-  drawMinigamePet(PMD_IDLE, CX, BATTLE_GROUND_Y, BATTLE_SPRITE_MAX_S, 100);
+  drawMinigamePet(PMD_IDLE, CX, BATTLE_GROUND_Y, BATTLE_SPRITE_VISIBLE_H, BATTLE_SPRITE_MAX_VISIBLE_W);
 
   #pragma region Panel (rect board only, like the battle result)
   if (BATTLE_RESULT_PANEL_W > 0) {

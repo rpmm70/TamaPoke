@@ -236,7 +236,7 @@ void renderGame() {
   uint8_t act = (ballX > gamePetX + BALL_PET_WALK_DEAD_ZONE)   ? PMD_WALKR
                 : (ballX < gamePetX - BALL_PET_WALK_DEAD_ZONE) ? PMD_WALKL
                                                                : PMD_IDLE;
-  drawMinigamePet(act, (int)gamePetX, GAME_PET_Y, GAME_PET_MAX_SCALE, 100);
+  drawMinigamePet(act, (int)gamePetX, GAME_PET_Y, MINIGAME_PET_VISIBLE_H, MINIGAME_PET_MAX_VISIBLE_W);
   #pragma endregion
 
   #pragma region Score (bottom, centered on CX, on the stage apron)

@@ -463,9 +463,7 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #define COIN_TIMER_TEXT_SIZE 4
 #define COIN_SCORE_Y 392           // above the fence ring
 #define COIN_RADIUS 14
-#define COIN_PET_MAX_SCALE 2
-#define COIN_PET_SIZE_PERCENT 125  // x2 zoom grown to x2.5
-#define COIN_PET_BODY_OFFSET 45    // body center sits this far above the feet
+#define COIN_PET_BODY_OFFSET 55    // body center sits this far above the feet (sprite: MINIGAME_PET_VISIBLE_H)
 #define COIN_PLAY_RADIUS 170       // body center stays inside this circle around (CX, CY)
 #define COIN_PLAY_TOP 92           // below the timer and the close button
 #define COIN_PLAY_BOTTOM 384       // above the score line
@@ -528,7 +526,9 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #define BATTLE_PET_CX 142
 #define BATTLE_WILD_CX 328
 #define BATTLE_GROUND_Y 272
-#define BATTLE_SPRITE_MAX_S 3
+// every species at this visible height (under the type chips, y 156..272), at most this wide
+#define BATTLE_SPRITE_VISIBLE_H 84
+#define BATTLE_SPRITE_MAX_VISIBLE_W 160  // the two centers are 186 px apart
 #define BATTLE_PET_THUMB_X 94
 #define BATTLE_WILD_THUMB_X 280
 #define BATTLE_THUMB_Y 152

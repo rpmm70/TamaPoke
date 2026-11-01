@@ -72,6 +72,10 @@ extern PetBehavior beh;
 
 #define PET_GROUND SY(304)  // the pet's ground line
 #define PET_CY SY(202)      // vertical center of the sprite
+// every species' PMD sprite on the main screen (and its ceremonies) is zoomed to this
+// visible height, narrowed to this visible width (drawPmdActNormalized)
+#define PET_VISIBLE_HEIGHT SY(120)
+#define PET_MAX_VISIBLE_WIDTH SX(220)
 
 // screen box of the opaque pixels the creature drew last frame (coin pickup =
 // the coin touching this box); filled by drawPmdFrameAtScale and drawMinigamePet

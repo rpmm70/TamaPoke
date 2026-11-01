@@ -36,6 +36,9 @@ enum : uint8_t {
 struct PmdAct {
   uint8_t w = 0, h = 0, frames = 0;
   uint8_t base = 0;  // row+1 of the lowest pixel (anchor by the feet, not the canvas)
+  // rest of the visible box over every frame: rows top..base-1, columns left..right-1
+  // (an action with no visible pixel spans its whole canvas)
+  uint8_t top = 0, left = 0, right = 0;
   uint16_t ms[24];
   const uint8_t *data = nullptr;  // blob mode: frames * w * h inside the blob
   uint32_t fileOff = 0;           // streaming mode: offset of that data in the file

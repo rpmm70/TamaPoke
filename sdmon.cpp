@@ -100,12 +100,33 @@ static void decodeFrameDurations(PmdAct &action, const uint8_t *rawDurations) {
   }
 }
 
-// row+1 of the lowest row with a visible pixel, 0 if the frame is empty
-static uint8_t findLowestOpaqueRow(const uint8_t *frame, uint8_t w, uint8_t h) {
-  for (int row = h - 1; row >= 0; row--)
-    for (int column = 0; column < w; column++)
-      if (frame[row * w + column] != TRANSPARENT_INDEX) return (uint8_t)(row + 1);
-  return 0;
+// empty visible box, grown by growVisibleBoxWithFrame
+static void beginVisibleBox(PmdAct &action) {
+  action.top = action.h;
+  action.base = 0;
+  action.left = action.w;
+  action.right = 0;
+}
+
+// grows the action's visible box to include every opaque pixel of one frame
+static void growVisibleBoxWithFrame(PmdAct &action, const uint8_t *frame) {
+  for (int row = 0; row < action.h; row++)
+    for (int column = 0; column < action.w; column++)
+      if (frame[row * action.w + column] != TRANSPARENT_INDEX) {
+        if (row < action.top) action.top = (uint8_t)row;
+        if (row + 1 > action.base) action.base = (uint8_t)(row + 1);
+        if (column < action.left) action.left = (uint8_t)column;
+        if (column + 1 > action.right) action.right = (uint8_t)(column + 1);
+      }
+}
+
+// an action with no visible pixel at all spans its whole canvas
+static void finishVisibleBox(PmdAct &action) {
+  if (action.right) return;
+  action.top = 0;
+  action.base = action.h;
+  action.left = 0;
+  action.right = action.w;
 }
 
 // ensures fbuf can hold at least `need` bytes (grows, never shrinks)
@@ -155,15 +176,14 @@ static bool pmdLoadStreaming(PmdMon &mon, File &monFile, uint32_t size, const ch
     position += (uint32_t)header.frames * 2;
     action.fileOff = position;
 
-    #pragma region Anchor row: walk every frame once
+    #pragma region Visible box (feet anchor and size): walk every frame once
     if (!pmdEnsureBuf(mon, header.frameBytes)) { Serial.println("no RAM for a PMD frame"); return false; }
-    uint8_t base = 1;
+    beginVisibleBox(action);
     for (uint8_t frameIndex = 0; frameIndex < header.frames; frameIndex++) {
       if (monFile.read(mon.fbuf, header.frameBytes) != (int)header.frameBytes) return false;
-      uint8_t frameBase = findLowestOpaqueRow(mon.fbuf, header.w, header.h);
-      if (frameBase > base) base = frameBase;
+      growVisibleBoxWithFrame(action, mon.fbuf);
     }
-    action.base = base;
+    finishVisibleBox(action);
     #pragma endregion
     position += header.frameBytes * header.frames;
   }
@@ -254,14 +274,11 @@ bool PmdMon::load(uint8_t dexNum, bool shiny) {
     action.data = cursor;
     cursor += header.frameBytes * header.frames;
 
-    #pragma region Lowest row with content in any frame: anchor by the feet
-    uint8_t base = 1;
-    for (uint8_t frameIndex = 0; frameIndex < header.frames; frameIndex++) {
-      uint8_t frameBase = findLowestOpaqueRow(action.data + (uint32_t)frameIndex * header.frameBytes,
-                                              header.w, header.h);
-      if (frameBase > base) base = frameBase;
-    }
-    action.base = base;
+    #pragma region Visible box over every frame: anchor by the feet, size by the visible pixels
+    beginVisibleBox(action);
+    for (uint8_t frameIndex = 0; frameIndex < header.frames; frameIndex++)
+      growVisibleBoxWithFrame(action, action.data + (uint32_t)frameIndex * header.frameBytes);
+    finishVisibleBox(action);
     #pragma endregion
   }
   #pragma endregion
@@ -287,6 +304,7 @@ void PmdMon::unload() {
   path[0] = 0;
   for (auto &action : acts) {
     action.w = action.h = action.frames = action.base = 0;
+    action.top = action.left = action.right = 0;
     action.data = nullptr;
     action.fileOff = 0;
   }

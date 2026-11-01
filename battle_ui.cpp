@@ -17,7 +17,7 @@
 #include "scene.h"          // drawGameScene, sceneHour
 #include "sdmon.h"          // thumbs, PMD_IDLE
 #include "species.h"        // SPR_ICON_PLAY
-#include "sprite_draw.h"    // drawPmdAct, drawPmdActM, drawThumbCell, drawMap
+#include "sprite_draw.h"    // drawPmdActNormalized, drawPmdActNormalizedM, drawThumbCell, drawMap
 #include "ui_text.h"        // FONT_H, setCur, printT, textW, shrinkTextSizeToWidth, drawTextCenteredInBox
 #include "ui_widgets.h"     // drawProgressBar, drawBorderedBox, drawLabeledButton, drawResultLine, drawTypeChips,
                             // isTouchInsidePaddedRect
@@ -537,17 +537,17 @@ void renderBattle() {
   uint32_t actionElapsedMs;
   if (pmd.loaded) {
     uint8_t petAction = battleSpriteAction(pmd, playerAttackAnimStartMs, now, actionElapsedMs);
-    // keepIdleScale: the wider Attack frames would otherwise step the zoom down mid-turn
-    drawPmdAct(petAction, BATTLE_PET_CX, BATTLE_GROUND_Y, actionElapsedMs, petAction == PMD_IDLE, false,
-               BATTLE_SPRITE_MAX_S, true);
+    // every action at the Idle zoom: the wider Attack frames do not shrink the creature mid-turn
+    drawPmdActNormalized(petAction, BATTLE_PET_CX, BATTLE_GROUND_Y, actionElapsedMs, petAction == PMD_IDLE, false,
+                         BATTLE_SPRITE_VISIBLE_H, BATTLE_SPRITE_MAX_VISIBLE_W);
   } else {
     const uint8_t *petThumb = thumbs.get(pet.speciesId);
     if (petThumb) drawThumbCell(petThumb, BATTLE_PET_THUMB_X, BATTLE_THUMB_Y, BATTLE_THUMB_S, false, BATTLE_THUMB_CELL);
   }
   if (galleryPmd.loaded) {
     uint8_t wildAction = battleSpriteAction(galleryPmd, wildAttackAnimStartMs, now, actionElapsedMs);
-    drawPmdActM(galleryPmd, wildAction, BATTLE_WILD_CX, BATTLE_GROUND_Y, actionElapsedMs, wildAction == PMD_IDLE, false,
-                BATTLE_SPRITE_MAX_S, true);
+    drawPmdActNormalizedM(galleryPmd, wildAction, BATTLE_WILD_CX, BATTLE_GROUND_Y, actionElapsedMs,
+                          wildAction == PMD_IDLE, false, BATTLE_SPRITE_VISIBLE_H, BATTLE_SPRITE_MAX_VISIBLE_W);
   } else {
     const uint8_t *wildThumb = thumbs.get(battleDex);
     if (wildThumb) drawThumbCell(wildThumb, BATTLE_WILD_THUMB_X, BATTLE_THUMB_Y, BATTLE_THUMB_S, false, BATTLE_THUMB_CELL);

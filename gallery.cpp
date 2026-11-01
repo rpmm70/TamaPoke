@@ -25,9 +25,10 @@ static const int GALLERY_DETAIL_HEADER_LARGE_SIZE = 3;
 static const int GALLERY_DETAIL_HEADER_SMALL_SIZE = 2;
 static const int GALLERY_DETAIL_HEADER_LARGE_TOP = SY(56);
 static const int GALLERY_DETAIL_HEADER_SMALL_TOP = SY(60);
-// animated sprite: feet on this line, zoom limit
+// animated sprite: feet on this line, every species at this visible height (narrowed to this width)
 static const int GALLERY_DETAIL_SPRITE_GROUND_Y = SY(300);
-static const uint8_t GALLERY_DETAIL_SPRITE_MAX_SCALE = 6;
+static const int GALLERY_DETAIL_SPRITE_VISIBLE_HEIGHT = SY(130);
+static const int GALLERY_DETAIL_SPRITE_MAX_VISIBLE_WIDTH = SX(220);
 // thumbnail fallback when the PMD sprite is missing: one cell at a whole scale
 static const int GALLERY_DETAIL_THUMB_TOP = SY(135);
 static const int GALLERY_DETAIL_THUMB_SCALE = 4;
@@ -134,8 +135,8 @@ static void renderGalleryDetail() {
 
   #pragma region Sprite: animated in color when known, static silhouette when not
   if (galleryPmd.loaded) {
-    drawPmdActM(galleryPmd, PMD_IDLE, CX, GALLERY_DETAIL_SPRITE_GROUND_Y, known ? millis() : 0, true, !known,
-                GALLERY_DETAIL_SPRITE_MAX_SCALE);
+    drawPmdActNormalizedM(galleryPmd, PMD_IDLE, CX, GALLERY_DETAIL_SPRITE_GROUND_Y, known ? millis() : 0, true, !known,
+                          GALLERY_DETAIL_SPRITE_VISIBLE_HEIGHT, GALLERY_DETAIL_SPRITE_MAX_VISIBLE_WIDTH);
   } else {
     const uint8_t *thumb = thumbs.get(galleryDetail);
     if (thumb) drawThumbCell(thumb, CX - GALLERY_CELL / 2, GALLERY_DETAIL_THUMB_TOP, GALLERY_DETAIL_THUMB_SCALE, !known, GALLERY_CELL);

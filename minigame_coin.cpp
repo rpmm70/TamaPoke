@@ -216,7 +216,7 @@ void renderCoinGame() {
   #pragma region The creature: walks while it has somewhere to go
   bool walking = coinPetX != coinTargetX || coinPetFeetY != coinTargetFeetY;
   uint8_t act = !walking ? PMD_IDLE : coinPetFacingLeft ? PMD_WALKL : PMD_WALKR;
-  drawMinigamePet(act, (int)coinPetX, (int)coinPetFeetY, COIN_PET_MAX_SCALE, COIN_PET_SIZE_PERCENT);
+  drawMinigamePet(act, (int)coinPetX, (int)coinPetFeetY, MINIGAME_PET_VISIBLE_H, MINIGAME_PET_MAX_VISIBLE_W);
   #pragma endregion
 
   #pragma region Score (bottom, centered on CX)

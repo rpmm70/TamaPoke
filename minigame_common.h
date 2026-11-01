@@ -12,9 +12,10 @@
 // a minigame can start: no egg, not asleep, no ceremony in progress
 bool canStartMinigame();
 // the creature in a minigame, anchored by the feet: PMD action (idle if missing)
-// or the B/W SD sprite fallback; sizePercent resizes either one (100 = usual size).
+// or the B/W SD sprite fallback, zoomed to targetVisibleHeight px tall (the PMD
+// sprite: its visible pixels, narrowed to maxVisibleWidth; see drawPmdActNormalizedM).
 // Records lastSpriteDrawnBounds.
-void drawMinigamePet(uint8_t act, int centerX, int feetY, uint8_t maxScale, uint16_t sizePercent);
+void drawMinigamePet(uint8_t act, int centerX, int feetY, int targetVisibleHeight, int maxVisibleWidth);
 // OK button of the results screen (same box as the battle result OK)
 bool isMinigameOkTapped(int16_t x, int16_t y);
 // Results screen: the creature on the habitat, the score in scoreFormat (green
