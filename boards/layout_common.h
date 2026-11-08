@@ -60,6 +60,7 @@
 #define CONF_X (CX - CONF_W / 2)
 #define CH_X (CX - CH_W / 2)
 #define CH_BX (CX - CH_BW / 2)
+#define CARD_RELEASE_BTN_X (CX - CARD_RELEASE_BTN_W / 2)
 #define CEL_X (CX - CEL_W / 2)
 #define EVO_BTN_X (CX - EVO_BTN_W / 2)
 #define FAR_BTN_X (CX - FAR_BTN_W / 2)

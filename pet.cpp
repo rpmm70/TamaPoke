@@ -580,6 +580,29 @@ void Pet::startRunaway() {
 void Pet::release() {
   beginCeremony(CER_RELEASE, true);
 }
+
+#pragma region Final form release (Progress page button)
+bool Pet::canReleaseFinalForm() const {
+  return !isEgg() && ceremony == CER_NONE && DEX_TBL[speciesId].evolvesTo == 0;
+}
+
+// same endings the creature can reach on its own: total neglect is a runaway
+// (checked first, so the button cannot dodge the penalty), a strong bond with
+// every need cared for is a farewell, anything else is a plain release
+uint8_t Pet::finalFormReleaseOutcome() const {
+  if (neglectTicks >= RUNAWAY_TICKS) return CER_RUNAWAY;
+  if (bond >= RELEASE_BLESSING_MIN_BOND && lowestStat() >= RELEASE_BLESSING_MIN_STAT) return CER_FAREWELL;
+  return CER_RELEASE;
+}
+
+void Pet::releaseFinalForm() {
+  if (!canReleaseFinalForm()) return;
+  uint8_t outcome = finalFormReleaseOutcome();
+  if (outcome == CER_RUNAWAY) startRunaway();
+  else if (outcome == CER_FAREWELL) startFarewell();
+  else release();
+}
+#pragma endregion
 #pragma endregion
 
 #pragma region Hatching and evolution

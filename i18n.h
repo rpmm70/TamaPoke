@@ -27,8 +27,8 @@ enum StrId : uint8_t {
   S_POKEDEX_FMT,   // "POKEDEX %u/151"
   // pokedex gallery: title and the filter buttons (All / Raised / Caught / Shiny)
   S_POKEDEX_TITLE, S_FILTER_ALL, S_FILTER_RAISED, S_FILTER_CAUGHT, S_FILTER_SHINY,
-  // release dialog
-  S_RELEASE_FMT, S_YES, S_NO,
+  // release dialog, then the Release button on the info card progress page (final form)
+  S_RELEASE_FMT, S_YES, S_NO, S_RELEASE_BTN,
   // minigame and punching bag
   S_HITS_FMT, S_NEW_RECORD, S_RECORD_FMT, S_HIT_FAST,
   S_SCORE_FMT, S_GREAT_JOY, S_PLUS_JOY,

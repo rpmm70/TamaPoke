@@ -960,6 +960,60 @@ TEST(ceremony, release_marks_the_end_as_release) {
   CHECK(p.isEgg());
 }
 
+#pragma region Final form release (Progress page button)
+TEST(ceremony, final_form_release_only_in_final_form) {
+  Pet p;
+  makePet(p, 4);  // CHARMANDER is not a final form
+  CHECK(!p.canReleaseFinalForm());
+  p.releaseFinalForm();
+  CHECK_EQ(p.ceremony, (uint8_t)CER_NONE);
+
+  Pet q;
+  makePet(q, 6);  // CHARIZARD, final form: no age requirement
+  CHECK(q.canReleaseFinalForm());
+}
+
+TEST(ceremony, final_form_release_with_bond_and_care_counts_as_farewell) {
+  Pet p;
+  makePet(p, 6);
+  p.bond = RELEASE_BLESSING_MIN_BOND;
+  setStats(p, RELEASE_BLESSING_MIN_STAT, 80, 80, 80);
+  CHECK_EQ(p.finalFormReleaseOutcome(), (uint8_t)CER_FAREWELL);
+  p.releaseFinalForm();
+  CHECK_EQ(p.ceremony, (uint8_t)CER_FAREWELL);
+  mockAdvanceMillis(CEREMONY_MS + 1);
+  p.update(millis());
+  CHECK(p.isEgg());
+  CHECK_EQ(p.lastEnd, (uint8_t)CER_FAREWELL);
+}
+
+TEST(ceremony, final_form_release_with_low_bond_or_a_low_need_is_a_plain_release) {
+  Pet p;
+  makePet(p, 6);
+  p.bond = RELEASE_BLESSING_MIN_BOND - 1;
+  setStats(p, 80, 80, 80, 80);
+  CHECK_EQ(p.finalFormReleaseOutcome(), (uint8_t)CER_RELEASE);
+
+  p.bond = 100;
+  setStats(p, 80, RELEASE_BLESSING_MIN_STAT - 1, 80, 80);
+  CHECK_EQ(p.finalFormReleaseOutcome(), (uint8_t)CER_RELEASE);
+  p.releaseFinalForm();
+  CHECK_EQ(p.ceremony, (uint8_t)CER_RELEASE);
+  CHECK_EQ(p.lastEnd, (uint8_t)CER_RELEASE);
+}
+
+TEST(ceremony, final_form_release_while_runaway_ready_counts_as_runaway) {
+  Pet p;
+  makePet(p, 6);
+  p.bond = 100;  // a strong bond does not cancel the neglect penalty
+  p.dbgRunawayReady();
+  CHECK_EQ(p.finalFormReleaseOutcome(), (uint8_t)CER_RUNAWAY);
+  p.releaseFinalForm();
+  CHECK_EQ(p.ceremony, (uint8_t)CER_RUNAWAY);
+  CHECK_EQ(p.lastEnd, (uint8_t)CER_RUNAWAY);
+}
+#pragma endregion
+
 TEST(ceremony, an_egg_cannot_say_farewell_or_be_released) {
   mockNvsReset();
   Pet p;

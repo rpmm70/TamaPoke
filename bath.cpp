@@ -5,16 +5,16 @@
 
 #pragma region Includes
 #include "bath.h"
-#include "app_state.h"      // pet, pmd, beh, bathUntil, bathPending, PET_GROUND
+#include "app_state.h"      // pet, pmd, beh, bathUntil, bathPending, PET_GROUND, PET_VISIBLE_HEIGHT, PET_MAX_VISIBLE_WIDTH
 #include "board_display.h"  // gfx
 #include "boards/layout.h"  // SX()/SY()/SK()/SKM()
 #include "colors.h"         // SHOWER_DROPLET_COLOR, UI_WHITE
 #include "scene.h"          // SHOWER_HEAD_CX, SHOWER_HEAD_FACE_Y, SHOWER_HEAD_HALF_WIDTH
-#include "sprite_draw.h"    // pmdActTotalMs
+#include "sprite_draw.h"    // pmdActTotalMs, pmdNormalizedScalePercent
 #pragma endregion
 
 #pragma region Constants
-static const uint32_t BATH_DURATION_MS = 3000;
+static const uint32_t BATH_DURATION_MS = 2000;
 // droplets in the spray; each falls for SHOWER_FALL_MS, splashes for
 // SHOWER_SPLASH_MS, then starts again from the head at a new spot
 static const int SHOWER_DROPLET_COUNT = 28;
@@ -44,6 +44,17 @@ static int dropletFallHash(int dropletIndex, uint32_t fallNumber, int range) {
   return (int)(hash % (uint32_t)range);
 }
 
+// creature x (canvas center) that puts the visible body of its Idle pose under
+// the shower head: the body can sit off-center in its canvas, and that offset
+// grows with the zoom
+static int creatureXCenteredUnderShowerHead() {
+  const PmdAct &reference = pmd.acts[PMD_IDLE].frames ? pmd.acts[PMD_IDLE] : pmd.acts[beh.act];
+  if (reference.right <= reference.left) return SHOWER_HEAD_CX;
+  uint16_t scalePercent = pmdNormalizedScalePercent(pmd, PMD_IDLE, PET_VISIBLE_HEIGHT, PET_MAX_VISIBLE_WIDTH);
+  int bodyOffsetFromCanvasCenter = ((int)reference.left + reference.right - reference.w) * scalePercent / 200;
+  return SHOWER_HEAD_CX - bodyOffsetFromCanvasCenter;
+}
+
 // teardrop centered on (dropletX, dropletY), point up, with a white glint
 static void drawShowerDroplet(int dropletX, int dropletY) {
   gfx->fillCircle(dropletX, dropletY, SHOWER_DROPLET_RADIUS, SHOWER_DROPLET_COLOR);
@@ -70,7 +81,7 @@ void startBath() {
   bathUntil = now + BATH_DURATION_MS;
   bathPending = true;
   #pragma region The creature stands still under the shower head while the water runs
-  beh.x = beh.targetX = SHOWER_HEAD_CX;
+  beh.x = beh.targetX = creatureXCenteredUnderShowerHead();
   beh.mode = PET_BEHAVIOR_IDLE;
   beh.t0 = now;
   beh.until = bathUntil;

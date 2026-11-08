@@ -332,6 +332,12 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #define CARD_PROGRESS_EVO_LABEL_Y 286
 #define CARD_PROGRESS_EVO_VALUE_Y 312
 #define CARD_PROGRESS_MISTAKES_Y 379
+// final form: the Release button takes the care mistakes line (ends y 412,
+// corners stay inside the circle)
+#define CARD_RELEASE_BTN_Y 360
+#define CARD_RELEASE_BTN_W 220
+#define CARD_RELEASE_BTN_H 52
+#define CARD_RELEASE_BTN_R 16
 #pragma endregion
 
 #pragma region Pokedex gallery: title, R/C counts, filter column, 4x4 grid below the hit circle of the close button (y <= 122)

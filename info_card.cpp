@@ -3,7 +3,8 @@
 
 #pragma region Includes
 #include "info_card.h"
-#include "app_state.h"      // pet, pmd, cardPage, cardOpen, cardPencil*, gCjkFont, gTextSize
+#include "app_state.h"      // pet, pmd, cardPage, cardOpen, cardPencil*, gCjkFont, gTextSize, confirmUntil
+#include "audio.h"          // sfxPlay
 #include "battle.h"         // battleMaxHpFor
 #include "battle_ui.h"      // petBattleStats
 #include "board_display.h"  // gfx, clearScreenToDayBackground
@@ -502,6 +503,14 @@ static void renderCardProgress() {
   ctext(evolutionText, 2, CARD_PROGRESS_EVO_VALUE_Y, CARD_TEXT_MAX_W);
   #pragma endregion
 
+  #pragma region Final form: Release button in place of the care mistakes line (nothing left to delay)
+  if (pet.canReleaseFinalForm()) {
+    drawLabeledButton(CARD_RELEASE_BTN_X, CARD_RELEASE_BTN_Y, CARD_RELEASE_BTN_W, CARD_RELEASE_BTN_H, CARD_RELEASE_BTN_R,
+                      UI_BAR_WARN, UI_INK, T(S_RELEASE_BTN), TS(2));
+    return;
+  }
+  #pragma endregion
+
   #pragma region Care mistakes (delay evolution)
   char mistakesText[24];
   snprintf(mistakesText, sizeof(mistakesText), T(S_MISTAKES_FMT), pet.careMistakes);
@@ -535,7 +544,8 @@ void renderCard() {
   gfx->flush();
 }
 
-// taps on the info card: close button, rename pencil (page 0) and page arrows.
+// taps on the info card: close button, rename pencil (page 0), Release button
+// (page 2, final form) and page arrows.
 // Anywhere else does nothing.
 void handleInfoCardTap(int16_t touchX, int16_t touchY) {
   #pragma region Close button, drawn circle (wins over the padded pencil box)
@@ -550,6 +560,17 @@ void handleInfoCardTap(int16_t touchX, int16_t touchY) {
       isTouchInsideRect(touchX, touchY, cardPencilLeft - CARD_PENCIL_HIT_PAD, cardPencilTop - CARD_PENCIL_HIT_PAD,
                         cardPencilSize + 2 * CARD_PENCIL_HIT_PAD, cardPencilSize + 2 * CARD_PENCIL_HIT_PAD)) {
     openKeyboard();
+    return;
+  }
+  #pragma endregion
+
+  #pragma region Release button (page 2, final form): closes the card and opens the "release?" dialog
+  if (cardPage == 2 && pet.canReleaseFinalForm() &&
+      isTouchInsideRect(touchX, touchY, CARD_RELEASE_BTN_X, CARD_RELEASE_BTN_Y, CARD_RELEASE_BTN_W + 1,
+                        CARD_RELEASE_BTN_H + 1)) {
+    sfxPlay(SFX_TAP);
+    cardOpen = false;
+    confirmUntil = millis() + RELEASE_DIALOG_TIMEOUT_MS;
     return;
   }
   #pragma endregion

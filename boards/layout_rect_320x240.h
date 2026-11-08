@@ -322,6 +322,11 @@ static_assert(LCD_WIDTH == 320 && LCD_HEIGHT == 240, "layout_rect_320x240.h is d
 #define CARD_PROGRESS_EVO_LABEL_Y 140
 #define CARD_PROGRESS_EVO_VALUE_Y 160
 #define CARD_PROGRESS_MISTAKES_Y 201
+// final form: the Release button takes the care mistakes line (ends y 218)
+#define CARD_RELEASE_BTN_Y 184
+#define CARD_RELEASE_BTN_W 150
+#define CARD_RELEASE_BTN_H 34
+#define CARD_RELEASE_BTN_R 12
 #pragma endregion
 
 #pragma region Pokedex gallery: title, R/C counts, filter column, 4x4 grid (x 120-284, y 38-202), detail header width

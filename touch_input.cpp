@@ -27,7 +27,6 @@ static const uint32_t TOUCH_POLL_INTERVAL_MS = 20;
 // long press without moving on the creature opens the release dialog
 static const uint32_t LONG_PRESS_RELEASE_MS = 3000;
 static const int LONG_PRESS_MAX_DRIFT_PX = 30;  // not scaled per board
-static const uint32_t RELEASE_DIALOG_TIMEOUT_MS = 10000;
 // swipe: mostly horizontal and quick
 #define SWIPE_MIN_DX SX(80)
 #define SWIPE_MAX_DY SY(70)
@@ -171,7 +170,9 @@ static void onTap(int16_t x, int16_t y) {
   if (confirmUntil) {
     if (timeLeft(confirmUntil) &&
         isTouchInsideRect(x, y, CONF_X + CONF_BTN_MARGIN, CONF_Y + CONF_BTN_REL_Y, CONF_BTN_W + 1, CONF_BTN_H + 1)) {
-      pet.release();
+      // a final form gets the same endings from the long press and the Progress page button
+      if (pet.canReleaseFinalForm()) pet.releaseFinalForm();
+      else pet.release();
     }
     confirmUntil = 0;
     return;

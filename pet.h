@@ -23,6 +23,13 @@
 #define RUNAWAY_TICKS 60                   // runs away after 1 h with EVERYTHING at zero
 #pragma endregion
 
+#pragma region Final form release (Progress page button)
+// releasing a final form well bonded and well cared for counts as a farewell
+// (blessed egg); releasing it while runaway-ready counts as a runaway
+#define RELEASE_BLESSING_MIN_BOND 50
+#define RELEASE_BLESSING_MIN_STAT 40       // every need bar, same bar as evolution
+#pragma endregion
+
 #pragma region Timer helper
 // milliseconds left until `deadline` (0 if already past, or if deadline==0:
 // "timer inactive"). All game timers (dialogs, animations) are stored as an
@@ -127,6 +134,9 @@ public:
   void eggTap();  // touch the egg: 3 taps and it hatches
   void newEgg();   // start from scratch with a random starter
   void release();  // release (long press + confirm)
+  // release of a final form (Progress page button or long press): the ceremony
+  // (and the next egg) follows finalFormReleaseOutcome()
+  void releaseFinalForm();
   void syncClock(uint32_t nowEpoch);  // applies the time elapsed while off
   void setClock(uint32_t nowEpoch);   // sets the time without applying progression
   void startFarewell();  // also usable from the serial console (BYE)
@@ -146,6 +156,10 @@ public:
   void evolve();              // triggers the transformation (called by a user tap)
   bool canFarewellNow() const;  // final form + 7 days: ready to say goodbye (button)
   bool canRunawayNow() const;   // total neglect for 1h: ready to run away (sad button)
+  bool canReleaseFinalForm() const;  // final form, no ceremony: Release button on the Progress page
+  // the ending a final form release counts as: CER_RUNAWAY (runaway-ready),
+  // CER_FAREWELL (bond and every need bar high enough) or CER_RELEASE
+  uint8_t finalFormReleaseOutcome() const;
   // the user decides in a dialog; "keep/stay together" postpones and re-offers later
   bool wantEvolveButton() const { return canEvolveNow() && level() > evoDeclinedLv; }
   bool wantFarewellButton() const { return canFarewellNow() && ageMinutes >= farDeclinedAge; }

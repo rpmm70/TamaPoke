@@ -18,7 +18,7 @@
 #pragma region Firmware version
 // Bump this number on every release (and manifest.json for the web installer).
 // Shown on the settings screen and over serial at boot.
-#define FW_VERSION "1.24"
+#define FW_VERSION "1.26"
 #pragma endregion
 
 #pragma region Static screen redraw
@@ -357,7 +357,7 @@ extern uint8_t dimStage;        // 0 awake, 1 dimmed (90s), 2 nearly off (5min)
 extern bool swallowGesture;     // the wake-up touch does not trigger anything
 extern uint32_t holdStart;      // long press on the creature
 extern uint32_t confirmUntil;   // "release?" dialog active until this millis
-// decision dialog kind (choiceKind holds one of these)
+static const uint32_t RELEASE_DIALOG_TIMEOUT_MS = 10000;  // the "release?" dialog closes on its own// decision dialog kind (choiceKind holds one of these)
 enum ChoiceKind : uint8_t { CHOICE_NONE = 0, CHOICE_EVOLVE = 1, CHOICE_FAREWELL = 2 };
 extern uint8_t choiceKind;      // ChoiceKind: 0 none, 1 evolution, 2 farewell
 extern uint32_t choiceUntil;    // closes on its own at this millis
