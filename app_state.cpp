@@ -84,6 +84,8 @@ int clockH = 12, clockM = 0;
 bool clockUses24Hour = true;
 uint8_t settingsBrightnessLevel = SETTINGS_BRIGHTNESS_DEFAULT;
 uint8_t settingsBrightnessSavedLevel = SETTINGS_BRIGHTNESS_DEFAULT;
+uint8_t settingsSleepScreenOption = SETTINGS_SLEEP_SCREEN_DEFAULT;
+uint8_t settingsSleepScreenSavedOption = SETTINGS_SLEEP_SCREEN_DEFAULT;
 #pragma endregion
 
 #pragma region Bath scene

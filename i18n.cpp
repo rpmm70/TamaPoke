@@ -59,6 +59,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Sin sprites", "C\240rgalos en la SD",
     "AJUSTES", "Apagar", "Audio / V\241deo", "Fecha / Hora", "Idioma",
     "Sonido", "Brillo", "On", "Off",
+    "Pantalla Al Dormir", "%u min",
     //#region ES wild battle strings
     "COMBATE SALVAJE", "Combate Salvaje?", "Luchar", "Luego", "Huir",
     "Atacar", "Evadir", "Curar", "R\240pido", "Fuerte", "Normal",
@@ -103,6 +104,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "No sprites", "Load Them onto the SD",
     "SETTINGS", "Screen Off", "Audio / Video", "Date / Time", "Language",
     "Sound", "Brightness", "On", "Off",
+    "Sleep Screen", "%u min",
     //#region EN wild battle strings
     "WILD BATTLE", "Wild Battle?", "Fight", "Later", "Run",
     "Attack", "Dodge", "Rest", "Quick", "Heavy", "Normal",
@@ -147,6 +149,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Pas de sprites", "Charge-les sur la SD",
     "R\220GLAGES", "\220teindre", "Audio / Vid\202o", "Date / Heure", "Langue",
     "Son", "Luminosit\202", "On", "Off",
+    "\220cran En Sommeil", "%u min",
     //#region FR wild battle strings
     "COMBAT SAUVAGE", "Combat Sauvage?", "Combat", "Apr\212s", "Fuir",
     "Attaque", "Esquive", "Repos", "Rapide", "Fort", "Normal",
@@ -196,6 +199,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Keine Sprites", "Auf die SD Laden",
     "EINSTELLUNGEN", "Bildschirm Aus", "Audio / Video", "Datum / Uhrzeit", "Sprache",
     "Ton", "Helligkeit", "An", "Aus",
+    "Schlafbildschirm", "%u Min",
     //#region DE wild battle strings
     "WILDER KAMPF", "Wilder Kampf?", "Kampf", "Sp\204ter", "Fliehen",
     "Angriff", "Ducken", "Ruhen", "Schnell", "Stark", "Normal",
@@ -240,6 +244,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Senza sprite", "Caricali sulla SD",
     "IMPOSTAZIONI", "Spegni Schermo", "Audio / Video", "Data / Ora", "Lingua",
     "Suono", "Luminosit\205", "On", "Off",
+    "Schermo Nel Sonno", "%u min",
     //#region IT wild battle strings
     "LOTTA SELVATICA", "Lotta Selvatica?", "Lotta", "Dopo", "Fuggi",
     "Attacca", "Schiva", "Riposa", "Rapido", "Forte", "Normale",
@@ -284,6 +289,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "Sem sprites", "Carrega-os no SD",
     "AJUSTES", "Desligar Visor", "Audio / V\241deo", "Data / Hora", "Idioma",
     "Som", "Brilho", "On", "Off",
+    "Tela Ao Dormir", "%u min",
     //#region PT wild battle strings
     "BATALHA SELVAGEM", "Batalha Selvagem?", "Lutar", "Depois", "Fugir",
     "Atacar", "Desviar", "Curar", "R\240pido", "Forte", "Normal",
@@ -353,6 +359,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "せってい", "がめんオフ", "おと / がめん", "ひづけ / じかん", "ことば",
 
     "おと", "あかるさ", "オン", "オフ",
+    "ねるときのがめん", "%uぷん",
     //#region JA wild battle strings
     "やせいのバトル", "やせいのバトル？", "たたかう", "あとで", "にげる",
     "こうげき", "よける", "やすむ", "クイック", "パワー", "ノーマル",
@@ -402,6 +409,7 @@ static constexpr const char *STRINGS[LANG_COUNT][STR_COUNT] = {
     "스프라이트 없음", "SD 카드에 넣어주세요",
     "설정", "화면 끄기", "소리 / 화면", "날짜 / 시간", "언어",
     "소리", "밝기", "켬", "끔",
+    "잘 때 화면", "%u분",
     //#region KO wild battle strings
     "야생 배틀", "야생 배틀?", "싸운다", "나중에", "도망",
     "공격", "회피", "휴식", "빠르게", "강하게", "보통",

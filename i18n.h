@@ -61,9 +61,11 @@ enum StrId : uint8_t {
   S_EVO_Q, S_EVO_KEEP, S_FAR_Q, S_FAR_GO, S_FAR_STAY,
   S_CHOOSE_STARTER,  // title of the starter choice (first time)
   S_NO_SPRITES, S_LOAD_SPRITES,  // notice when the sprite is missing from the SD
-  // settings menu: title, the four section rows (Screen Off first), then the row labels and toggle values
+  // settings menu: title, the four section rows (Screen Off first), then the row labels and toggle values,
+  // then the audio / video screen's Sleep Screen label and its "N min" option format
   S_MENU_TITLE, S_MENU_SCREEN_OFF, S_MENU_AV, S_MENU_TIME, S_MENU_LANG,
   S_SOUND, S_BRIGHTNESS, S_ON, S_OFF,
+  S_SLEEP_SCREEN, S_SLEEP_SCREEN_MINUTES_FMT,
   //#region Wild battle strings
   // wild battles: prompt, action buttons (at most 7 Latin characters), turn log,
   // catch dialog and rewards. Folding markers inside the enum are comments:

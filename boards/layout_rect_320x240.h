@@ -190,15 +190,18 @@ static_assert(LCD_WIDTH == 320 && LCD_HEIGHT == 240, "layout_rect_320x240.h is d
 #define WIFI_PAGE_TEXT_SIZE 1
 #pragma endregion
 
-#pragma region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN x CLK_BTN_H) and bar
-// Under the TS(5) title (y 12..36): label 50..66, pill 74..110, label 130..146, -/+ row 154..190
-#define SETTINGS_SOUND_LABEL_Y 50
-#define SETTINGS_SOUND_PILL_Y 74
+#pragma region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN x CLK_BTN_H) and bar, Sleep Screen pill
+// Under the TS(5) title (y 12..36): label 44..60, pill 64..94, label 104..120, -/+ row 124..160,
+// label 170..186, pill 190..220 (the Sleep Screen pill has the sound pill's size)
+#define SETTINGS_SOUND_LABEL_Y 44
+#define SETTINGS_SOUND_PILL_Y 64
 #define SETTINGS_SOUND_PILL_W 100
-#define SETTINGS_SOUND_PILL_H 36
+#define SETTINGS_SOUND_PILL_H 30
 #define SETTINGS_PILL_R 8
-#define SETTINGS_BRIGHTNESS_LABEL_Y 130
-#define SETTINGS_BRIGHTNESS_ROW_Y 154
+#define SETTINGS_BRIGHTNESS_LABEL_Y 104
+#define SETTINGS_BRIGHTNESS_ROW_Y 124
+#define SETTINGS_SLEEP_SCREEN_LABEL_Y 170
+#define SETTINGS_SLEEP_SCREEN_PILL_Y 190
 #define SETTINGS_BRIGHTNESS_MINUS_X 40
 #define SETTINGS_BRIGHTNESS_BAR_W 128
 #define SETTINGS_BRIGHTNESS_BAR_H 16

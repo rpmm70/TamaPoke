@@ -195,17 +195,21 @@ static_assert(LCD_WIDTH == LAYOUT_REFERENCE_SIZE, "on the round board SX()/SY() 
 #define WIFI_PAGE_TEXT_SIZE 2
 #pragma endregion
 
-#pragma region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN x CLK_BTN_H) and bar
+#pragma region Audio / video: sound pill, brightness -/+ buttons (CLK_BTN x CLK_BTN_H) and bar, Sleep Screen pill
 // Under the TS(5) title (y 58..98): label 122..146 (below the close button's hit
-// circle, which ends at y 122), pill 158..210, label 240..264, -/+ row 276..324
-// (its farthest corners, (63, 324) and (403, 324), are 193 px from the center)
+// circle, which ends at y 122), pill 152..196, label 210..234, -/+ row 240..288
+// (its farthest corners, (63, 288) and (403, 288), are 179 px from the center),
+// label 302..326, pill 332..376 (its bottom corners are 159 px from the center;
+// the Sleep Screen pill has the sound pill's size)
 #define SETTINGS_SOUND_LABEL_Y 122
-#define SETTINGS_SOUND_PILL_Y 158
+#define SETTINGS_SOUND_PILL_Y 152
 #define SETTINGS_SOUND_PILL_W 140
-#define SETTINGS_SOUND_PILL_H 52
+#define SETTINGS_SOUND_PILL_H 44
 #define SETTINGS_PILL_R 14
-#define SETTINGS_BRIGHTNESS_LABEL_Y 240
-#define SETTINGS_BRIGHTNESS_ROW_Y 276
+#define SETTINGS_BRIGHTNESS_LABEL_Y 210
+#define SETTINGS_BRIGHTNESS_ROW_Y 240
+#define SETTINGS_SLEEP_SCREEN_LABEL_Y 302
+#define SETTINGS_SLEEP_SCREEN_PILL_Y 332
 #define SETTINGS_BRIGHTNESS_MINUS_X 63
 #define SETTINGS_BRIGHTNESS_BAR_W 192
 #define SETTINGS_BRIGHTNESS_BAR_H 24

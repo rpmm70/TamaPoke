@@ -64,7 +64,7 @@ void setup() {
   #pragma region Saved settings
   loadLang();  // saved language (ES by default)
   loadClockFormatFromNvs();  // 12h/24h choice of the time screen
-  loadBrightnessLevelFromNvs();  // brightness slider of the audio/video screen
+  loadAudioVideoSettingsFromNvs();  // brightness slider and Sleep Screen option of the audio/video screen
   #pragma endregion
 
   #pragma region Shared I2C bus

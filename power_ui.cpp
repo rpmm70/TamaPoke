@@ -13,6 +13,7 @@
 // inactivity before the first dim step and before the panel is nearly off
 static const uint32_t DIM_AFTER_IDLE_MS = 90000;
 static const uint32_t NEARLY_OFF_AFTER_IDLE_MS = 300000;
+static const uint32_t MS_PER_MINUTE = 60000;
 // panel brightness targets (never above the user's own level)
 static const uint8_t SLEEP_DIM_BRIGHTNESS = 25;          // creature asleep on the main screen
 static const uint8_t IDLE_DIM_SLEEPING_BRIGHTNESS = 10;  // first dim step while asleep
@@ -49,8 +50,23 @@ void updateBrightness(uint32_t now) {
   }
   #pragma endregion
 
+  #pragma region Idle time since the last touch
+  // handleTouch() stamps lastInteract with millis() after loop() sampled now, so a
+  // touch from this same loop is newer than now: count it as 0 ms idle instead of
+  // letting the unsigned subtraction wrap to ~49 days
+  uint32_t idleMs = (int32_t)(now - lastInteract) > 0 ? now - lastInteract : 0;
+  #pragma endregion
+
+  #pragma region Sleep Screen: a sleeping creature turns the screen off after the chosen minutes
+  // the creature only falls asleep through a user action (or at boot), both of
+  // which reset lastInteract, so idleMs also bounds the time spent asleep
+  uint32_t sleepScreenOffAfterIdleMs = sleepScreenMinutesForOption(settingsSleepScreenOption) * MS_PER_MINUTE;
+  if (sleepScreenOffAfterIdleMs && pet.sleeping && !screenOff && idleMs > sleepScreenOffAfterIdleMs) {
+    screenOff = true;
+  }
+  #pragma endregion
+
   #pragma region Pick the target brightness
-  uint32_t idleMs = now - lastInteract;
   dimStage = (idleMs > NEARLY_OFF_AFTER_IDLE_MS) ? 2 : (idleMs > DIM_AFTER_IDLE_MS) ? 1 : 0;
   uint8_t normalBrightness = brightnessForSettingsLevel();
   // the sleep dim only applies to the main screen: any other screen or menu

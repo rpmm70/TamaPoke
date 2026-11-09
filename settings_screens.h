@@ -13,7 +13,7 @@ void openSettingsMenu();
 // first boot: opens the time screen before the starter choice; OK closes it
 void openClockForFirstRunSetup();
 // NVS settings read once in setup()
-void loadBrightnessLevelFromNvs();
+void loadAudioVideoSettingsFromNvs();  // brightness level and Sleep Screen option
 void loadClockFormatFromNvs();
 // Writes the 12h/24h choice only if it changed since the last write. Called when the
 // time screen closes and from persistStateWhileIdle(), so a toggle survives a power cut

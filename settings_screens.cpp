@@ -269,26 +269,50 @@ static void handleSettingsMenuTap(int16_t touchX, int16_t touchY) {
 #pragma endregion
 
 #pragma region Audio / video settings screen
-// Sound on/off pill and a brightness bar with -/+ buttons (same squares as the
-// time screen). Each step applies on the next loop (updateBrightness); the level
-// is written to NVS only when the screen closes, since every NVS write freezes
-// both cores for ~1s.
-void loadBrightnessLevelFromNvs() {
+// Sound on/off pill, a brightness bar with -/+ buttons (same squares as the
+// time screen) and the Sleep Screen pill (Off / 1 / 5 / 10 min). Each change
+// applies on the next loop (updateBrightness); brightness and Sleep Screen are
+// written to NVS only when the screen closes, since every NVS write freezes both
+// cores for ~1s.
+void loadAudioVideoSettingsFromNvs() {
   Preferences preferences;
   preferences.begin(NVS_NAMESPACE, true);  // read-only
   settingsBrightnessLevel = preferences.getUChar("bright", SETTINGS_BRIGHTNESS_DEFAULT);
+  settingsSleepScreenOption = preferences.getUChar("slpscr", SETTINGS_SLEEP_SCREEN_DEFAULT);
   preferences.end();
   if (settingsBrightnessLevel > SETTINGS_BRIGHTNESS_MAX) settingsBrightnessLevel = SETTINGS_BRIGHTNESS_DEFAULT;
+  if (settingsSleepScreenOption >= SLEEP_SCREEN_OPTION_COUNT) settingsSleepScreenOption = SETTINGS_SLEEP_SCREEN_DEFAULT;
   settingsBrightnessSavedLevel = settingsBrightnessLevel;
+  settingsSleepScreenSavedOption = settingsSleepScreenOption;
 }
 
-static void saveBrightnessLevelToNvs() {
-  if (settingsBrightnessLevel == settingsBrightnessSavedLevel) return;
+static void saveAudioVideoSettingsToNvs() {
+  bool brightnessChanged = settingsBrightnessLevel != settingsBrightnessSavedLevel;
+  bool sleepScreenChanged = settingsSleepScreenOption != settingsSleepScreenSavedOption;
+  if (!brightnessChanged && !sleepScreenChanged) return;
   Preferences preferences;
   preferences.begin(NVS_NAMESPACE, false);
-  preferences.putUChar("bright", settingsBrightnessLevel);
+  if (brightnessChanged) preferences.putUChar("bright", settingsBrightnessLevel);
+  if (sleepScreenChanged) preferences.putUChar("slpscr", settingsSleepScreenOption);
   preferences.end();
   settingsBrightnessSavedLevel = settingsBrightnessLevel;
+  settingsSleepScreenSavedOption = settingsSleepScreenOption;
+}
+
+// Sleep Screen pill: "Off" on white like an off toggle, else "N min" on green
+static void drawSleepScreenPill() {
+  bool isOff = settingsSleepScreenOption == SLEEP_SCREEN_OFF;
+  char optionText[24];
+  if (isOff) {
+    snprintf(optionText, sizeof(optionText), "%s", T(S_OFF));
+  } else {
+    snprintf(optionText, sizeof(optionText), T(S_SLEEP_SCREEN_MINUTES_FMT), (unsigned)sleepScreenMinutesForOption(settingsSleepScreenOption));
+  }
+  drawBorderedBox(SETTINGS_SOUND_PILL_X, SETTINGS_SLEEP_SCREEN_PILL_Y, SETTINGS_SOUND_PILL_W, SETTINGS_SOUND_PILL_H, SETTINGS_PILL_R,
+                  isOff ? UI_WHITE : UI_BAR_OK, UI_INK);
+  gfx->setTextColor(isOff ? UI_INK : UI_BG_DAY);
+  drawTextCenteredInBox(optionText, TS(3), SETTINGS_SOUND_PILL_X, SETTINGS_SLEEP_SCREEN_PILL_Y, SETTINGS_SOUND_PILL_W,
+                        SETTINGS_SOUND_PILL_H);
 }
 
 static void renderAudioVideoSettings() {
@@ -311,14 +335,24 @@ static void renderAudioVideoSettings() {
                        SETTINGS_BRIGHTNESS_MAX, UI_BAR_OK);
   #pragma endregion
 
+  #pragma region Sleep Screen: label and option pill
+  gfx->setTextColor(UI_INK);
+  drawSettingsLabel(T(S_SLEEP_SCREEN), SETTINGS_SLEEP_SCREEN_LABEL_Y);
+  drawSleepScreenPill();
+  #pragma endregion
+
   drawScreenCloseButton();
   gfx->flush();
 }
 
 static void handleAudioVideoSettingsTap(int16_t touchX, int16_t touchY) {
   if (isTouchOnScreenCloseButton(touchX, touchY)) {  // back to the menu
-    saveBrightnessLevelToNvs();
+    saveAudioVideoSettingsToNvs();
     settingsScreen = SETTINGS_MENU;
+    return;
+  }
+  if (isTouchInsideRect(touchX, touchY, SETTINGS_SOUND_PILL_X, SETTINGS_SLEEP_SCREEN_PILL_Y, SETTINGS_SOUND_PILL_W, SETTINGS_SOUND_PILL_H)) {
+    settingsSleepScreenOption = (settingsSleepScreenOption + 1) % SLEEP_SCREEN_OPTION_COUNT;  // Off -> 1 -> 5 -> 10 min -> Off
     return;
   }
   if (isTouchInsideRect(touchX, touchY, SETTINGS_SOUND_PILL_X, SETTINGS_SOUND_PILL_Y, SETTINGS_SOUND_PILL_W, SETTINGS_SOUND_PILL_H)) {

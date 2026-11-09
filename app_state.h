@@ -18,7 +18,7 @@
 #pragma region Firmware version
 // Bump this number on every release (and manifest.json for the web installer).
 // Shown on the settings screen and over serial at boot.
-#define FW_VERSION "1.26"
+#define FW_VERSION "1.30"
 #pragma endregion
 
 #pragma region Static screen redraw
@@ -156,6 +156,25 @@ inline int hourOn12HourDial(int hour) {
 #define SCREEN_BRIGHTNESS_MAX 255      // level SETTINGS_BRIGHTNESS_MAX
 extern uint8_t settingsBrightnessLevel;
 extern uint8_t settingsBrightnessSavedLevel;  // last value in NVS (skips no-op writes)
+// Sleep Screen: while the creature sleeps, the screen turns off after the chosen
+// number of minutes without a touch (see updateBrightness). Each tap of its pill
+// steps to the next option (Off -> 1 -> 5 -> 10 min -> Off). Persisted in NVS when
+// the audio/video screen closes, like the brightness.
+enum SleepScreenOption : uint8_t {
+  SLEEP_SCREEN_OFF = 0,
+  SLEEP_SCREEN_1_MIN,
+  SLEEP_SCREEN_5_MIN,
+  SLEEP_SCREEN_10_MIN,
+  SLEEP_SCREEN_OPTION_COUNT
+};
+#define SETTINGS_SLEEP_SCREEN_DEFAULT SLEEP_SCREEN_10_MIN
+extern uint8_t settingsSleepScreenOption;       // SleepScreenOption
+extern uint8_t settingsSleepScreenSavedOption;  // last value in NVS (skips no-op writes)
+// minutes of idle sleep before the screen turns off for an option (0 = Off)
+inline uint8_t sleepScreenMinutesForOption(uint8_t option) {
+  static const uint8_t SLEEP_SCREEN_MINUTES[SLEEP_SCREEN_OPTION_COUNT] = { 0, 1, 5, 10 };
+  return option < SLEEP_SCREEN_OPTION_COUNT ? SLEEP_SCREEN_MINUTES[option] : 0;
+}
 #pragma endregion
 
 #pragma region Bath scene

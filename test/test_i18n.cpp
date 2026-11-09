@@ -196,7 +196,7 @@ TEST(i18n, medals_exist_in_every_language) {
 // CJK is skipped for the same reason as the medal caps: bytes are not width.
 TEST(i18n, settings_menu_fits_on_screen) {
   const StrId menuRowIds[] = { S_MENU_TITLE, S_MENU_AV, S_MENU_TIME, S_MENU_LANG,
-                               S_SOUND, S_BRIGHTNESS };
+                               S_SOUND, S_BRIGHTNESS, S_SLEEP_SCREEN };
   const StrId toggleValueIds[] = { S_ON, S_OFF };
   for (int lang = 0; lang < LANG_COUNT; lang++) {
     if (LANG_IS_CJK(lang)) continue;
